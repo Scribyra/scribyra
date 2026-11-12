@@ -12,7 +12,9 @@ pages:
   variables:
     GIT_DEPTH: '1'
   script:
-    - test -s public/index.html && test -s public/sw.js && test -s public/app/sw.js && test -s public/release.json && grep -q 'Disallow: /' public/robots.txt
+    - test -s public/index.html && test -s public/sw.js && test -s public/app/sw.js && test -s public/release.json
+    # Quoted: an unquoted ": " would make YAML read this line as a mapping.
+    - "grep -q 'Disallow: /' public/robots.txt"
   pages:
     publish: public
     expire_in: never
