@@ -139,6 +139,9 @@ struct TreeRow {
     siblings: usize,
 }
 
+// The public source repository, linked from the dashboard and More tools.
+const SOURCE_URL: &str = "https://github.com/Scribyra/scribyra";
+
 #[component]
 fn Icon(#[prop(default = "file")] name: &'static str) -> impl IntoView {
     let d = match name {
@@ -180,6 +183,10 @@ fn Icon(#[prop(default = "file")] name: &'static str) -> impl IntoView {
         "flag" => "M5 21V4m0 1h12l-3 4 3 4H5",
         "shield" => "M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6Z",
         "scroll" => "M7 3h11v18H7a3 3 0 0 1-3-3V6a3 3 0 0 1 3-3Zm3 5h5m-5 4h5",
+        // The GitHub mark, outlined in the same stroke as the other icons.
+        "github" => {
+            "M9 19.5c-4 1.2-4-2-5.6-2.4M15 21v-3.3c0-1 .1-1.5-.5-2.1 2.7-.3 5.5-1.3 5.5-5.9 0-1.2-.4-2.3-1.2-3.1.1-.4.5-1.6-.1-3.2 0 0-1-.3-3.3 1.2a11.4 11.4 0 0 0-6 0C7.1 3.1 6.1 3.4 6.1 3.4c-.6 1.6-.2 2.8-.1 3.2-.8.8-1.2 1.9-1.2 3.1 0 4.6 2.8 5.6 5.5 5.9-.4.4-.6 1-.6 1.7V21"
+        }
         _ => "M14 2H5v20h14V7Zm0 0v5h5M8 12h8m-8 4h8",
     };
     view! { <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d=d/></svg> }
@@ -277,6 +284,7 @@ fn App() -> impl IntoView {
                             <button aria-label="Report a problem" on:click=move |_| action("report", "")><Icon name="flag"/><span>"Report a problem"</span></button>
                             <a href="https://scribyra.com/privacy.html" target="_blank" rel="noopener"><Icon name="shield"/><span>"Privacy"</span></a>
                             <a href="https://scribyra.com/licenses.html" target="_blank" rel="noopener"><Icon name="scroll"/><span>"Licences"</span></a>
+                            <a href=SOURCE_URL target="_blank" rel="noopener"><Icon name="github"/><span>"Source code on GitHub"</span></a>
                         </div>
                     </div>
                 </header>
@@ -399,7 +407,7 @@ fn App() -> impl IntoView {
                     <div class="workspace-label">"YOUR WORKSPACE"</div>
                     <button class="nav-item selected" on:click=move |_| action("filter", "")><Icon name="folder"/>"All projects"<span class="nav-count">{move || s.get().projects.len()}</span></button>
                     <button class="nav-item" on:click=move |_| action("diagnostics", "")><Icon name="pulse"/>"Diagnostics"</button>
-                    <div class="sidebar-bottom dashboard-bottom"><div class="local-badge"><span class="tiny-dot"></span>"Local-first. Always yours."</div><p>"A little less friction."<br/>"A little more possibility."</p><button class="nav-item" on:click=move |_| action("storage", "")><Icon name="lock"/>"Storage & backups"</button><button class="nav-item" on:click=move |_| action("report", "")><Icon name="flag"/>"Report a problem"</button><div class="sidebar-foot"><span class="sidebar-links"><a href="https://scribyra.com/privacy.html" target="_blank" rel="noopener">"Privacy"</a>" · "<a href="https://scribyra.com/licenses.html" target="_blank" rel="noopener">"Licences"</a></span><button class="icon-button" title="Toggle theme" aria-label="Toggle theme" on:click=move |_| action("theme", "")><Icon name="sun"/></button></div></div>
+                    <div class="sidebar-bottom dashboard-bottom"><div class="local-badge"><span class="tiny-dot"></span>"Local-first. Always yours."</div><p>"A little less friction."<br/>"A little more possibility."</p><button class="nav-item" on:click=move |_| action("storage", "")><Icon name="lock"/>"Storage & backups"</button><button class="nav-item" on:click=move |_| action("report", "")><Icon name="flag"/>"Report a problem"</button><a class="nav-item" href=SOURCE_URL target="_blank" rel="noopener"><Icon name="github"/><span>"Source "<span class="sr-only">"code "</span>"on GitHub"</span></a><div class="sidebar-foot"><span class="sidebar-links"><a href="https://scribyra.com/privacy.html" target="_blank" rel="noopener">"Privacy"</a>" · "<a href="https://scribyra.com/licenses.html" target="_blank" rel="noopener">"Licences"</a></span><button class="icon-button" title="Toggle theme" aria-label="Toggle theme" on:click=move |_| action("theme", "")><Icon name="sun"/></button></div></div>
                 </aside>
                 <main class="dashboard-main">
                     <header class="dashboard-topbar"><span>"Workspace"<span class="breadcrumb-slash">"/"</span><strong>"All projects"</strong></span><span class="device-label"><span class="tiny-dot"></span>"On this device"</span></header>

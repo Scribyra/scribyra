@@ -5,3 +5,4 @@
 @media(max-width:620px){.doc h1{font-size:33px}.doc{padding-block:26px 50px}}
 .footer .legal{flex:1 0 100%;font-size:11px;line-height:1.6;color:var(--muted)}.footer .legal span{white-space:nowrap}
 @media(max-width:600px){.footer>div{flex:1 1 0;min-width:0}}
+.github-link{gap:8px}.github-link .github-mark{flex-shrink:0;margin-left:-2px}.github-link>span{margin-left:4px}
