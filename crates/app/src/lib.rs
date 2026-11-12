@@ -403,7 +403,7 @@ fn App() -> impl IntoView {
                 </div>
             }>
                 <aside class="dashboard-sidebar">
-                    <a href="#" class="brand" on:click=move |e| { e.prevent_default(); action("home", ""); }><span class="brand-mark">"s"</span>"scribyra"<span class="alpha-tag">"preview"</span></a>
+                    <a href="#" class="brand" on:click=move |e| { e.prevent_default(); action("home", ""); }><span class="brand-mark">"s"</span>"scribyra"<span class="alpha-tag">"beta"</span></a>
                     <div class="workspace-label">"YOUR WORKSPACE"</div>
                     <button class="nav-item selected" on:click=move |_| action("filter", "")><Icon name="folder"/>"All projects"<span class="nav-count">{move || s.get().projects.len()}</span></button>
                     <button class="nav-item" on:click=move |_| action("diagnostics", "")><Icon name="pulse"/>"Diagnostics"</button>
