@@ -76,8 +76,8 @@ Checked on 2026-11-12:
   published site ≤ 1 GB, deployments time out after 10 minutes, soft bandwidth
   limit 100 GB per month, source repository recommended ≤ 1 GB; the 10 builds per
   hour soft limit does not apply to custom Actions workflows. No per-file limit is
-  stated for Actions deployments. The assembled release is about 320 MiB
-  (measured below); the largest files are `busytex.wasm` (31 MiB) and the
+  stated for Actions deployments. The assembled release is 331 MiB, 2,876 files
+  (measured 2026-11-12); the largest files are `busytex.wasm` (31 MiB) and the
   LuaLaTeX data bundle (43.5 MiB), under the limits and under Git's 50 MB warning
   and 100 MB hard limit for the deploy-key pushes.
 - **Bandwidth is the one real risk.** A first compile downloads roughly 100 MB of
@@ -214,12 +214,13 @@ build, browser suite) with the CI shell:
 | Item | Size |
 | --- | --- |
 | Nix store, CI shell | 3.4 GB |
-| `target/` | MEASURE_TARGET |
+| `target/` (wasm release, debug tests and bins, release asset tool) + `~/.cargo/registry` | 2.8 GB + up to 1 GB |
 | `public/core` (+ 0.52 GB archive while extracting, then deleted) | 0.94 GB |
 | `node_modules` + `~/.npm` | 0.3 GB |
-| `dist/`, `.pages/`, `.cache/staging` | MEASURE_BUILDS |
-| Pages artifact tar (`$RUNNER_TEMP`, full copies) | MEASURE_TAR |
-| **Peak** | MEASURE_PEAK |
+| `dist/` (`.pages/` hard-links into it), `.cache/staging` | 0.32 GB + 0.33 GB |
+| Artifact tars in `$RUNNER_TEMP` (full copies: production 329 MiB, staging about the same) | 0.7 GB |
+| Cache archives while saving (cargo, compressed) | about 1 GB |
+| **Peak** | **about 11 GB** |
 
 The standard public-repository runner documents a 14 GB SSD; the image leaves
 roughly that free on `/`. `suite` therefore first deletes toolchains the job never
@@ -228,7 +229,24 @@ uses (Android SDK, .NET, GHC, CodeQL, PowerShell, Swift: about 30 GB) with plain
 
 ### Expected run time
 
-MEASURE_TIME
+Measured on the build host (10 cores) with the CI shell: Rust native binaries
+and tests from cold about 6 minutes in total, wasm release build 1 minute, Pages
+build 81 s, Rust suite 44 s, JavaScript suite 20 minutes (it dominates; many
+seeded integration sequences), Pages browser suite 3 minutes, staging build 37 s.
+A hosted runner has 4 vCPUs, so the JavaScript suite will be slower. Expected:
+
+| Run | Estimate |
+| --- | --- |
+| Setup: free disk, Nix (3.4 GB from cache.nixos.org), `npm ci`, caches | 3–5 min |
+| Compiler assets: warm cache / cold (522 MB download + extract) | 0.5 / 2 min |
+| Cargo: warm cache / cold | 1–2 / 6–8 min |
+| Builds + Rust + JavaScript + browser suite | 30–40 min |
+| **Pull request check, warm caches** | **about 40 min** |
+| **Production** (+ artifact upload, deploy-pages 2–4 min, site push 2 min) | **about 45–50 min** |
+
+Measure the first real runs and adjust `timeout-minutes: 90` if needed. The
+JavaScript suite could be split across a matrix later; it was kept as one job to
+match GitLab exactly and to build once.
 
 ## What Paul creates
 
