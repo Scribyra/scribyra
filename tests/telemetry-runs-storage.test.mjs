@@ -26,7 +26,7 @@ test('actual Rust and deliberately failing test runs are stored and queryable th
  for(const [index,[suite,status]] of [['rust',0],['synthetic-fail',1]].entries()){
   let result;
   if(retained){result={runId:retained[index].runId};}else{
-  const child=spawnSync('python3',['scripts/telemetry-run.py','--suite',suite,'--endpoint',`http://127.0.0.1:${base}/v1/runs`,'--token-file',state+'/ingress.token'],{encoding:'utf8',timeout:60000,env:{...process.env,GITLAB_CI:'false'}});
+  const child=spawnSync('python3',['scripts/telemetry-run.py','--suite',suite,'--endpoint',`http://127.0.0.1:${base}/v1/runs`,'--token-file',state+'/ingress.token'],{encoding:'utf8',timeout:60000,env:{...process.env,GITLAB_CI:'false',GITHUB_ACTIONS:'false'}});
   assert.equal(child.status,status);result=JSON.parse(child.stdout);assert.equal(result.delivery,'accepted');
   }
   const record=JSON.parse(await readFile(`.telemetry/${result.runId}.json`,'utf8'));

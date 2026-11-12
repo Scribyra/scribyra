@@ -140,9 +140,14 @@ Equivalence with `.gitlab-ci.yml`: `test` ↔ `checks`/`suite`, `deploy-staging`
 pipeline on tag `web-N`" ↔ `gh workflow run production.yml -f release=web-N`.
 Telemetry summaries (closed-schema JSON/JUnit) are uploaded for one day; on a
 public GitHub repository any signed-in user can download artifacts (GitLab
-limited them to maintainers), and the summaries hold counts, outcome and revision
-only. On GitHub `telemetry-run.py` records them as `local_test` (its CI identity is
-GitLab's); publication stays off in CI on both forges.
+limited them to maintainers), and the summaries hold counts, outcome, revision
+and the public numeric run identity only. They are uploaded even when the suite
+fails (`.telemetry` is a dot-directory, so the upload includes hidden files). On
+GitHub `telemetry-run.py` records them as `ci` with the identity repository id
+(`GITHUB_REPOSITORY_ID`), run id (`GITHUB_RUN_ID`) and job check run id
+(`job.check_run_id`, exported by `suite.yml` as `SCRIBYRA_CI_JOB_ID`); publication
+stays off in CI on both forges. A failing suite prints the names of its failing
+tests (TAP `not ok` / cargo `FAILED` lines, nothing else) to the step log.
 
 **Release numbers.** GitLab numbered releases by pipeline IID (the last is
 `web-95`). GitHub numbers are `SCRIBYRA_RELEASE_BASE + run number` of the workflow;
