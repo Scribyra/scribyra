@@ -8,16 +8,16 @@ stages:
 #   push to dev              → test, then deploy-staging (published by urundead-labs/scribyra-staging
 #                              to https://dev.scribyra.com/)
 #   push to main             → deploy-web (tests + production GitLab Pages), register-web-release, back-merge
-#   "Run pipeline" on a web-N tag → deploy-web only (rollback to that release)
+#   "Run pipeline" (UI or API) on a web-N tag → deploy-web only (rollback to that release)
 # Branch pipelines for other branches do not run; open a merge request instead.
 workflow:
   auto_cancel:
     on_new_commit: interruptible
   rules:
     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
-    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")'
-    - if: '$CI_COMMIT_BRANCH == "dev" && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")'
-    - if: '$CI_COMMIT_TAG =~ /^web-[1-9][0-9]*$/ && $CI_PIPELINE_SOURCE == "web"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
+    - if: '$CI_COMMIT_BRANCH == "dev" && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
+    - if: '$CI_COMMIT_TAG =~ /^web-[1-9][0-9]*$/ && ($CI_PIPELINE_SOURCE == "web" || $CI_PIPELINE_SOURCE == "api")'
 
 # Every job runs on the project runner with Nix (shell executor, tag scribyra-nix),
 # because the group's shared runner minutes ran out. The flake supplies every tool,
