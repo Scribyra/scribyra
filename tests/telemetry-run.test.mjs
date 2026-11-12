@@ -12,7 +12,7 @@ test('actual passing and failing suite processes export only shared-policy evide
   for(const [suite,status,failed] of [['synthetic-pass',0,0],['synthetic-fail',1,1]]){
    const output=join(dir,suite);
    // An unavailable collector must preserve the real child exit code.
-   const result=spawnSync('python3',['scripts/telemetry-run.py','--suite',suite,'--output',output,'--endpoint','http://127.0.0.1:1/v1/runs','--token-file',token],{encoding:'utf8',timeout:15000,env:{...process.env,GITLAB_CI:'false'}});
+   const result=spawnSync('python3',['scripts/telemetry-run.py','--suite',suite,'--output',output,'--endpoint','http://127.0.0.1:1/v1/runs','--token-file',token],{encoding:'utf8',timeout:15000,env:{...process.env,GITLAB_CI:'false',GITHUB_ACTIONS:'false'}});
    assert.equal(result.status,status);
    const report=JSON.parse(result.stdout);assert.equal(report.delivery,'unavailable');assert.equal(report.source,'synthetic');
    const files=readdirSync(output).sort();assert.equal(files.length,2);

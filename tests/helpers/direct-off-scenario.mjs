@@ -8,6 +8,9 @@
 // Browsers provide Web Locks and IndexedDB, and Node normally lacks the first: the scenario
 // supplies both, so code that would create a key in a browser would create one here too.
 import {webcrypto,createHash} from 'node:crypto';
+// ZIP entries carry local-time DOS timestamps, so the export depends on the time zone;
+// pin it, or a baseline recorded in one zone fails on a runner in another (GitHub's is UTC).
+process.env.TZ='UTC';
 let state=0x5eed1234;
 const next=()=>{state=state+0x6d2b79f5>>>0;let t=state;t=Math.imul(t^t>>>15,t|1);t^=t+Math.imul(t^t>>>7,t|61);return((t^t>>>14)>>>0);};
 webcrypto.getRandomValues=array=>{const bytes=new Uint8Array(array.buffer,array.byteOffset,array.byteLength);for(let i=0;i<bytes.length;i++)bytes[i]=next()&255;return array;};

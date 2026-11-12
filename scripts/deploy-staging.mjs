@@ -91,7 +91,9 @@ export async function publish({root,checkout=CHECKOUT,remote=STAGING_REPOSITORY,
   await stageTree(join(root,'site'),checkout,goal);
   git(['add','-A']);
   try{git(['diff','--cached','--quiet']);log('Site unchanged; nothing to publish.');return false;}catch{}
-  git(['commit','-q','--no-gpg-sign','-m',commitMessage({release,sha:env.CI_COMMIT_SHA,pipeline:env.CI_PIPELINE_URL,source:env.GITHUB_REPOSITORY||undefined,channel})]);
+  // The source repository is named by the forge that deploys: a GitLab deploy never
+  // reads GITHUB_REPOSITORY, which any shell on a GitHub runner carries.
+  git(['commit','-q','--no-gpg-sign','-m',commitMessage({release,sha:env.CI_COMMIT_SHA,pipeline:env.CI_PIPELINE_URL,source:(forge==='github'&&env.GITHUB_REPOSITORY)||undefined,channel})]);
   if(dry){log(`Dry run: committed ${release} in ${checkout}; not pushed.`);return true;}
   git(['push','-q','origin',`HEAD:refs/heads/${STAGING_BRANCH}`],{stdio:['ignore','inherit','inherit']});
   log(`Published ${release} to ${remote}; its Pages job deploys ${goal.url}.`);return true;
