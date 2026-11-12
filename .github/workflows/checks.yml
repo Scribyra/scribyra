@@ -1,0 +1,21 @@
+# Pull request checks: the full suite on every pull request into dev or main
+# (feature → dev, hotfix → main, dev → main, the automatic back-merge main → dev).
+# GitHub tests the merge result (refs/pull/N/merge). Fork pull requests run with a
+# read-only token and no secrets; the suite needs neither.
+name: checks
+on:
+  pull_request:
+    branches: [main, dev]
+
+permissions: {}
+
+concurrency:
+  group: checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: suite
+    uses: ./.github/workflows/suite.yml # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects $/ and a local reusable workflow is read from the caller's commit
+    permissions:
+      contents: read

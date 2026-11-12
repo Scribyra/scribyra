@@ -1,0 +1,193 @@
+# Push to main → the suite, then one coherent production release:
+#   https://app.scribyra.com/  this repository's Pages site (actions/deploy-pages)
+#   https://scribyra.com/      the same release, pushed to scribyra-site, whose own
+#                              Pages workflow publishes it (ops/pages/github-pages.yml)
+# then the GitHub Release web-N, and a back-merge pull request main → dev when main
+# has changes dev lacks (a hotfix).
+#
+# Run by hand on main: with release empty, the same as a push (redeploy main HEAD as
+# a new release). Rollback: release = an earlier tag web-N. It rebuilds that commit
+# with a new, higher number, runs the suite and deploys it, without registering a
+# release or back-merging (docs/delivery.md, "A rollback").
+#
+# Release numbers: web-<SCRIBYRA_RELEASE_BASE + run number>. The base is a repository
+# variable set above the last GitLab release (web-95), so numbers only grow and open
+# tabs are told about each new deployment.
+name: production
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: Rollback to this earlier release (web-N); empty redeploys main. Run from main.
+        required: false
+        default: ''
+        type: string
+
+permissions: {}
+
+# One production run at a time, in order, never cancelled mid-way. A newer run waits;
+# GitHub keeps only the newest waiting run, so an intermediate commit may be skipped,
+# never deployed after a newer one.
+concurrency:
+  group: production
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      sha: ${{ steps.plan.outputs.sha }}
+      rollback: ${{ steps.plan.outputs.rollback }}
+    steps:
+      - id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          ROLLBACK_TAG: ${{ inputs.release }}
+          BASE: ${{ vars.SCRIBYRA_RELEASE_BASE }}
+          RUN_NUMBER: ${{ github.run_number }}
+          REPOSITORY_URL: ${{ github.server_url }}/${{ github.repository }}
+          PUSHED_SHA: ${{ github.sha }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          [ "$REF" = refs/heads/main ] || { echo "::error::Run production from main"; exit 1; }
+          [[ "$BASE" =~ ^[1-9][0-9]{0,8}$ ]] || { echo "::error::Set the repository variable SCRIBYRA_RELEASE_BASE (docs/github-move.md)"; exit 1; }
+          number=$((BASE + RUN_NUMBER))
+          tags=$(git ls-remote --tags "$REPOSITORY_URL" 'refs/tags/web-*')
+          latest=$(printf '%s\n' "$tags" | sed -n 's#^[0-9a-f]*\trefs/tags/web-\([1-9][0-9]*\)$#\1#p' | sort -n | tail -n 1)
+          if [ -n "$latest" ] && [ "$number" -lt "$latest" ]; then
+            echo "::error::web-$number would be older than web-$latest; raise SCRIBYRA_RELEASE_BASE"; exit 1
+          fi
+          if [ "$EVENT" = workflow_dispatch ] && [ -n "$ROLLBACK_TAG" ]; then
+            [[ "$ROLLBACK_TAG" =~ ^web-[1-9][0-9]*$ ]] || { echo "::error::release must look like web-N"; exit 1; }
+            # An annotated tag's commit is the peeled ^{} line; a lightweight tag's is its own.
+            sha=$(printf '%s\n' "$tags" | awk -v t="refs/tags/$ROLLBACK_TAG^{}" '$2==t{print $1}')
+            [ -n "$sha" ] || sha=$(printf '%s\n' "$tags" | awk -v t="refs/tags/$ROLLBACK_TAG" '$2==t{print $1}')
+            [ -n "$sha" ] || { echo "::error::No tag $ROLLBACK_TAG"; exit 1; }
+            rollback=true
+          else
+            sha=$PUSHED_SHA; rollback=false
+          fi
+          { echo "release=web-$number"; echo "sha=$sha"; echo "rollback=$rollback"; } >> "$GITHUB_OUTPUT"
+          echo "Building web-$number from $sha (rollback: $rollback)"
+
+  suite:
+    name: suite
+    needs: plan
+    uses: ./.github/workflows/suite.yml # zizmor: ignore[self-repository] -- actionlint 1.7.12 rejects $/ and a local reusable workflow is read from the caller's commit
+    permissions:
+      contents: read
+    with:
+      ref: ${{ needs.plan.outputs.sha }}
+      release: ${{ needs.plan.outputs.release }}
+      # Share of telemetry sessions the official build lets send: 1, 0.5, 0.25, 0.1 or
+      # 0.01 (docs/telemetry-deployment.md). The repository variable overrides the
+      # default; any other value fails the build.
+      telemetry-session-rate: ${{ vars.SCRIBYRA_TELEMETRY_SESSION_RATE || '1' }}
+      pages-artifact: true
+      save-caches: ${{ needs.plan.outputs.rollback == 'false' }}
+
+  deploy:
+    name: deploy app.scribyra.com
+    needs: [plan, suite]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      pages: write # publish this repository's Pages site
+      id-token: write # OIDC token that actions/deploy-pages presents to Pages
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
+
+  # The presentation domain serves the same release from the scribyra-site repository
+  # (GitHub Pages has one custom domain per repository).
+  publish-site:
+    name: publish scribyra.com
+    needs: [plan, deploy]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    environment:
+      name: production-site
+      url: https://scribyra.com/
+    steps:
+      # Deploy tooling from the workflow's commit, so a rollback to an older commit
+      # still publishes the GitHub way.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: github-pages
+          path: .cache/production-artifact
+      - name: Unpack
+        run: |
+          mkdir -p .cache/production/site
+          tar -xf .cache/production-artifact/artifact.tar -C .cache/production/site
+          rm -rf .cache/production-artifact
+      - name: Push to the presentation repository
+        env:
+          SCRIBYRA_PAGES_FORGE: github
+          SCRIBYRA_SITE_DEPLOY_KEY: ${{ secrets.SCRIBYRA_SITE_DEPLOY_KEY }}
+          SCRIBYRA_SITE_REPOSITORY: git@github.com:${{ github.repository_owner }}/scribyra-site.git
+          CI_COMMIT_SHA: ${{ needs.plan.outputs.sha }}
+          CI_PIPELINE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node scripts/deploy-staging.mjs .cache/production --production
+
+  # Creates the GitHub Release web-N and its tag. Release tags come only from here.
+  register:
+    name: register release
+    needs: [plan, deploy]
+    if: needs.plan.outputs.rollback == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write # create the release and its web-N tag
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Register the release
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SCRIBYRA_RELEASE: ${{ needs.plan.outputs.release }}
+          CI_COMMIT_SHA: ${{ needs.plan.outputs.sha }}
+        run: python3 scripts/ci-release.py
+
+  # After a hotfix reaches main, open (or reuse) one pull request main → dev. A no-op
+  # when dev already has every change on main, as after a release merge. Needs the
+  # repository setting "Allow GitHub Actions to create and approve pull requests";
+  # without it the job prints the manual command and ends with a warning.
+  back-merge:
+    name: back-merge
+    needs: plan
+    if: needs.plan.outputs.rollback == 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: write # open the pull request main → dev
+      issues: write # label and assign it (GitHub sets both through the issues API)
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Back-merge
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          SCRIBYRA_BACKMERGE_ASSIGNEES: ${{ vars.SCRIBYRA_BACKMERGE_ASSIGNEES }}
+        run: |
+          status=0; node scripts/back-merge.mjs || status=$?
+          if [ "$status" = 42 ]; then echo "::warning::Open the back-merge by hand (see the log)"; exit 0; fi
+          exit "$status"
