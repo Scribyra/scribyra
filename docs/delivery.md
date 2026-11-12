@@ -4,18 +4,27 @@ How Scribyra changes reach staging and production. The model was approved by the
 owner; the architect agent applies the settings below after the launch reset
 (`docs/launch-cleanup.md`), when `main` starts again from the published history.
 
+> **Moving to GitHub.** The project is moving from GitLab to GitHub (GitHub Actions,
+> GitHub Pages); the plan and its commands are in [github-move.md](github-move.md).
+> The branch model below stays the same on both. **Until the cut-over, GitLab is
+> where work happens**: the sections marked *GitLab* apply. After it, use the
+> section "On GitHub" and the GitHub columns; the GitLab sections are removed when
+> GitLab is archived.
+
 ## Branch model
 
 | Branch | Role | Who writes to it |
 | --- | --- | --- |
-| `main` | Production. Every push deploys `https://app.scribyra.com/` and `https://scribyra.com/` (GitLab Pages) and registers a `web-N` release. | Merges only, by Maintainers |
-| `dev` | The next release candidate. Every push deploys staging at `https://dev.scribyra.com/` (GitLab Pages of the staging project). | Merges only, by Maintainers |
-| `feature/<name>` | One change. Merge request into `dev`. | Anyone with Developer access |
-| `hotfix/<name>` | An urgent production fix, branched from `main`. Merge request into `main`. | Anyone with Developer access |
+| `main` | Production. Every push deploys `https://app.scribyra.com/` and `https://scribyra.com/` (GitLab Pages; on GitHub: the Pages sites of `scribyra` and `scribyra-site`) and registers a `web-N` release. | Merges only, by Maintainers |
+| `dev` | The next release candidate. Every push deploys staging at `https://dev.scribyra.com/` (Pages of the staging project/repository). | Merges only, by Maintainers |
+| `feature/<name>` | One change. Merge request (GitHub: pull request) into `dev`. | Anyone with Developer (GitHub: Write) access |
+| `hotfix/<name>` | An urgent production fix, branched from `main`. Merge request (pull request) into `main`. | Anyone with Developer (Write) access |
 
 Nobody pushes to `main` or `dev` directly and nobody force-pushes them. Every merge
 needs a passing pipeline and resolved threads. Release tags `web-N` are created only
-by CI (`register-web-release`); `N` is the pipeline IID, so numbers only grow.
+by CI (`register-web-release`); `N` is the pipeline IID, so numbers only grow. On
+GitHub `N` is `SCRIBYRA_RELEASE_BASE` (1000) plus the `production` workflow's run
+number, so the first GitHub release, `web-1001`, is above every GitLab one.
 
 **Who merges.** For now the architect agent merges release merge requests
 (`dev` → `main`) and hotfix merge requests itself once their pipeline passes and all
@@ -23,7 +32,7 @@ threads are resolved. The owner does not need to click Merge, and can take over 
 merge at any time: reviewing, commenting (an open thread blocks the merge), merging
 himself, or asking the architect to stop.
 
-## What each pipeline runs
+## What each pipeline runs (GitLab)
 
 Pipelines run only for merge requests, pushes to `main` and `dev`, and manual runs
 (`workflow:rules` in `.gitlab-ci.yml`). Pushing a feature or hotfix branch without a
@@ -43,7 +52,7 @@ request pipelines test the source branch; GitLab Free has no merged-results
 pipelines, so the push pipeline on `dev`/`main` tests the merged commit again before
 it deploys.
 
-## A feature
+## A feature (GitLab)
 
 ```sh
 git fetch origin
@@ -61,7 +70,7 @@ commit (keep GitLab's default merge commit message: the changelog reads it). The
 branch is deleted on merge. The push to `dev` deploys staging within one pipeline;
 check the change at `https://dev.scribyra.com/`.
 
-## A release (`dev` → `main`)
+## A release (`dev` → `main`, GitLab)
 
 1. Check staging at `https://dev.scribyra.com/` (the Staging badge names the
    release, e.g. `dev-412-1a2b3c4d`).
@@ -86,7 +95,7 @@ check the change at `https://dev.scribyra.com/`.
 4. The push to `main` deploys production and creates the release `web-<IID>`.
    `back-merge` finds nothing to do, because `dev` already has everything on `main`.
 
-## A hotfix
+## A hotfix (GitLab)
 
 ```sh
 git fetch origin
@@ -124,7 +133,7 @@ hand: `glab mr create --source-branch main --target-branch dev --title "Back-mer
 main into dev" --remove-source-branch=false --yes`. The architect runs it after every
 hotfix.
 
-## A rollback
+## A rollback (GitLab)
 
 Production: redeploy an earlier release from its tag. In **Build → Pipelines → Run
 pipeline**, choose the tag `web-N` (or `POST /projects/88410471/pipeline?ref=web-N`).
@@ -140,7 +149,7 @@ again.
 Staging: retry `deploy-staging` in an earlier `dev` pipeline (it rebuilds that commit
 and publishes it), or merge a revert into `dev`.
 
-## Staging at dev.scribyra.com
+## Staging at dev.scribyra.com (GitLab)
 
 Staging is published by a second project, `urundead-labs/scribyra-staging` (private
 repository, public Pages), whose only content is the built site. Cloudflare Pages
@@ -191,7 +200,7 @@ Properties of the staging build:
   `nix develop -c node scripts/deploy-staging.mjs .cache/staging --dry-run` commits
   it in `.cache/staging-repo` without fetching or pushing.
 
-## GitLab settings (architect, after the launch reset)
+## GitLab settings (architect, after the launch reset; GitLab)
 
 Project `urundead-labs/scribyra`, ID `88410471`, gitlab.com Free. Run with a token of
 a Maintainer or Owner:
@@ -296,7 +305,7 @@ Without the bot, the fallback is the manual command printed by the job (above).
 Using the owner's own token instead is not recommended: `api` on his account reaches
 every project he owns.
 
-## Staging project (architect, once)
+## Staging project (architect, once; GitLab)
 
 Uses the same `GL`, `H` and `P` as above; the token needs Owner or Maintainer on the
 `urundead-labs` group (ID `146311520`). DNS uses the existing Cloudflare token that
@@ -391,8 +400,81 @@ can edit the `scribyra.com` zone (`CF_TOKEN`, zone ID `Z`).
    `url`, a `*.gitlab.io` address) and set it as `presentation` in
    `ops/pages/domains.staging.json` through a merge request into `dev`.
 
+## On GitHub (after the cut-over)
+
+The same model with pull requests. Workflows: `.github/workflows/checks.yml`
+(every pull request into `dev`/`main`: `suite / test`), `staging.yml` (push to
+`dev`), `production.yml` (push to `main`, manual redeploy and rollback),
+`suite.yml` (the shared suite). Settings, rulesets and secrets:
+[github-move.md](github-move.md). The required check is `suite / test`; merges
+are merge commits only, threads must be resolved.
+
+| Event | Jobs |
+| --- | --- |
+| Pull request into `dev` or `main` | `suite / test` (on the merge result) |
+| Push to `dev` | `suite / test` with the staging build, then `deploy dev.scribyra.com` (pushes to `scribyra-staging`) |
+| Push to `main` | `suite / test`, `deploy app.scribyra.com` (`actions/deploy-pages`), `publish scribyra.com` (pushes to `scribyra-site`), `register release` (GitHub Release `web-N`), `back-merge` |
+| `gh workflow run production.yml --ref main` | Same as a push: redeploy as a new release |
+| `gh workflow run production.yml --ref main -f release=web-N` | Rollback: rebuild and deploy that tag, no release, no back-merge |
+| `gh workflow run staging.yml --ref dev` | Redeploy staging |
+
+**A feature:**
+
+```sh
+git fetch origin
+git switch -c feature/outline-panel origin/dev
+# work, commit
+git push -u origin feature/outline-panel
+gh pr create --base dev --head feature/outline-panel \
+  --title "Add the outline panel" --body "What and why; how it was tested."
+```
+
+The pull request title becomes the changelog line (the merge commit message is the
+title: "Merge pull request #N from scribyra/feature/…" plus the title). When
+`suite / test` passes and threads are resolved, a maintainer merges with
+**Create a merge commit** (`gh pr merge --merge --delete-branch`).
+
+**A release:**
+
+```sh
+git fetch origin --tags --prune
+node scripts/release-changelog.mjs --tests tests.md > release.md   # reads #N and older !N entries
+gh pr create --base main --head dev --title "Release $(date +%Y-%m-%d)" --body-file release.md --label release
+gh pr merge <number> --merge          # never --delete-branch for dev
+```
+
+**A hotfix:** branch from `origin/main`, `gh pr create --base main --label hotfix`,
+merge with a merge commit. The push to `main` deploys, registers the release and
+opens (or reuses) the pull request `main` → `dev`, label `back-merge`, opened by
+`github-actions[bot]`. Its own check run waits for **Approve and run** (events made
+with `GITHUB_TOKEN` need approval), but `main`'s commit already carries
+`suite / test` from the production run. Merge it with a merge commit. Conflicts:
+as on GitLab, resolve on a `backmerge/main-into-dev` branch from `dev` and close the
+automatic one. If the job warns that Actions may not open pull requests, run the
+printed `gh pr create --head main --base dev …` command.
+
+**A rollback:** `gh workflow run production.yml --repo scribyra/scribyra --ref main -f release=web-N`,
+then make it durable with a revert on a `hotfix/` branch. Staging: re-run the
+`deploy dev.scribyra.com` job of an earlier `staging` run (its site artifact is
+kept 7 days), or merge a revert into `dev`.
+
+**Staging on GitHub** works like the GitLab staging project: `scribyra-staging`
+(public: GitHub Pages on the Free plan needs public repositories) receives the site
+as `public/` from the `staging` workflow with the `SCRIBYRA_STAGING_DEPLOY_KEY`
+deploy key, and its own `pages.yml` (installed once from
+`ops/staging/github-pages.yml`; CI never writes it) publishes it. Locally:
+`SCRIBYRA_PAGES_FORGE=github node scripts/deploy-staging.mjs .cache/staging --dry-run`
+with `SCRIBYRA_STAGING_REPOSITORY` set.
+
 ## Upkeep
 
+- GitHub: `scribyra-site` and `scribyra-staging` keep one commit per deployment, like
+  the GitLab staging project. GitHub recommends Pages source repositories stay under
+  1 GB; when one approaches it, restart its history from a maintainer's machine:
+  clone it, `git checkout --orphan fresh && git commit -qm "Restart history"`, and
+  push `fresh:main` with `--force` (its ruleset forbids deleting `main`, not force
+  pushes). Rotate a deploy key by
+  adding a new key, updating the environment secret, then removing the old key.
 - The staging repository keeps one commit per staging deployment; identical files
   are stored once, so it grows by the changed files only (mostly the app bundle, and
   about 100 MB when the compiler changes). To start it over, on the runner host:
