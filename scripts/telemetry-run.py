@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Execute approved suites, validate a safe summary in Rust, optionally publish it.
-Raw stdout/stderr, test names, paths and failure messages are never artifacts.
+Raw stdout/stderr, test names, paths and failure messages are never artifacts. The
+names of failing tests (only) are printed to this job's log on stderr, so a red CI
+job says what failed; they never enter the summary, the JUnit file or the ingress.
 """
 import argparse
 import xml.etree.ElementTree as ET
@@ -9,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import re
+import sys
 import shlex
 import signal
 import subprocess
@@ -32,7 +35,9 @@ args=parser.parse_args()
 if not 1<=args.timeout<=86390:parser.error('Timeout must be 1–86390 seconds')
 validator=ROOT/'target/debug/scribyra-telemetry'
 if not validator.is_file():parser.error('Build scribyra-telemetry first; the shared Rust validator is required')
-ci=os.environ.get('GITLAB_CI')=='true'
+# GitLab CI or GitHub Actions; each needs its full numeric identity, or the run stops.
+forge='gitlab' if os.environ.get('GITLAB_CI')=='true' else 'github' if os.environ.get('GITHUB_ACTIONS')=='true' else None
+ci=forge is not None
 source='ci' if ci else 'synthetic' if args.suite.startswith('synthetic-') else 'local_test'
 suite='browser' if args.suite.startswith('browser') else 'fault_validation' if args.suite.startswith('synthetic-') else args.suite
 env=os.environ.copy();env['SCRIBYRA_TELEMETRY_SOURCE']=source;env.pop('FORCE_COLOR',None);env.pop('NODE_TEST_CONTEXT',None);env['NO_COLOR']='1'
@@ -42,8 +47,11 @@ identity={'version':json.loads((ROOT/'package.json').read_text())['version'],'re
 env['SCRIBYRA_BUILD_REVISION']=identity['revision'];env['SCRIBYRA_BUILD_DIRTY']='1' if identity['dirty'] else '0'
 context=None
 if ci:
- try:context={key:int(os.environ[name]) for key,name in [('projectId','CI_PROJECT_ID'),('pipelineId','CI_PIPELINE_ID'),('jobId','CI_JOB_ID')]}
- except (KeyError,ValueError):parser.error('GitLab CI identity is incomplete')
+ # GitHub: repository id, workflow run id, and the job's check run id, which the
+ # workflow exports as SCRIBYRA_CI_JOB_ID (Actions has no default job-id variable).
+ names=[('projectId','CI_PROJECT_ID'),('pipelineId','CI_PIPELINE_ID'),('jobId','CI_JOB_ID')] if forge=='gitlab' else [('projectId','GITHUB_REPOSITORY_ID'),('pipelineId','GITHUB_RUN_ID'),('jobId','SCRIBYRA_CI_JOB_ID')]
+ try:context={key:int(os.environ[name]) for key,name in names}
+ except (KeyError,ValueError):parser.error(('GitLab' if forge=='gitlab' else 'GitHub Actions')+' CI identity is incomplete')
 
 endpoint=None;token=None
 if args.endpoint or args.token_file:
@@ -55,8 +63,11 @@ if args.endpoint or args.token_file:
  if not re.fullmatch('[a-fA-F0-9]{64}',token):parser.error('Use a 64-hex ingest token')
 
 class Parse:
- def __init__(self):self.rust=[];self.tap={};self.oversize=False;self.bytes=0
+ def __init__(self):self.rust=[];self.tap={};self.oversize=False;self.bytes=0;self.failing=[]
  def line(self,line):
+  # Failing test names for the job log only (TAP `not ok`, cargo `... FAILED`), bounded.
+  match=re.fullmatch(r'not ok \d+ - (.+?)(?: # .*)?',line) or re.fullmatch(r'test (\S+) \.\.\. FAILED',line)
+  if match and len(self.failing)<100:self.failing.append(match[1][:300])
   match=re.fullmatch(r'test result: (?:ok|FAILED)\. (\d+) passed; (\d+) failed; (\d+) ignored; \d+ measured; \d+ filtered out; finished in .+',line)
   if match:self.rust.append(tuple(map(int,match.groups())))
   match=re.fullmatch(r'# (tests|pass|fail|cancelled|skipped|todo) (\d+)',line)
@@ -155,5 +166,8 @@ with tempfile.TemporaryDirectory(prefix='scribyra-safe-run-') as temporary:
     if error.code in [400,401,403,409,413]:delivery='rejected';break
    except Exception:pass
    if attempt<2:time.sleep(.25*(2**attempt))
+ if reader.failing:
+  print(f'Failing tests ({len(reader.failing)}{"+" if len(reader.failing)>=100 else ""}; a TAP parent is listed after its subtests):',file=sys.stderr)
+  for name in reader.failing:print('  not ok - '+name,file=sys.stderr)
  print(json.dumps({'runId':run_id,'source':source,'suite':suite,'outcome':safe['outcome'],'counts':counts,'durationMs':round(duration),'delivery':delivery}))
  raise SystemExit(130 if cancelled or code<0 else code)

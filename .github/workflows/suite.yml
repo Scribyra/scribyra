@@ -68,8 +68,14 @@ jobs:
           ref: ${{ inputs.ref }}
           persist-credentials: false
 
+      # The job's check run id completes the numeric CI identity scripts/telemetry-run.py
+      # records for `source: ci` (GITHUB_REPOSITORY_ID and GITHUB_RUN_ID are defaults).
       - name: Record the commit
-        run: echo "CI_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+        env:
+          JOB_ID: ${{ job.check_run_id }}
+        run: |
+          echo "CI_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "SCRIBYRA_CI_JOB_ID=$JOB_ID" >> "$GITHUB_ENV"
 
       - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
         with:
@@ -160,7 +166,9 @@ jobs:
         run: nix develop "$NIX_SHELL" -c npm run build:staging
 
       # Closed-schema JSON/JUnit summaries only; test output, traces and fixtures are
-      # never uploaded. Artifacts of a public repository are readable by any signed-in
+      # never uploaded (the names of failing tests are in the step's log instead).
+      # `.telemetry` is a dot-directory, which upload-artifact skips unless hidden files
+      # are included; the two patterns still select only the summaries. Artifacts of a public repository are readable by any signed-in
       # GitHub user (GitLab limited these to maintainers); the summaries hold counts,
       # outcome and revision only.
       - name: Upload run summaries
@@ -173,6 +181,7 @@ jobs:
             .telemetry/*.xml
           retention-days: 1
           if-no-files-found: ignore
+          include-hidden-files: true
 
       - name: Upload the Pages release
         if: inputs.pages-artifact

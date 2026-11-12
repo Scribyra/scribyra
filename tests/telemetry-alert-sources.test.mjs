@@ -32,7 +32,7 @@ test('a first failed test fires controlled probes while application and CI rules
  });
  try{
   const started=Date.now();
-  const child=spawnSync('python3',['scripts/telemetry-run.py','--suite','synthetic-fail','--endpoint',`http://127.0.0.1:${base}/v1/runs`,'--token-file',state+'/ingress.token'],{encoding:'utf8',timeout:15000,env:{...process.env,GITLAB_CI:'false'}});
+  const child=spawnSync('python3',['scripts/telemetry-run.py','--suite','synthetic-fail','--endpoint',`http://127.0.0.1:${base}/v1/runs`,'--token-file',state+'/ingress.token'],{encoding:'utf8',timeout:15000,env:{...process.env,GITLAB_CI:'false',GITHUB_ACTIONS:'false'}});
   assert.equal(child.status,1);const run=JSON.parse(child.stdout);assert.equal(run.delivery,'accepted');assert.equal(run.source,'synthetic');assert.equal(run.counts.failed,1);
   // Restrict only the controlled probes to this actual run, so older failures
   // in a retained deployment cannot manufacture the first-observation result.

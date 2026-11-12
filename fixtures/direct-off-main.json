@@ -1,6 +1,6 @@
 {
  "ref": "main",
- "commit": "2d779be817cdce977de7e394c84542e6b53703fb",
+ "commit": "d55271f70e9e6d4b038df881b8a062e099f7409e",
  "authorId": "d81e8b7c-6038-4ea4-ac8e-d0856d596b55",
  "localStorage": {
   "scribyra:author": "{\"id\":\"d81e8b7c-6038-4ea4-ac8e-d0856d596b55\",\"kind\":\"human\",\"displayName\":\"Local author\"}"
@@ -18,11 +18,11 @@
   "bytes": 62550
  },
  "backup": {
-  "sha256": "1f39f35d3700a6577acd9768f8c95cda2d64fdf319b3220db83dfdbf1e6f5697",
+  "sha256": "65f9bb1f53c42c640c571e830f725fbe9e571a6c7f5c83ff9a5c46ef4ec6230b",
   "bytes": 12921
  },
  "zip": {
-  "sha256": "491b6ea6bd4d57990a1a8cc8061b32bb301dd5d57fe3a831e7ecf670cdf6d14d",
+  "sha256": "50060e4cb3b593f575e0d99d224cb5f6f791da18113dc06ae220bebe5a2fbd54",
   "bytes": 291
  }
 }
