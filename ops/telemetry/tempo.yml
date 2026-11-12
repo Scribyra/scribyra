@@ -1,0 +1,39 @@
+# Tempo 3 monolithic mode: no Kafka or metrics-generator required.
+target: all
+stream_over_http_enabled: true
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: ${SCRIBYRA_TEMPO_PORT}
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: ${SCRIBYRA_TEMPO_GRPC_PORT}
+  log_level: warn
+distributor:
+  receivers:
+    otlp:
+      protocols:
+        http:
+          endpoint: 127.0.0.1:${SCRIBYRA_TEMPO_OTLP_PORT}
+live_store:
+  shutdown_marker_dir: ${SCRIBYRA_STATE}/tempo/shutdown-marker
+  wal:
+    path: ${SCRIBYRA_STATE}/tempo/live-wal
+  max_trace_idle: 10s
+  max_block_duration: 5m
+  max_block_bytes: 10000000
+backend_scheduler:
+  provider:
+    compaction:
+      compaction:
+        block_retention: 168h
+storage:
+  trace:
+    backend: local
+    wal:
+      path: ${SCRIBYRA_STATE}/tempo/wal
+    local:
+      path: ${SCRIBYRA_STATE}/tempo/blocks
+    pool:
+      max_workers: 4
+      queue_depth: 128
+usage_report:
+  reporting_enabled: false

@@ -1,0 +1,146 @@
+{
+ "chromium-chromium": {
+  "tamperedOffer": {
+   "connected": false,
+   "a": "failed",
+   "b": "failed"
+  },
+  "tamperedAnswer": {
+   "connected": false,
+   "a": "failed",
+   "b": "failed"
+  },
+  "honest": {
+   "connected": true,
+   "sasA": "986393",
+   "sasB": "986393",
+   "match": true
+  },
+  "mitm": {
+   "aOpen": true,
+   "bOpen": true,
+   "note": "DTLS succeeds on both sides; each peer is talking to M",
+   "sasA": "926066",
+   "sasB": "052281",
+   "sasMatch": false
+  },
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  },
+  "appKeyMismatch": {
+   "t": 483,
+   "k": "decrypt-or-handle-error",
+   "v": "OperationError"
+  },
+  "helloAccepted": null
+ },
+ "firefox-firefox": {
+  "tamperedOffer": {
+   "connected": false,
+   "a": "failed",
+   "b": "failed"
+  },
+  "tamperedAnswer": {
+   "connected": false,
+   "a": "failed",
+   "b": "failed"
+  },
+  "honest": {
+   "connected": true,
+   "sasA": "831411",
+   "sasB": "831411",
+   "match": true
+  },
+  "mitm": {
+   "aOpen": true,
+   "bOpen": true,
+   "note": "DTLS succeeds on both sides; each peer is talking to M",
+   "sasA": "450979",
+   "sasB": "709300",
+   "sasMatch": false
+  },
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "399aa22e-507a-4438-aadf-9d6f63bb792c.local"
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "6e3fda24-50f9-44fb-a429-b2c6e31289cc.local"
+   },
+   "rttMs": null,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AEAD_AES_128_GCM"
+  },
+  "appKeyMismatch": {
+   "t": 314,
+   "k": "decrypt-or-handle-error",
+   "v": "The operation failed for an operation-specific reason"
+  },
+  "helloAccepted": null
+ },
+ "chromium-firefox": {
+  "tamperedOffer": {
+   "connected": false,
+   "a": "failed",
+   "b": "failed"
+  },
+  "tamperedAnswer": {
+   "connected": false,
+   "a": "failed",
+   "b": "failed"
+  },
+  "honest": {
+   "connected": true,
+   "sasA": "164555",
+   "sasB": "164555",
+   "match": true
+  },
+  "mitm": {
+   "aOpen": true,
+   "bOpen": true,
+   "note": "DTLS succeeds on both sides; each peer is talking to M",
+   "sasA": "850744",
+   "sasB": "348499",
+   "sasMatch": false
+  },
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  },
+  "appKeyMismatch": {
+   "t": 638,
+   "k": "decrypt-or-handle-error",
+   "v": "The operation failed for an operation-specific reason"
+  },
+  "helloAccepted": null
+ }
+}

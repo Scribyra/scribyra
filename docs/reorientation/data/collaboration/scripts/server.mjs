@@ -1,0 +1,3 @@
+import http from 'node:http';import {readFile} from 'node:fs/promises';import {extname,join} from 'node:path';
+const root=process.argv[2];const port=+(process.argv[3]||5191);const types={'.html':'text/html','.js':'text/javascript','.wasm':'application/wasm','.json':'application/json'};
+http.createServer(async(q,s)=>{try{const p=new URL(q.url,'http://x').pathname;const b=await readFile(join(root,p==='/'?'index.html':p));s.writeHead(200,{'content-type':types[extname(p)]||'text/html','cache-control':'no-store'});s.end(b);}catch{s.writeHead(404);s.end();}}).listen(port,'127.0.0.1',()=>console.error('server',port));

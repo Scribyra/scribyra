@@ -1,0 +1,28 @@
+{
+ "ref": "main",
+ "commit": "2d779be817cdce977de7e394c84542e6b53703fb",
+ "authorId": "d81e8b7c-6038-4ea4-ac8e-d0856d596b55",
+ "localStorage": {
+  "scribyra:author": "{\"id\":\"d81e8b7c-6038-4ea4-ac8e-d0856d596b55\",\"kind\":\"human\",\"displayName\":\"Local author\"}"
+ },
+ "databases": [
+  "scribyra-v1"
+ ],
+ "opened": [
+  "scribyra-v1"
+ ],
+ "generatedKeys": 0,
+ "directFields": false,
+ "storage": {
+  "sha256": "898f9d8d06f0fbb06e81566bf1d8e99ba9cf37a77971046a80785e6fb7260eef",
+  "bytes": 62550
+ },
+ "backup": {
+  "sha256": "1f39f35d3700a6577acd9768f8c95cda2d64fdf319b3220db83dfdbf1e6f5697",
+  "bytes": 12921
+ },
+ "zip": {
+  "sha256": "491b6ea6bd4d57990a1a8cc8061b32bb301dd5d57fe3a831e7ecf670cdf6d14d",
+  "bytes": 291
+ }
+}

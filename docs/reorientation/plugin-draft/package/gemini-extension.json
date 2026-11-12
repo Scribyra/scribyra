@@ -1,0 +1,5 @@
+{
+  "name": "scribyra",
+  "version": "0.1.0",
+  "description": "Optional instructions for agents working in a Scribyra browser tab. Installs no program and no MCP server."
+}

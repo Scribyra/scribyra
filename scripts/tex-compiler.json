@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "sourceArchiveSha256": "4f63731fe4ec9238d877846074ab424350add6f6e956944def389e6752d2c78b",
+  "engine": "lualatex",
+  "implementation": "LuaHBTeX",
+  "implementationVersion": "1.24.0",
+  "binary": {
+    "path": "busytex.wasm",
+    "size": 32507525,
+    "sha256": "8d1988fc58cd1611c3cbd6bd986c3e607e5ff44f1d94252207ff7aae4cee72e0"
+  },
+  "format": {
+    "name": "luahblatex",
+    "path": "/texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt",
+    "sha256": "44f9a49a6443c582739a981340d4d2d9981a412a01ae1b0aeba36c3ada8e7ead",
+    "size": 5654663
+  },
+  "packagePolicy": "release-pinned",
+  "formatRebuilding": false,
+  "shellEscape": false
+}

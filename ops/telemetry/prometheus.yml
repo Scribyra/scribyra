@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+otlp:
+  translation_strategy: UnderscoreEscapingWithSuffixes
+scrape_configs:
+  - job_name: scribyra-ingress
+    static_configs:
+      - targets: ['127.0.0.1:${SCRIBYRA_INGRESS_PORT}']

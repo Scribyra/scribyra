@@ -1,0 +1,50 @@
+{
+  "version": 1,
+  "runtime": {"engine": "lualatex","distributionSha256": "4f63731fe4ec9238d877846074ab424350add6f6e956944def389e6752d2c78b","adapterSha256": "489769f131fe60260f094aae3e344536f972da179792a7caa5ca90edc90ae0ca","catalogSha256": "71a46312ebc4dc07fb59f2a5bc46d5994a28c8499e27352f7fdaa5c8b6325dca","snapshot": "texlive-2026-03-02+support-2026-11-03"},
+  "methodology": "Generated file sizes before HTTP compression. Not total network transfer, browser cache use, or a peak-memory measurement. Core excludes the app shell and separately cached metadata; Biber is separate. Optional archives/shards are stored on the host, fetched only when needed.",
+  "originalDataBytes": 341568560,
+  "baselineDataBytes": 45641875,
+  "baselineExpandedBytes": 74311252,
+  "baselineFiles": 3566,
+  "baselineReductionPercent": 86.6,
+  "coreBytes": 79411704,
+  "biberBytes": 31792782,
+  "componentIndexBytes": 1453187,
+  "components": 2276,
+  "allOptionalArchiveBytes": 188573912,
+  "distributionOptionalArchiveBytes": 188063020,
+  "fontAliases": 235,
+  "supportRuntimePackages": 14,
+  "supportRuntimeBytes": 510892,
+  "supportSourceBytes": 195584,
+  "metadataRootBytes": 111611,
+  "metadataPackageCount": 6499,
+  "metadataBasenameCount": 168639,
+  "metadataFilenameShards": 256,
+  "metadataPackageShards": 256,
+  "metadataFilenameShardBytes": 6809242,
+  "metadataPackageShardBytes": 10894208,
+  "metadataLargestShardBytes": 498604,
+  "legacyEagerMetadataBytes": 2518077,
+  "metadataStartupReductionPercent": 95.6,
+  "staticDeploymentBytes": 326167115,
+  "coreAssets": [
+    {"path": "busytex_worker.js","size": 3123,"sha256": "80eca56a2eb015bdfbebff26e539dd793407b73b6c1cd351170e6fdb6e17c39a"},
+    {"path": "busytex_pipeline.js","size": 42340,"sha256": "d16eef0935a9ceb0403b1f79246935c21d807f766e11b92be8fa7d1f6a72cb63"},
+    {"path": "busytex_biber.js","size": 4973,"sha256": "8021a0217ff27c496bdd93343d0aded678f2c3cc7c4f951ce6f98debfa705a54"},
+    {"path": "busytex.js","size": 271327,"sha256": "366ede08b0394a65b2936d29016953905182d38c4484940cc3afcf2f326c0ac9"},
+    {"path": "busytex.wasm","size": 32507525,"sha256": "8d1988fc58cd1611c3cbd6bd986c3e607e5ff44f1d94252207ff7aae4cee72e0"},
+    {"path": "texlive-lualatex.b894a509f8658bcc5b3702617f78f18afada0eb6b045e9f4cd816f79f5bbc573.js","size": 940541,"sha256": "b894a509f8658bcc5b3702617f78f18afada0eb6b045e9f4cd816f79f5bbc573"},
+    {"path": "texlive-lualatex.9c92ea102944673398013eec0d0370803f497f6e44667c5c3539ca87ddf597a6.data","size": 45641875,"sha256": "9c92ea102944673398013eec0d0370803f497f6e44667c5c3539ca87ddf597a6"}
+  ],
+  "biberAssets": [
+    {"path": "biber.js","size": 1068398,"sha256": "32570669b2b5a94443f08b5191192a73cf558ef30410780ff0f6f2adec2c37b0"},
+    {"path": "biber.wasm","size": 9644474,"sha256": "6c2ddccf3b95e06b419d4aee5f88ef10ddec658ce760fabb34d7145371ff18c5"},
+    {"path": "biber.data","size": 21079910,"sha256": "9ea1357e6180477479b5edfe17538ba655ebebc03142a195d85fb1d47899df21"}
+  ],
+  "notices": [
+    {"path": "LICENSE.TL","size": 5129,"sha256": "8147ff504e6d7d89a7c42d5c3dfbaa8705ad17f72c82a5c1bce5f4f0ee8b2fb7"},
+    {"path": "LICENSE.CTAN","size": 2098,"sha256": "380d83c62ec2ae91617b42739699676f23446039f2f88fa092da47e0c49f1eae"},
+    {"path": "release-texlive.txt","size": 350,"sha256": "050b3b4866a2e72b927cd7d749998a378956032e899687467e2e7a522455444f"}
+  ]
+}

@@ -1,0 +1,28 @@
+// DISCONTINUED (November 8, 2026, the owner's decision): the Rust companion is no
+// longer part of Scribyra. This module stays for its tests only and is reachable
+// solely behind the test-only localStorage switch `scribyra-companion-dev`.
+import {restoreDialogFocus} from './input.js';
+export function companionDialog({getConnection,connect,disconnect,projectName,signal}){
+ return new Promise(resolve=>{
+  const dialog=document.createElement('dialog');dialog.className='modal companion-dialog';dialog.setAttribute('aria-label','Rust companion and MCP');restoreDialogFocus(dialog);
+  const heading=document.createElement('h2');heading.textContent='Connect your tools';
+  const help=document.createElement('p');help.textContent=`Pair the local Rust companion with “${projectName}” to let an MCP client work with this open project. Access lasts up to eight hours and ends when you disconnect or close the project or browser session.`;
+  const fields=document.createElement('fieldset'),legend=document.createElement('legend');fields.className='companion-address';legend.textContent='Local companion';fields.append(legend);
+  const field=(label,type,value='')=>{const row=document.createElement('label'),input=document.createElement('input');row.textContent=label;input.type=type;input.value=value;input.className='input';input.setAttribute('aria-label',label);row.append(input);fields.append(row);return input;};
+  const url=field('Companion address','url','http://127.0.0.1:43821'),code=field('Pairing code','password');code.autocomplete='off';code.maxLength=64;code.spellcheck=false;
+  const permissions=document.createElement('fieldset'),caption=document.createElement('legend');permissions.className='companion-permissions';caption.textContent='Allow for this project';permissions.append(caption);const inputs={};
+  for(const[name,label]of [['read','Read source, tree and diagnostics'],['write','Edit and create files'],['compile','Let tools start compilation'],['export','Export source ZIPs and PDFs']]){const row=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=name==='read';input.disabled=name==='read';inputs[name]=input;row.append(input,document.createTextNode(label));permissions.append(row);}
+  const status=document.createElement('p');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  const config=document.createElement('textarea');config.className='input';config.readOnly=true;config.rows=10;config.hidden=true;config.setAttribute('aria-label','MCP connection settings');
+  const instructions=document.createElement('p');instructions.textContent='Use the URL and Authorization header in your MCP client. These settings grant the selected access to this project; keep them private.';instructions.hidden=true;
+  const actions=document.createElement('div');actions.className='modal-actions';let busy=false,closed=false,operation;
+  const button=(text,handler)=>{const node=document.createElement('button');node.type='button';node.className='button secondary';node.textContent=text;node.onclick=handler;actions.append(node);return node;};
+  function refresh(){if(closed)return;const connection=getConnection();pair.disabled=busy||!!connection?.active;revoke.disabled=busy||!connection?.active;settings.disabled=busy||!connection?.active;url.disabled=code.disabled=busy||!!connection?.active;for(const[name,input]of Object.entries(inputs)){input.disabled=name==='read'||busy||!!connection?.active;if(connection?.active)input.checked=connection.permissions[name];}if(connection?.active)url.value=connection.url;if(connection?.active)status.textContent=connection.permissions.write?'Connected · editing allowed':'Connected · read only';else{config.value='';config.hidden=instructions.hidden=true;}}
+  const pair=button('Pair companion',async()=>{if(busy)return;busy=true;operation=new AbortController();status.textContent='Verifying companion and project permissions…';refresh();try{await connect({url:url.value.trim(),code:code.value.trim(),permissions:Object.fromEntries(Object.entries(inputs).map(([key,input])=>[key,input.checked])),signal:operation.signal});code.value='';if(!closed)status.textContent='Companion paired. Configure your MCP client with the connection settings.';}catch(error){if(!closed)status.textContent=error.message||String(error);}finally{busy=false;refresh();}});
+  const revoke=button('Disconnect and revoke',async()=>{busy=true;refresh();config.value='';config.hidden=instructions.hidden=true;await disconnect();status.textContent='Disconnected. Pair again to grant new access.';busy=false;refresh();});
+  const settings=button('Show MCP connection settings',()=>{const connection=getConnection();if(!connection?.active)return;config.value=JSON.stringify(connection.settings(),null,2);config.hidden=instructions.hidden=false;config.focus();config.select();});
+  function finish(){if(closed)return;closed=true;if(busy)operation?.abort();config.value='';signal?.removeEventListener('abort',finish);window.removeEventListener('scribyra:state',changed);dialog.close();dialog.remove();resolve();}
+  const changed=event=>{if(closed||busy)return;refresh();if(!getConnection()?.active){try{status.textContent=JSON.parse(event.detail).companionStatus||'Disconnected';}catch{}}};window.addEventListener('scribyra:state',changed);
+  button('Close',finish);signal?.addEventListener('abort',finish,{once:true});dialog.addEventListener('cancel',event=>{event.preventDefault();finish();});dialog.append(heading,help,fields,permissions,status,instructions,config,actions);document.body.append(dialog);dialog.showModal();refresh();url.focus();
+ });
+}

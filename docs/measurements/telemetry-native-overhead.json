@@ -1,0 +1,636 @@
+{
+  "version": 1,
+  "profile": "release",
+  "executables": {
+    "folders": "ad627ac3370d23d82f65045b54d78624b6789a56aeca7dc7745e68f1f61b41f0",
+    "sync": "b6b6fe39479c21f721b37ec52590e6ef42ea8f27846c0151496a942450ad2d2f"
+  },
+  "collector": {
+    "ingressProfile": "debug",
+    "alloyVersion": "v1.21.3",
+    "destination": "bounded OTLP decoding sink"
+  },
+  "toolchain": {
+    "node": "22.23.4",
+    "rust": "rustc 1.99.1 (58cf8f9c3 2026-10-13)"
+  },
+  "measuredAt": "2026-11-05T16:55:41.607Z",
+  "host": {
+    "platform": "linux",
+    "kernel": "7.0.6-2-pve",
+    "cpu": "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz",
+    "logicalCpus": 10
+  },
+  "revision": "c6e85ce97a099ee69c207b0ab1caba8b6399d844",
+  "dirty": true,
+  "method": {
+    "order": "Three fresh process modes per repetition, rotated disabled/local/remote. Serial trials, OS caches shared.",
+    "workload": "Read-only folders inspect: 32 synthetic 25 KiB files. Sync startup through listening message; 30 sequential PUT/GET pairs of an identical 64 KiB blob through the real SQLite API, 10 ms pause per pair. No native compiler exists: browser compile overhead remains in T4e.",
+    "timing": "CLI wall time includes process startup, inspection and bounded exporter shutdown; sync workload wall time includes HTTP, SQLite, test driver and fixed pauses. Collection configured before startup. No local snapshot disk output.",
+    "transfer": "Actual POST body bytes to a loopback counting proxy, then real Rust authenticated ingress and OTLP decoding sink. Full sampling; fresh native_session/sync_http successful span IDs verified against the previous capture. Headers, TLS and downstream protobuf bytes excluded. Pinned Alloy forwards to the sink; no Grafana retained ingestion claim.",
+    "memory": "Native process tree RSS/PSS sampled every 250 ms using the browser T4e sampler. Short CLI may have no live sample; report null then. Collector and driver memory excluded.",
+    "limits": "Headless Linux, one synthetic fixed workload, configured repetitions, warm shared OS caches on a shared engineering host; no statistical-significance claim. No TLS, remote network, companion MCP latency, native compile or collector-memory attribution. Sampling peaks are lower bounds; HTTP export is best effort."
+  },
+  "rows": [
+    {
+      "run": 1,
+      "mode": "disabled",
+      "phases": {
+        "cli": {
+          "wallMs": 32.50419199999999,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 1,
+            "liveSamples": 1,
+            "peakSampledRss": 6184960,
+            "peakSampledPss": 4424704,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 6184960,
+                "peakSampledPss": 4424704
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 100.59169799999995
+        },
+        "sync": {
+          "wallMs": 537.7088340000001,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 9,
+            "liveSamples": 9,
+            "peakSampledRss": 7139328,
+            "peakSampledPss": 4684800,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 5832704,
+                "peakSampledPss": 3543040
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 7139328,
+                "peakSampledPss": 4684800
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 7139328,
+                "peakSampledPss": 4684800
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 0,
+        "bodyBytes": 0,
+        "accepted": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 1,
+      "mode": "local",
+      "phases": {
+        "cli": {
+          "wallMs": 34.54525900000044,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 1,
+            "liveSamples": 1,
+            "peakSampledRss": 5009408,
+            "peakSampledPss": 3190784,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 5009408,
+                "peakSampledPss": 3190784
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 121.13205300000027
+        },
+        "sync": {
+          "wallMs": 522.0413469999994,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 9,
+            "liveSamples": 9,
+            "peakSampledRss": 7217152,
+            "peakSampledPss": 4762624,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 5832704,
+                "peakSampledPss": 3543040
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 7217152,
+                "peakSampledPss": 4762624
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 7217152,
+                "peakSampledPss": 4762624
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 0,
+        "bodyBytes": 0,
+        "accepted": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 1,
+      "mode": "remote",
+      "phases": {
+        "cli": {
+          "wallMs": 284.23680500000046,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 2,
+            "liveSamples": 2,
+            "peakSampledRss": 6664192,
+            "peakSampledPss": 4659200,
+            "byPhase": {
+              "cold": {
+                "samples": 2,
+                "peakSampledRss": 6664192,
+                "peakSampledPss": 4659200
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 757.7376620000014
+        },
+        "sync": {
+          "wallMs": 702.1162249999998,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 12,
+            "liveSamples": 12,
+            "peakSampledRss": 7938048,
+            "peakSampledPss": 5299200,
+            "byPhase": {
+              "cold": {
+                "samples": 3,
+                "peakSampledRss": 5894144,
+                "peakSampledPss": 3605504
+              },
+              "workload": {
+                "samples": 3,
+                "peakSampledRss": 7929856,
+                "peakSampledPss": 5289984
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 7938048,
+                "peakSampledPss": 5299200
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 6,
+        "bodyBytes": 27666,
+        "accepted": 6,
+        "verifiedOperations": [
+          "native_session",
+          "sync_http"
+        ]
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 2,
+      "mode": "local",
+      "phases": {
+        "cli": {
+          "wallMs": 32.41275999999925,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 1,
+            "liveSamples": 1,
+            "peakSampledRss": 5877760,
+            "peakSampledPss": 4042752,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 5877760,
+                "peakSampledPss": 4042752
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 381.59698299999945
+        },
+        "sync": {
+          "wallMs": 553.9500189999999,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 10,
+            "liveSamples": 10,
+            "peakSampledRss": 7221248,
+            "peakSampledPss": 4766720,
+            "byPhase": {
+              "cold": {
+                "samples": 2,
+                "peakSampledRss": 5881856,
+                "peakSampledPss": 3593216
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 7221248,
+                "peakSampledPss": 4766720
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 7221248,
+                "peakSampledPss": 4766720
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 0,
+        "bodyBytes": 0,
+        "accepted": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 2,
+      "mode": "remote",
+      "phases": {
+        "cli": {
+          "wallMs": 272.4478259999996,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 2,
+            "liveSamples": 1,
+            "peakSampledRss": 4579328,
+            "peakSampledPss": 2752512,
+            "byPhase": {
+              "cold": {
+                "samples": 2,
+                "peakSampledRss": 4579328,
+                "peakSampledPss": 2752512
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 316.2254380000013
+        },
+        "sync": {
+          "wallMs": 556.0076469999985,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 10,
+            "liveSamples": 10,
+            "peakSampledRss": 8081408,
+            "peakSampledPss": 5456896,
+            "byPhase": {
+              "cold": {
+                "samples": 2,
+                "peakSampledRss": 5963776,
+                "peakSampledPss": 3674112
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 8011776,
+                "peakSampledPss": 5387264
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 8081408,
+                "peakSampledPss": 5456896
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 5,
+        "bodyBytes": 27420,
+        "accepted": 5,
+        "verifiedOperations": [
+          "native_session",
+          "sync_http"
+        ]
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 2,
+      "mode": "disabled",
+      "phases": {
+        "cli": {
+          "wallMs": 32.80535500000042,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 1,
+            "liveSamples": 1,
+            "peakSampledRss": 4481024,
+            "peakSampledPss": 2712576,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 4481024,
+                "peakSampledPss": 2712576
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 185.4150410000002
+        },
+        "sync": {
+          "wallMs": 495.7908349999998,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 9,
+            "liveSamples": 9,
+            "peakSampledRss": 7049216,
+            "peakSampledPss": 4594688,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 5832704,
+                "peakSampledPss": 3537920
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 7049216,
+                "peakSampledPss": 4594688
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 7049216,
+                "peakSampledPss": 4594688
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 0,
+        "bodyBytes": 0,
+        "accepted": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 3,
+      "mode": "remote",
+      "phases": {
+        "cli": {
+          "wallMs": 271.9252809999998,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 2,
+            "liveSamples": 1,
+            "peakSampledRss": 5476352,
+            "peakSampledPss": 3670016,
+            "byPhase": {
+              "cold": {
+                "samples": 2,
+                "peakSampledRss": 5476352,
+                "peakSampledPss": 3670016
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 1326.516897999998
+        },
+        "sync": {
+          "wallMs": 640.6419860000024,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 14,
+            "liveSamples": 14,
+            "peakSampledRss": 8060928,
+            "peakSampledPss": 5436416,
+            "byPhase": {
+              "cold": {
+                "samples": 6,
+                "peakSampledRss": 5959680,
+                "peakSampledPss": 3670016
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 8056832,
+                "peakSampledPss": 5432320
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 8060928,
+                "peakSampledPss": 5436416
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 5,
+        "bodyBytes": 27432,
+        "accepted": 5,
+        "verifiedOperations": [
+          "native_session",
+          "sync_http"
+        ]
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 3,
+      "mode": "disabled",
+      "phases": {
+        "cli": {
+          "wallMs": 32.39594699999725,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 1,
+            "liveSamples": 1,
+            "peakSampledRss": 3928064,
+            "peakSampledPss": 2184192,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 3928064,
+                "peakSampledPss": 2184192
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 1514.0740619999997
+        },
+        "sync": {
+          "wallMs": 639.7653949999949,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 14,
+            "liveSamples": 14,
+            "peakSampledRss": 7192576,
+            "peakSampledPss": 4738048,
+            "byPhase": {
+              "cold": {
+                "samples": 6,
+                "peakSampledRss": 5881856,
+                "peakSampledPss": 3592192
+              },
+              "workload": {
+                "samples": 3,
+                "peakSampledRss": 7192576,
+                "peakSampledPss": 4738048
+              },
+              "drain": {
+                "samples": 5,
+                "peakSampledRss": 7192576,
+                "peakSampledPss": 4738048
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 0,
+        "bodyBytes": 0,
+        "accepted": 0
+      },
+      "outcome": "passed"
+    },
+    {
+      "run": 3,
+      "mode": "local",
+      "phases": {
+        "cli": {
+          "wallMs": 33.104341999998724,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 1,
+            "liveSamples": 1,
+            "peakSampledRss": 4042752,
+            "peakSampledPss": 2232320,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 4042752,
+                "peakSampledPss": 2232320
+              }
+            }
+          }
+        },
+        "startup": {
+          "wallMs": 172.72293299999728
+        },
+        "sync": {
+          "wallMs": 523.7422599999991,
+          "logicalBodyBytes": 3932160,
+          "requests": 60,
+          "memory": {
+            "intervalMs": 250,
+            "samples": 9,
+            "liveSamples": 9,
+            "peakSampledRss": 7266304,
+            "peakSampledPss": 4811776,
+            "byPhase": {
+              "cold": {
+                "samples": 1,
+                "peakSampledRss": 5828608,
+                "peakSampledPss": 3538944
+              },
+              "workload": {
+                "samples": 2,
+                "peakSampledRss": 7266304,
+                "peakSampledPss": 4811776
+              },
+              "drain": {
+                "samples": 6,
+                "peakSampledRss": 7266304,
+                "peakSampledPss": 4811776
+              }
+            }
+          }
+        }
+      },
+      "export": {
+        "requests": 0,
+        "bodyBytes": 0,
+        "accepted": 0
+      },
+      "outcome": "passed"
+    }
+  ],
+  "summary": {
+    "disabled": {
+      "trials": 3,
+      "cliMs": 32.50419199999999,
+      "startupMs": 185.4150410000002,
+      "syncMs": 537.7088340000001,
+      "syncPeakPss": 4684800,
+      "exportBodyBytes": 0
+    },
+    "local": {
+      "trials": 3,
+      "cliMs": 33.104341999998724,
+      "startupMs": 172.72293299999728,
+      "syncMs": 523.7422599999991,
+      "syncPeakPss": 4766720,
+      "exportBodyBytes": 0,
+      "changeVsDisabledPercent": {
+        "cliMs": 2.186677858194835,
+        "startupMs": 20.419533031443933,
+        "syncMs": -2.913749228081443,
+        "syncPeakPss": 1.6612021857923498
+      }
+    },
+    "remote": {
+      "trials": 3,
+      "cliMs": 272.4478259999996,
+      "startupMs": 757.7376620000014,
+      "syncMs": 640.6419860000024,
+      "syncPeakPss": 5436416,
+      "exportBodyBytes": 27432,
+      "changeVsDisabledPercent": {
+        "cliMs": 739.3805589323346,
+        "startupMs": 70.5500461529445,
+        "syncMs": 12.14560813735066,
+        "syncPeakPss": 14.739572076939703
+      }
+    }
+  },
+  "elapsedMs": 38954.344758
+}

@@ -1,0 +1,22 @@
+[package]
+name = "scribyra-companion"
+description = "Discontinued (November 8, 2026): kept only for its tests"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+uuid = { version = "1", features = ["v4"] }
+url = "2"
+rmcp = { version = "=3.8.0", default-features = false, features = ["server", "transport-streamable-http-server", "client", "transport-async-rw"] }
+tower-http = { version = "0.7", features = ["cors", "fs"] }
+scribyra-core = { path = "../core" }

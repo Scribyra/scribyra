@@ -1,0 +1,24 @@
+/* The comment parts of the tools page. Cards, buttons and fields are shared in review-workspace.css. */
+.comments-panel { min-width: 0; }
+.comment-threads, .comment-messages, .comment-mentions { list-style: none; padding: 0; margin: 0; }
+.comment-threads { margin: 6px -4px 0; max-height: 200px; overflow: auto; scrollbar-width: thin; }
+.comment-threads > li { padding: 1px 0; }
+.comment-threads > li:has(> .comment-warning) { padding-bottom: 4px; }
+.comment-threads .comment-warning { padding-inline: 6px; }
+.comment-messages { margin-top: 10px; display: grid; gap: 8px; }
+.comment-messages > li { padding-left: 8px; border-left: 2px solid var(--border); }
+.comment-messages strong { font-weight: 600; font-size: 12px; }
+.review-tools .comment-thread-link { display: block; width: 100%; height: auto; margin: 0; padding: 5px 6px; border: 0; background: none; border-radius: 6px; text-align: left; }
+.review-tools .comment-thread-link[aria-current=true] { background: var(--accent-soft); }
+.comment-thread-link span, .comment-thread-link strong { display: block; overflow-wrap: anywhere; }
+.comment-thread-link strong { font-weight: 600; font-size: 12.5px; }
+.comment-thread-link span { font-size: 11.5px; font-weight: 400; margin-top: 1px; color: var(--muted); }
+.comment-detail h3 { margin: 0; }
+.comment-detail blockquote { margin: 6px 0 0; padding-left: 8px; border-left: 2px solid var(--border); color: var(--muted); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; }
+.comment-quote { white-space: pre-wrap; max-height: 4em; overflow: auto; }
+.comment-body { white-space: pre-wrap; }
+.comment-warning { font-weight: 600; color: var(--review-warn-fg); }
+.comment-variant + .comment-variant { border-top: 1px dashed var(--border); }
+.comment-mentions { font-size: 11.5px; color: var(--muted); }
+.comment-highlight { background: #ead89166; border-bottom: 2px solid #8e6b16; }
+.comment-point { border-left: 2px solid #8e6b16; height: 1em; }

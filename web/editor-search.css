@@ -1,0 +1,33 @@
+/* CodeMirror owns search behaviour; these controls share the workspace's surfaces and accent. */
+#code-editor .cm-panels:has(.editor-search){background:var(--subtle);color:var(--text);border-color:var(--border)}
+#code-editor .cm-panel.editor-search{position:relative;padding:9px 10px;display:grid;gap:6px;font:12px/1.4 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--subtle);color:var(--text)}
+#code-editor .editor-search input,#code-editor .editor-search button{margin:0;font:inherit}
+.cm-search-main{display:flex;flex-wrap:wrap;align-items:center;gap:6px;padding-right:32px;min-width:0}
+.cm-search-field{display:flex;flex-wrap:wrap;align-items:center;flex:1 1 140px;min-width:0;border:1px solid var(--border);border-radius:7px;background:var(--surface);overflow:hidden}
+#code-editor .editor-search .cm-search-input{min-width:0;width:0;flex:1 1 140px;height:30px;border:1px solid var(--border);border-radius:7px;padding:5px 8px;background:var(--surface);color:var(--text);box-shadow:none}
+#code-editor .cm-search-field .cm-search-input{border:0;flex-basis:24px;min-width:min(80px,100%)}
+#code-editor .cm-search-field:focus-within{outline:2px solid var(--accent);outline-offset:1px}
+#code-editor .editor-search .cm-search-field .cm-search-input:focus-visible{outline:0}
+.cm-search-status{flex:none;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:2px 8px;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.cm-search-group{display:flex;align-items:center;gap:3px}
+#code-editor .editor-search .cm-search-button{display:inline-flex;align-items:center;justify-content:center;flex:none;min-height:30px;padding:4px 10px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);box-shadow:none;white-space:nowrap}
+#code-editor .editor-search .cm-search-icon,#code-editor .editor-search .cm-search-toggle{width:28px;padding:0;border-color:transparent;background:transparent;color:var(--muted)}
+#code-editor .editor-search .cm-search-button:hover:not(:disabled){background:var(--accent-soft);color:var(--text)}
+#code-editor .editor-search .cm-search-button:focus-visible,#code-editor .editor-search .cm-search-input:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+#code-editor .editor-search .cm-search-button[aria-pressed=true]{color:var(--text);background:var(--accent-soft);border-color:var(--accent);box-shadow:inset 0 -2px var(--accent)}
+#code-editor .editor-search .cm-search-toggle{font-weight:600;font-size:12px}
+.cm-search-icon svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}
+#code-editor .editor-search [name=close]{position:absolute;top:10px;right:10px}
+.cm-search-replacement{display:flex;align-items:center;flex-wrap:wrap;gap:6px;min-width:0}
+.cm-search-readonly{font-size:11px;color:var(--muted)}
+.cm-search-readonly[hidden]{display:none}
+/* Insets keep match boundaries visible without replacing review underlines or comment backgrounds. */
+#code-editor .cm-searchMatch{background:color-mix(in srgb,var(--accent) 18%,transparent);box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 55%,transparent);border-radius:2px}
+#code-editor .cm-searchMatch-selected{background:color-mix(in srgb,var(--accent) 34%,transparent);box-shadow:inset 0 0 0 2px var(--accent)}
+#code-editor .cm-selectionMatch{background:color-mix(in srgb,var(--accent) 12%,transparent)}
+#code-editor .cm-searchMatch .cm-selectionMatch{background:transparent}
+@media(forced-colors:active){
+  #code-editor .cm-searchMatch{outline:1px solid Highlight}
+  #code-editor .cm-searchMatch-selected{outline:2px solid Highlight}
+  #code-editor .editor-search .cm-search-button[aria-pressed=true]{outline:2px solid Highlight}
+}

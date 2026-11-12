@@ -1,0 +1,6 @@
+User-agent: *
+Allow: /
+# The peer field test is a lab tool, not part of the product.
+Disallow: /field-test/
+
+Sitemap: https://scribyra.com/sitemap.xml

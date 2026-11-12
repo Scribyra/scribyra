@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "repository": "git://git.texlive.info/texlive",
+  "commit": "bf6f72cb7d8f9a6c32e01288fbfa3da83560dbab",
+  "blob": "ed1c4257d2dce686198738219cc514c66cb51e46",
+  "snapshot": "texlive-2026-03-02",
+  "input": "vendor/tex/catalog/texlive-master-2026-03-02.tlpdb.xz",
+  "sha256": "81c910b7ffb53ef81eb73c8163a6ff80919d0db44fe7dcced291b67a92ac2456",
+  "rawSha256": "ae33f319ba29c515079f5e8ef0a9b33e08ecb41dcc57c1c65e04d7b906acfb90",
+  "runtimePackages": 4218
+}

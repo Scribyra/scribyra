@@ -1,0 +1,331 @@
+{
+  "method": "One fresh Chromium profile per fixture; JSON.stringify receipts, UTF-8 bytes; S2/S7 start + terminal poll; intermediate 1s polls and discovery separate. No MCP framing, model or token measurement.",
+  "browser": "156.0.8078.79",
+  "identities": [
+    {
+      "fixture": "article",
+      "build": {
+        "version": "0.1.0",
+        "revision": "fc4fa02082f8aa98f51d87c246759be103da3a97",
+        "dirty": true,
+        "compilerAdapterSha256": "449c744f5a94db8fad8c34cc79e97915a042a6a47115f8e2c1d8732998c6e55f"
+      }
+    },
+    {
+      "fixture": "missing-package",
+      "build": {
+        "version": "0.1.0",
+        "revision": "fc4fa02082f8aa98f51d87c246759be103da3a97",
+        "dirty": true,
+        "compilerAdapterSha256": "449c744f5a94db8fad8c34cc79e97915a042a6a47115f8e2c1d8732998c6e55f"
+      }
+    },
+    {
+      "fixture": "thesis",
+      "build": {
+        "version": "0.1.0",
+        "revision": "fc4fa02082f8aa98f51d87c246759be103da3a97",
+        "dirty": true,
+        "compilerAdapterSha256": "449c744f5a94db8fad8c34cc79e97915a042a6a47115f8e2c1d8732998c6e55f"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "fixture": "article",
+      "step": "S1",
+      "bytes": 409,
+      "characters": 409,
+      "maxReceiptBytes": 409,
+      "maxReceiptCharacters": 409,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "describe",
+      "bytes": 3873,
+      "characters": 3873,
+      "maxReceiptBytes": 3873,
+      "maxReceiptCharacters": 3873,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S2",
+      "bytes": 845,
+      "characters": 845,
+      "maxReceiptBytes": 423,
+      "maxReceiptCharacters": 423,
+      "calls": 2,
+      "success": true,
+      "pages": 1,
+      "warnings": 3,
+      "intermediatePolls": 12,
+      "intermediatePollBytes": 5076
+    },
+    {
+      "fixture": "article",
+      "step": "S3",
+      "bytes": 422,
+      "characters": 422,
+      "maxReceiptBytes": 422,
+      "maxReceiptCharacters": 422,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S4",
+      "bytes": 818,
+      "characters": 818,
+      "maxReceiptBytes": 818,
+      "maxReceiptCharacters": 818,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S5",
+      "bytes": 844,
+      "characters": 844,
+      "maxReceiptBytes": 844,
+      "maxReceiptCharacters": 844,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S6",
+      "bytes": 320,
+      "characters": 320,
+      "maxReceiptBytes": 320,
+      "maxReceiptCharacters": 320,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S7",
+      "bytes": 845,
+      "characters": 845,
+      "maxReceiptBytes": 423,
+      "maxReceiptCharacters": 423,
+      "calls": 2,
+      "success": true,
+      "pages": 1,
+      "warnings": 3,
+      "intermediatePolls": 4,
+      "intermediatePollBytes": 1692
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S1",
+      "bytes": 417,
+      "characters": 417,
+      "maxReceiptBytes": 417,
+      "maxReceiptCharacters": 417,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "describe",
+      "bytes": 3873,
+      "characters": 3873,
+      "maxReceiptBytes": 3873,
+      "maxReceiptCharacters": 3873,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S2",
+      "bytes": 843,
+      "characters": 843,
+      "maxReceiptBytes": 423,
+      "maxReceiptCharacters": 423,
+      "calls": 2,
+      "success": false,
+      "pages": 0,
+      "warnings": 0,
+      "intermediatePolls": 8,
+      "intermediatePollBytes": 3384
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S3",
+      "bytes": 420,
+      "characters": 420,
+      "maxReceiptBytes": 420,
+      "maxReceiptCharacters": 420,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S4",
+      "bytes": 486,
+      "characters": 486,
+      "maxReceiptBytes": 486,
+      "maxReceiptCharacters": 486,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S5",
+      "bytes": 551,
+      "characters": 551,
+      "maxReceiptBytes": 551,
+      "maxReceiptCharacters": 551,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S6",
+      "bytes": 320,
+      "characters": 320,
+      "maxReceiptBytes": 320,
+      "maxReceiptCharacters": 320,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S7",
+      "bytes": 845,
+      "characters": 845,
+      "maxReceiptBytes": 423,
+      "maxReceiptCharacters": 423,
+      "calls": 2,
+      "success": true,
+      "pages": 1,
+      "warnings": 0,
+      "intermediatePolls": 3,
+      "intermediatePollBytes": 1269
+    },
+    {
+      "fixture": "thesis",
+      "step": "S1",
+      "bytes": 408,
+      "characters": 408,
+      "maxReceiptBytes": 408,
+      "maxReceiptCharacters": 408,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "describe",
+      "bytes": 3873,
+      "characters": 3873,
+      "maxReceiptBytes": 3873,
+      "maxReceiptCharacters": 3873,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S2",
+      "bytes": 847,
+      "characters": 847,
+      "maxReceiptBytes": 424,
+      "maxReceiptCharacters": 424,
+      "calls": 2,
+      "success": true,
+      "pages": 100,
+      "warnings": 0,
+      "intermediatePolls": 14,
+      "intermediatePollBytes": 5922
+    },
+    {
+      "fixture": "thesis",
+      "step": "S3",
+      "bytes": 424,
+      "characters": 424,
+      "maxReceiptBytes": 424,
+      "maxReceiptCharacters": 424,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S4",
+      "bytes": 358,
+      "characters": 358,
+      "maxReceiptBytes": 358,
+      "maxReceiptCharacters": 358,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "tree-discovery",
+      "bytes": 6503,
+      "characters": 6503,
+      "maxReceiptBytes": 6503,
+      "maxReceiptCharacters": 6503,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "tree-discovery",
+      "bytes": 6539,
+      "characters": 6539,
+      "maxReceiptBytes": 6539,
+      "maxReceiptCharacters": 6539,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S5",
+      "bytes": 1111,
+      "characters": 1111,
+      "maxReceiptBytes": 1111,
+      "maxReceiptCharacters": 1111,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S6",
+      "bytes": 320,
+      "characters": 320,
+      "maxReceiptBytes": 320,
+      "maxReceiptCharacters": 320,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S7",
+      "bytes": 843,
+      "characters": 843,
+      "maxReceiptBytes": 423,
+      "maxReceiptCharacters": 423,
+      "calls": 2,
+      "success": false,
+      "pages": 0,
+      "warnings": 0,
+      "intermediatePolls": 2,
+      "intermediatePollBytes": 846
+    }
+  ],
+  "totals": [
+    {
+      "fixture": "article",
+      "bytes": 4503,
+      "maxReceiptBytes": 844,
+      "calls": 9,
+      "intermediatePolls": 16,
+      "intermediatePollBytes": 6768,
+      "previousScopedUiBytes": 3725,
+      "previousOption2RawMedianBytes": 2807
+    },
+    {
+      "fixture": "missing-package",
+      "bytes": 3882,
+      "maxReceiptBytes": 551,
+      "calls": 9,
+      "intermediatePolls": 11,
+      "intermediatePollBytes": 4653,
+      "previousScopedUiBytes": 1826,
+      "previousOption2RawMedianBytes": 2687
+    },
+    {
+      "fixture": "thesis",
+      "bytes": 4311,
+      "maxReceiptBytes": 1111,
+      "calls": 9,
+      "intermediatePolls": 16,
+      "intermediatePollBytes": 6768,
+      "previousScopedUiBytes": 5203,
+      "previousOption2RawMedianBytes": 2737
+    }
+  ]
+}

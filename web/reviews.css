@@ -1,0 +1,8 @@
+/* Reviews section of the tools page. The shared card look lives in review-workspace.css. */
+.reviews-panel del, .reviews-panel ins { display: block; margin-top: 6px; padding: 4px 8px; border-radius: 6px; text-decoration: none; }
+.reviews-panel del { color: var(--muted); background: var(--subtle); }
+.reviews-panel del pre { text-decoration: line-through; text-decoration-thickness: 1px; }
+.reviews-panel ins { color: var(--text); background: var(--accent-soft); }
+.reviews-panel pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 12rem; overflow: auto; font: inherit; font-size: 12px; }
+.reviews-panel del:has(pre:empty), .reviews-panel ins:has(pre:empty) { display: none; }
+.reviews-panel a { color: var(--accent); font-size: 12px; align-self: center; }

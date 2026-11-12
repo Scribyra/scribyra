@@ -1,0 +1,545 @@
+{
+  "uid": "scribyra-operations",
+  "title": "Scribyra operations",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "tags": [
+    "scribyra",
+    "private",
+    "telemetry"
+  ],
+  "timezone": "browser",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 20,
+      "title": "Recent activity",
+      "type": "stat",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "scribyra-loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service_name=\"scribyra\"} | scribyra_source=~\"${source:regex}\" [15m]))",
+          "instant": true,
+          "range": false,
+          "queryType": "instant"
+        }
+      ],
+      "description": "Count of received safe log records in the window, including the first sparse observation. Source selection is explicit.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 21,
+      "title": "Observed failures",
+      "type": "stat",
+      "gridPos": {
+        "x": 6,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "scribyra-loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(count_over_time({service_name=\"scribyra\"} | scribyra_source=~\"${source:regex}\" | scribyra_outcome=\"failure\" [15m]))",
+          "instant": true,
+          "range": false,
+          "queryType": "instant"
+        }
+      ],
+      "description": "Count of received safe log records in the window, including the first sparse observation. Source selection is explicit.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No failure observations"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 22,
+      "title": "Compile p95",
+      "type": "stat",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(scribyra_operation_duration_milliseconds_bucket{scribyra_source=~\"${source:regex}\",scribyra_operation=\"compile\"}[30m])))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Received diagnostics only. Counters reflect sampling and best-effort delivery; blank data is not evidence of success. Activity/failures use 15-minute windows; compile p95 uses 30 minutes.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "noValue": "Not enough samples"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 23,
+      "title": "Time since last activity",
+      "type": "stat",
+      "gridPos": {
+        "x": 18,
+        "y": 0,
+        "w": 6,
+        "h": 4
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "time() - max(timestamp(scribyra_operation_total{scribyra_source=~\"${source:regex}\"}))",
+          "instant": true,
+          "range": false
+        }
+      ],
+      "description": "Received diagnostics only. Counters reflect sampling and best-effort delivery; blank data is not evidence of success. Activity/failures use 15-minute windows; compile p95 uses 30 minutes.",
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "noValue": "None in the last 5m"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "textMode": "auto",
+        "colorMode": "value",
+        "graphMode": "none"
+      }
+    },
+    {
+      "id": 24,
+      "title": "Reading this view",
+      "type": "text",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 24,
+        "h": 3
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Start with recent activity and failures, then use the operation charts and approved events below to investigate. Expand an event to find its trace ID and follow the worker spans. **No observations** can mean collection is off, clients are idle, or delivery is unavailable; open **Collection health** to distinguish these. Counts describe received, possibly sampled diagnostics\u2014not all app usage. Paper contents, filenames and raw compiler logs are excluded. During setup, activity can come from controlled browser verification on synthetic papers. It is not a count of real users. Source defaults to application; select local_test, ci or synthetic to inspect controlled activity. Older unlabeled batches are omitted by explicit source selections."
+      }
+    },
+    {
+      "id": 1,
+      "title": "Received operations",
+      "type": "timeseries",
+      "description": "Received sampled observations, not a census. No data is expected when optional export is disabled.",
+      "gridPos": {
+        "x": 0,
+        "y": 7,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_runtime, scribyra_operation, scribyra_outcome) (increase(scribyra_operation_total{scribyra_source=~\"${source:regex}\"}[5m]))",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Failures by operation",
+      "type": "timeseries",
+      "description": "Count of received safe log records in the window, including the first sparse observation. Source selection is explicit.",
+      "gridPos": {
+        "x": 12,
+        "y": 7,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "scribyra-loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_runtime, scribyra_operation)(count_over_time({service_name=\"scribyra\"} | scribyra_source=~\"${source:regex}\" | scribyra_outcome=\"failure\" [10m]))",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true,
+          "queryType": "range"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Compile p95 duration",
+      "type": "timeseries",
+      "description": "Observed completion durations. Sparse or sampled traffic can yield no data; this is not wall-clock UI responsiveness.",
+      "gridPos": {
+        "x": 0,
+        "y": 15,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, scribyra_runtime) (rate(scribyra_operation_duration_milliseconds_bucket{scribyra_source=~\"${source:regex}\",scribyra_operation=\"compile\"}[30m])))",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Remote exporter drops and sampling",
+      "type": "timeseries",
+      "description": "Loss and intentional trace sampling are distinct series. Unsaved counters disappear with the process/tab.",
+      "gridPos": {
+        "x": 12,
+        "y": 15,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_runtime) (increase(scribyra_export_dropped_total{scribyra_source=~\"${source:regex}\"}[10m]))",
+          "legendFormat": "dropped {{scribyra_runtime}}",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (scribyra_runtime) (increase(scribyra_export_sampled_total{scribyra_source=~\"${source:regex}\"}[10m]))",
+          "legendFormat": "sampled {{scribyra_runtime}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 5,
+      "title": "Approved worker/transfer bytes",
+      "type": "timeseries",
+      "description": "Existing transport observations; cache/resource timing availability differs by browser. Not exact network billing.",
+      "gridPos": {
+        "x": 0,
+        "y": 23,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_operation) (increase(scribyra_observed_bytes_sum{scribyra_source=~\"${source:regex}\"}[10m]))",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 6,
+      "title": "Observed memory samples",
+      "type": "timeseries",
+      "description": "Only measured runtime categories; browser memory support is incomplete and this is not a total-process RSS census.",
+      "gridPos": {
+        "x": 12,
+        "y": 23,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le, scribyra_runtime) (rate(scribyra_observed_memory_bytes_bucket{scribyra_source=~\"${source:regex}\"}[30m])))",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Approved events and trace links",
+      "type": "logs",
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "scribyra-loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"scribyra\"} | scribyra_source=~\"${source:regex}\"",
+          "queryType": "range",
+          "maxLines": 200
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      }
+    },
+    {
+      "id": 8,
+      "title": "Recent application traces",
+      "type": "table",
+      "gridPos": {
+        "x": 0,
+        "y": 41,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "scribyra-tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"scribyra\" && span.scribyra.source =~ \"${source:regex}\" }",
+          "limit": 20
+        }
+      ],
+      "options": {
+        "showHeader": true
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "custom",
+        "query": "application,local_test,ci,synthetic",
+        "current": {
+          "text": "application",
+          "value": "application"
+        },
+        "options": [
+          {
+            "text": "application",
+            "value": "application",
+            "selected": true
+          },
+          {
+            "text": "local_test",
+            "value": "local_test",
+            "selected": false
+          },
+          {
+            "text": "ci",
+            "value": "ci",
+            "selected": false
+          },
+          {
+            "text": "synthetic",
+            "value": "synthetic",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "hide": 0
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Collection health",
+      "url": "/d/scribyra-delivery",
+      "type": "link",
+      "includeVars": false,
+      "keepTime": true
+    },
+    {
+      "title": "Test runs",
+      "url": "/d/scribyra-test-runs",
+      "type": "link",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ]
+}

@@ -1,0 +1,411 @@
+{
+  "version": 1,
+  "profiles": {
+    "selfHosted": {
+      "proof": {
+        "version": 1,
+        "projectId": 88410471,
+        "pipelineId": 3028249673,
+        "jobId": 17744591691,
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "jobStatus": "success",
+        "artifactsExpireAt": "2026-11-05T17:22:23.375Z",
+        "keepLatestArtifact": false,
+        "anonymousArtifactStatus": 404,
+        "verifiedVia": "authenticated-gitlab-job-and-artifacts",
+        "runs": [
+          {
+            "runId": "384c867dff0a4f29aa92ddeee44fa61b",
+            "suite": "build",
+            "outcome": "success",
+            "digest": "ea968d17a31e465f5c8c8f31f22ff5b4ffd537945f8457ff83af65db52422525",
+            "ingestedSince": 1793826615.799,
+            "observedAt": 1793826615.815
+          },
+          {
+            "runId": "0a3e1f8f44e446d0ac6a16352607b1ac",
+            "suite": "rust",
+            "outcome": "success",
+            "counts": {
+              "total": 131,
+              "passed": 129,
+              "failed": 0,
+              "skipped": 2,
+              "cancelled": 0,
+              "todo": 0,
+              "flaky": 0
+            },
+            "digest": "cef94467aa45165e3fbc57d78c981eb1cfc044c0d6188f977034f8532a36eebd",
+            "ingestedSince": 1793826624.111,
+            "observedAt": 1793826624.121
+          },
+          {
+            "runId": "b0f0ab2e991547baa4029cf4b41b1a2f",
+            "suite": "javascript",
+            "outcome": "success",
+            "counts": {
+              "total": 198,
+              "passed": 194,
+              "failed": 0,
+              "skipped": 4,
+              "cancelled": 0,
+              "todo": 0,
+              "flaky": 0
+            },
+            "digest": "8ab0342f63972a5879ebf03aafaff4c314d4acb0f8f8505995da70b2feeac493",
+            "ingestedSince": 1793826624.378,
+            "observedAt": 1793826624.384
+          },
+          {
+            "runId": "9a11736c3e374d27b78890a4b8ad296f",
+            "suite": "browser",
+            "outcome": "success",
+            "counts": {
+              "total": 2,
+              "passed": 2,
+              "failed": 0,
+              "skipped": 0,
+              "cancelled": 0,
+              "todo": 0,
+              "flaky": 0
+            },
+            "digest": "ec002ec34b85963f5699c0326e27a5e67bc939214babcf80be65121545483087",
+            "ingestedSince": 1793826624.526,
+            "observedAt": 1793826624.535
+          }
+        ],
+        "readbackVerifiedAt": "2026-11-04T21:14:49.528Z",
+        "checks": [
+          "authenticated-job-artifact-provenance",
+          "anonymous-artifacts-denied",
+          "actual-expiry-metadata",
+          "rust-schema",
+          "fresh-ci-metrics",
+          "case-counts",
+          "exact-safe-logs",
+          "correlated-ci-trace",
+          "original-ci-execution-time",
+          "actual-ci-dashboard-log-query",
+          "credentials-excluded"
+        ]
+      },
+      "records": [
+        {
+          "version": 1,
+          "runId": "384c867dff0a4f29aa92ddeee44fa61b",
+          "source": "ci",
+          "suite": "build",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793812549258,
+          "durationMs": 232559.634997,
+          "outcome": "success",
+          "exitCode": 0,
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3028249673,
+            "jobId": 17744591691
+          }
+        },
+        {
+          "version": 1,
+          "runId": "0a3e1f8f44e446d0ac6a16352607b1ac",
+          "source": "ci",
+          "suite": "rust",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793812781999,
+          "durationMs": 38672.736508000016,
+          "outcome": "success",
+          "exitCode": 0,
+          "counts": {
+            "total": 131,
+            "passed": 129,
+            "failed": 0,
+            "skipped": 2,
+            "cancelled": 0,
+            "todo": 0,
+            "flaky": 0
+          },
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3028249673,
+            "jobId": 17744591691
+          }
+        },
+        {
+          "version": 1,
+          "runId": "b0f0ab2e991547baa4029cf4b41b1a2f",
+          "source": "ci",
+          "suite": "javascript",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793812820793,
+          "durationMs": 24388.100947,
+          "outcome": "success",
+          "exitCode": 0,
+          "counts": {
+            "total": 198,
+            "passed": 194,
+            "failed": 0,
+            "skipped": 4,
+            "cancelled": 0,
+            "todo": 0,
+            "flaky": 0
+          },
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3028249673,
+            "jobId": 17744591691
+          }
+        },
+        {
+          "version": 1,
+          "runId": "9a11736c3e374d27b78890a4b8ad296f",
+          "source": "ci",
+          "suite": "browser",
+          "browser": "chromium",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793812856632,
+          "durationMs": 26660.935171000063,
+          "outcome": "success",
+          "exitCode": 0,
+          "counts": {
+            "total": 2,
+            "passed": 2,
+            "failed": 0,
+            "skipped": 0,
+            "cancelled": 0,
+            "todo": 0,
+            "flaky": 0
+          },
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3028249673,
+            "jobId": 17744591691
+          }
+        }
+      ]
+    },
+    "cloud": {
+      "proof": {
+        "version": 1,
+        "projectId": 88410471,
+        "pipelineId": 3029032282,
+        "jobId": 17750895914,
+        "revision": "32086ec22c1dedb608444ab38564f2c206ab5b59",
+        "jobStatus": "success",
+        "artifactsExpireAt": "2026-11-05T21:01:16.549Z",
+        "keepLatestArtifact": false,
+        "anonymousArtifactStatus": 404,
+        "verifiedVia": "authenticated-gitlab-job-and-artifacts",
+        "runs": [
+          {
+            "runId": "5c84820402a44f17a2df611ea7e5cf4f",
+            "suite": "build",
+            "outcome": "success",
+            "digest": "7ce3b125d983d513d7d394e91bc424552cb92ec71912d61472b3a30069f90602",
+            "ingestedSince": 1793826666.115,
+            "observedAt": 1793826667.209
+          },
+          {
+            "runId": "9e16536857ab40aea75fb044c79c86b3",
+            "suite": "rust",
+            "outcome": "success",
+            "counts": {
+              "total": 131,
+              "passed": 129,
+              "failed": 0,
+              "skipped": 2,
+              "cancelled": 0,
+              "todo": 0,
+              "flaky": 0
+            },
+            "digest": "73b9f1e5aa406b254669c8fa8f37ba1465c3ddc49c56e29e9208c8ba62cb231a",
+            "ingestedSince": 1793826667.733,
+            "observedAt": 1793826668.329
+          },
+          {
+            "runId": "ecb2898392df4ad78ebe456c57ca311c",
+            "suite": "javascript",
+            "outcome": "success",
+            "counts": {
+              "total": 198,
+              "passed": 194,
+              "failed": 0,
+              "skipped": 4,
+              "cancelled": 0,
+              "todo": 0,
+              "flaky": 0
+            },
+            "digest": "464d420cea711a0cccd1a64f3245ff2ca81263d82349f24ed624a82bc582c755",
+            "ingestedSince": 1793826668.817,
+            "observedAt": 1793826669.408
+          },
+          {
+            "runId": "7b23770fe2084423a5e5987067a6fd8e",
+            "suite": "browser",
+            "outcome": "success",
+            "counts": {
+              "total": 2,
+              "passed": 2,
+              "failed": 0,
+              "skipped": 0,
+              "cancelled": 0,
+              "todo": 0,
+              "flaky": 0
+            },
+            "digest": "5543fc718f201599d22f0ec7320e1259b5ddb85d3b5a46e1323581171ae4fe1c",
+            "ingestedSince": 1793826669.841,
+            "observedAt": 1793826670.434
+          }
+        ],
+        "readbackVerifiedAt": "2026-11-04T21:15:15.019Z",
+        "checks": [
+          "authenticated-job-artifact-provenance",
+          "anonymous-artifacts-denied",
+          "actual-expiry-metadata",
+          "rust-schema",
+          "fresh-ci-metrics",
+          "case-counts",
+          "exact-safe-logs",
+          "correlated-ci-trace",
+          "original-ci-execution-time",
+          "actual-ci-dashboard-log-query",
+          "credentials-excluded"
+        ]
+      },
+      "records": [
+        {
+          "version": 1,
+          "runId": "5c84820402a44f17a2df611ea7e5cf4f",
+          "source": "ci",
+          "suite": "build",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "32086ec22c1dedb608444ab38564f2c206ab5b59",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793825655252,
+          "durationMs": 244112.67442099997,
+          "outcome": "success",
+          "exitCode": 0,
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3029032282,
+            "jobId": 17750895914
+          }
+        },
+        {
+          "version": 1,
+          "runId": "9e16536857ab40aea75fb044c79c86b3",
+          "source": "ci",
+          "suite": "rust",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "32086ec22c1dedb608444ab38564f2c206ab5b59",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793825899536,
+          "durationMs": 40416.320187,
+          "outcome": "success",
+          "exitCode": 0,
+          "counts": {
+            "total": 131,
+            "passed": 129,
+            "failed": 0,
+            "skipped": 2,
+            "cancelled": 0,
+            "todo": 0,
+            "flaky": 0
+          },
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3029032282,
+            "jobId": 17750895914
+          }
+        },
+        {
+          "version": 1,
+          "runId": "ecb2898392df4ad78ebe456c57ca311c",
+          "source": "ci",
+          "suite": "javascript",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "32086ec22c1dedb608444ab38564f2c206ab5b59",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793825940079,
+          "durationMs": 24936.422487000014,
+          "outcome": "success",
+          "exitCode": 0,
+          "counts": {
+            "total": 198,
+            "passed": 194,
+            "failed": 0,
+            "skipped": 4,
+            "cancelled": 0,
+            "todo": 0,
+            "flaky": 0
+          },
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3029032282,
+            "jobId": 17750895914
+          }
+        },
+        {
+          "version": 1,
+          "runId": "7b23770fe2084423a5e5987067a6fd8e",
+          "source": "ci",
+          "suite": "browser",
+          "browser": "chromium",
+          "identity": {
+            "version": "0.1.0",
+            "revision": "32086ec22c1dedb608444ab38564f2c206ab5b59",
+            "dirty": false,
+            "compilerAdapterSha256": null
+          },
+          "startedUnixMs": 1793825977067,
+          "durationMs": 27973.48822799995,
+          "outcome": "success",
+          "exitCode": 0,
+          "counts": {
+            "total": 2,
+            "passed": 2,
+            "failed": 0,
+            "skipped": 0,
+            "cancelled": 0,
+            "todo": 0,
+            "flaky": 0
+          },
+          "ci": {
+            "projectId": 88410471,
+            "pipelineId": 3029032282,
+            "jobId": 17750895914
+          }
+        }
+      ]
+    }
+  }
+}

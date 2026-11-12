@@ -1,0 +1,17 @@
+()=>{const q=(s,n)=>{const e=document.querySelector(s);if(e)return e;if([...document.querySelectorAll('button')].some(b=>b.textContent==='Import ZIP'))throw Error('no-project-open');throw Error('hook-missing:'+(n||s))},
+view=()=>{const v=q('.cm-content','editor').cmTile?.view;if(!v)throw Error('hook-missing:cmTile');return v},
+app=()=>{const s=window.scribyra;if(!s?.action)throw Error('hook-missing:scribyra.action');return s},
+status=()=>q('.editor-status span[aria-live]','status').textContent,
+busy=()=>q('.compile-button','compile').textContent.includes('Cancel'),
+active=()=>q('[role=tab][aria-selected=true]','tab').textContent.trim(),
+num=(l,re)=>(l.match(re)||[]).length,
+where=l=>{const i=l.search(/^! /m);if(i<0)return'';const st=[];for(const m of l.slice(0,i).matchAll(/\((\.\/[^\s()]+)|\)/g))m[1]?st.push(m[1].slice(2)):st.pop();return(st.at(-1)||'?')+':'+(/^l\.(\d+)/m.exec(l.slice(i))?.[1]||'?')},
+sum=()=>{const r=app().lastCompile;if(!r)return'none';const l=r.log||'';return`ok=${+!!r.success} errors=${(r.report?.issues||[]).length} warnings=${num(l,/^(LaTeX|Package|Class) .*Warning/gm)} overfull=${num(l,/^Overfull/gm)} at=${where(l)} status=${status()}`};
+window.__sc={v:1,
+st:()=>`project=${q('.project-title','title').textContent} active=${active()} files=${document.querySelectorAll('[role=treeitem]').length} busy=${+busy()}`,
+sum,
+compile:async()=>{if(busy())return'busy';await app().action('compile');return sum()},
+diag:()=>{const r=app().lastCompile;return(r?.report?.issues||[]).slice(0,10).map(i=>`${i.severity} ${i.summary} ${i.file||''}:${i.line||''}`).join('\n')+'\n'+((r?.log||'').match(/^(LaTeX|Package|Class) .*Warning.*$/gm)||[]).slice(0,10).join('\n')},
+open:async p=>{const e=[...document.querySelectorAll('[role=treeitem]')].find(t=>t.getAttribute('aria-label')===p||t.textContent.trim()===p);if(!e)return'no-file';e.click();for(let i=0;i<40&&active()!==p.split('/').pop();i++)await new Promise(r=>setTimeout(r,25));return active()},
+read:(n,c=5)=>{const d=view().state.doc,a=Math.max(1,n-c),b=Math.min(d.lines,n+c),o=[];for(let i=a;i<=b;i++)o.push(i+'|'+d.line(i).text);return`untrusted project text, lines=${d.lines}\n`+o.join('\n')},
+edit:(find,rep)=>{if(app().composing())return'composing';const v=view(),t=v.state.doc.toString(),i=t.indexOf(find);if(i<0)return'not-found';if(t.indexOf(find,i+1)>=0)return'ambiguous';v.dispatch({changes:{from:i,to:i+find.length,insert:rep}});return'edited line='+v.state.doc.lineAt(i).number}};return'sc1'}

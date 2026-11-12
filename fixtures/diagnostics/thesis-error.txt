@@ -1,0 +1,342 @@
+Undefined control sequence.
+
+$ luahblatex -synctex=1 --no-shell-escape --interaction=nonstopmode --halt-on-error --fmt /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt --nosocket main.tex -kpathsea-debug 32
+EXITCODE: 1
+
+TEXMFLOG:
+1793891476 /texlive/texmf-dist/ls-R
+1793891476 /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt
+1793891477 /texlive/texmf-dist/tex/latex/tex-ini-files/lualatexquotejobname.lua
+1793891477 /texlive/texmf-dist/tex/latex/base/ltluatex.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-main.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-init.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lualibs/lualibs.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic-merged.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lualibs/lualibs-compat.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended-merged.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-log.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-basics-gen.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-parsers.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-configuration.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-status.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-fallback.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-multiscript.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-scripts.lua
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/ScriptExtensions.txt
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/Scripts.txt
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-loaders.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-database.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-unicode.lua
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/WordBreakProperty.txt
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/SpecialCasing.txt
+1793891477 /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-case.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-parse.lua
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/CaseFolding.txt
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-realpath.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-colors.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-resolvers.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-features.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-normalize.lua
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-arabic.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-define.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-cff2.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-t2-writer.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-ttf.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-plug.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-letterspace.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-embolden.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-notdef.lua
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+1793891477 /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-suppress.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-szss.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-auxiliary.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-tounicode.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-case.lua
+1793891477 /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-bcp47.lua
+1793891477 /texlive/texmf-dist/tex/latex/l3kernel/expl3.lua
+1793891477 /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-stage-tables.lua
+1793891477 /texlive/texmf-dist/tex/latex/base/article.cls
+1793891477 /texlive/texmf-dist/tex/latex/base/article.cls
+1793891477 /texlive/texmf-dist/tex/latex/base/article.cls
+1793891477 /texlive/texmf-dist/tex/latex/base/size10.clo
+1793891477 /texlive/texmf-dist/tex/latex/base/size10.clo
+1793891477 /texlive/texmf-dist/tex/latex/base/size10.clo
+1793891477 /texlive/texmf-dist/tex/latex/base/size10.clo
+1793891477 /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+1793891477 /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+1793891477 /texlive/texmf-dist/tex/latex/geometry/geometry.sty
+1793891477 /texlive/texmf-dist/tex/latex/geometry/geometry.sty
+1793891477 /texlive/texmf-dist/tex/latex/geometry/geometry.sty
+1793891477 /texlive/texmf-dist/tex/latex/graphics/keyval.sty
+1793891477 /texlive/texmf-dist/tex/latex/graphics/keyval.sty
+1793891477 /texlive/texmf-dist/tex/latex/graphics/keyval.sty
+1793891477 /texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+1793891477 /texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+1793891477 /texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+1793891477 /texlive/texmf-dist/tex/generic/iftex/iftex.sty
+1793891477 /texlive/texmf-dist/tex/generic/iftex/iftex.sty
+1793891477 /texlive/texmf-dist/tex/generic/iftex/iftex.sty
+1793891477 /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+1793891477 /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+1793891477 /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+1793891477 /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.lua
+1793891477 /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+1793891477 /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+1793891477 /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+1793891477 /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+1793891477 /texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map
+==
+MISSFONTLOG:
+
+==
+LOG:
+This is LuaHBTeX, Version 1.24.0 (TeX Live 2026_texlyre_busytexwasm)  (format=luahblatex 2026.8.14)  5 NOV 2026 17:11
+**main.tex -kpathsea-debug 32
+(./main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+Lua module: luaotfload 2024-12-03 v3.29 Lua based OpenType font support
+Lua module: lualibs 2023-07-13 v2.76 ConTeXt Lua standard libraries.
+Lua module: lualibs-extended 2023-07-13 v2.76 ConTeXt Lua libraries -- extended 
+collection.
+luaotfload | conf : Root cache directory is "/tmp/luatex-cache/generic/names".
+luaotfload | init : Loading fontloader "fontloader-2023-12-28.lua" from kpse-res
+olved path "/texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua"
+.
+Lua-only attribute luaotfload@noligature = 1
+luaotfload | init : Context OpenType loader version 3.134
+Inserting `luaotfload.node_processor' in `pre_linebreak_filter'.
+Inserting `luaotfload.node_processor' in `hpack_filter'.
+Inserting `luaotfload.glyph_stream' in `glyph_stream_provider'.
+Inserting `luaotfload.define_font' in `define_font'.
+Lua-only attribute luaotfload_color_attribute = 2
+luaotfload | conf : Root cache directory is "/tmp/luatex-cache/generic/names".
+Inserting `luaotfload.harf.strip_prefix' in `find_opentype_file'.
+Inserting `luaotfload.harf.strip_prefix' in `find_truetype_file'.
+Removing  `luaotfload.glyph_stream' from `glyph_stream_provider'.
+Inserting `luaotfload.harf.glyphstream' in `glyph_stream_provider'.
+Inserting `luaotfload.harf.finalize_vlist' in `post_linebreak_filter'.
+Inserting `luaotfload.harf.finalize_hlist' in `hpack_filter'.
+Inserting `luaotfload.cleanup_files' in `wrapup_run'.
+Inserting `luaotfload.harf.finalize_unicode' in `finish_pdffile'.
+Inserting `luaotfload.glyphinfo' in `glyph_info'.
+Lua-only attribute luaotfload.letterspace_done = 3
+Inserting `luaotfload.aux.set_sscale_dimens' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.set_font_index' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.patch_cambria_domh' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.fixup_fontdata' in `luaotfload.patch_font_unsafe'.
+Inserting `luaotfload.aux.set_capheight' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.set_xheight' in `luaotfload.patch_font'.
+Inserting `luaotfload.rewrite_fontname' in `luaotfload.patch_font'.
+Inserting `tracingstacklevels' in `input_level_string'. (/texlive/texmf-dist/te
+x/latex/base/article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(/texlive/texmf-dist/tex/latex/base/size10.clo
+File: size10.clo 2025/01/22 v1.4n Standard LaTeX file (size option)
+luaotfload | db : Font names database loaded from /tmp/luatex-cache/generic/name
+s/luaotfload-names.luc.gz)
+\c@part=\count273
+\c@section=\count274
+\c@subsection=\count275
+\c@subsubsection=\count276
+\c@paragraph=\count277
+\c@subparagraph=\count278
+\c@figure=\count279
+\c@table=\count280
+\abovecaptionskip=\skip49
+\belowcaptionskip=\skip50
+\bibindent=\dimen147
+)
+(/texlive/texmf-dist/tex/latex/geometry/geometry.sty
+Package: geometry 2020/01/02 v5.9 Page Geometry
+
+(/texlive/texmf-dist/tex/latex/graphics/keyval.sty
+Package: keyval 2022/05/29 v1.15 key=value parser (DPC)
+\KV@toks@=\toks17
+)
+(/texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+Package: ifvtex 2019/10/25 v1.7 ifvtex legacy package. Use iftex instead.
+
+(/texlive/texmf-dist/tex/generic/iftex/iftex.sty
+Package: iftex 2024/12/12 v1.0g TeX engine tests
+))
+\Gm@cnth=\count281
+\Gm@cntv=\count282
+\c@Gm@tempcnt=\count283
+\Gm@bindingoffset=\dimen148
+\Gm@wd@mp=\dimen149
+\Gm@odd@mp=\dimen150
+\Gm@even@mp=\dimen151
+\Gm@layoutwidth=\dimen152
+\Gm@layoutheight=\dimen153
+\Gm@layouthoffset=\dimen154
+\Gm@layoutvoffset=\dimen155
+\Gm@dimlist=\toks18
+)
+(/texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+File: l3backend-luatex.def 2025-10-09 L3 backend support: PDF output (LuaTeX)
+\l__color_backend_stack_int=\count284
+Inserting `l3color' in `luaotfload.parse_color'.)
+No file main.aux.
+
+\openout1 = main.aux
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 3.
+LaTeX Font Info:    ... okay on input line 3.
+*geometry* driver: auto-detecting
+*geometry* detected driver: luatex
+*geometry* verbose mode - [ preamble ] result:
+* driver: luatex
+* paper: <default>
+* layout: <same size as paper>
+* layoutoffset:(h,v)=(0.0pt,0.0pt)
+* modes: 
+* h-part:(L,W,R)=(72.26999pt, 469.75502pt, 72.26999pt)
+* v-part:(T,H,B)=(72.26999pt, 650.43001pt, 72.26999pt)
+* \paperwidth=614.295pt
+* \paperheight=794.96999pt
+* \textwidth=469.75502pt
+* \textheight=650.43001pt
+* \oddsidemargin=0.0pt
+* \evensidemargin=0.0pt
+* \topmargin=-37.0pt
+* \headheight=12.0pt
+* \headsep=25.0pt
+* \topskip=10.0pt
+* \footskip=30.0pt
+* \marginparwidth=65.0pt
+* \marginparsep=11.0pt
+* \columnsep=10.0pt
+* \skip\footins=9.0pt plus 4.0pt minus 2.0pt
+* \hoffset=0.0pt
+* \voffset=0.0pt
+* \mag=1000
+* \@twocolumnfalse
+* \@twosidefalse
+* \@mparswitchfalse
+* \@reversemarginfalse
+* (1in=72.27pt=25.4mm, 1cm=28.453pt)
+
+(./chapters/page-001.tex [1
+
+{/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map}]) (./chapter
+s/page-002.tex [2]) (./chapters/page-003.tex
+[3]) (./chapters/page-004.tex [4]) (./chapters/page-005.tex [5])
+(./chapters/page-006.tex [6]) (./chapters/page-007.tex [7])
+(./chapters/page-008.tex [8]) (./chapters/page-009.tex [9])
+(./chapters/page-010.tex [10]) (./chapters/page-011.tex [11])
+(./chapters/page-012.tex [12]) (./chapters/page-013.tex [13])
+(./chapters/page-014.tex [14]) (./chapters/page-015.tex [15])
+(./chapters/page-016.tex [16]) (./chapters/page-017.tex [17])
+(./chapters/page-018.tex [18]) (./chapters/page-019.tex [19])
+(./chapters/page-020.tex [20]) (./chapters/page-021.tex [21])
+(./chapters/page-022.tex [22]) (./chapters/page-023.tex [23])
+(./chapters/page-024.tex [24]) (./chapters/page-025.tex [25])
+(./chapters/page-026.tex [26]) (./chapters/page-027.tex [27])
+(./chapters/page-028.tex [28]) (./chapters/page-029.tex [29])
+(./chapters/page-030.tex [30]) (./chapters/page-031.tex [31])
+(./chapters/page-032.tex [32]) (./chapters/page-033.tex [33])
+(./chapters/page-034.tex [34]) (./chapters/page-035.tex [35])
+(./chapters/page-036.tex [36]) (./chapters/page-037.tex [37])
+(./chapters/page-038.tex [38]) (./chapters/page-039.tex [39])
+(./chapters/page-040.tex [40]) (./chapters/page-041.tex [41])
+(./chapters/page-042.tex [42]) (./chapters/page-043.tex [43])
+(./chapters/page-044.tex [44]) (./chapters/page-045.tex [45])
+(./chapters/page-046.tex [46]) (./chapters/page-047.tex [47])
+(./chapters/page-048.tex [48]) (./chapters/page-049.tex [49])
+(./chapters/page-050.tex
+! Undefined control sequence.
+l.1 \undefinedcmd
+                 
+
+Here is how much of LuaTeX's memory you used:
+ 1585 strings out of 476075
+ 100000,460012 words of node,token memory allocated
+ 373 words of node memory still in use:
+   2 hlist, 1 rule, 1 dir, 3 kern, 1 glyph, 2 attribute, 49 glue_spec, 2 attribu
+te_list nodes
+   avail lists: 2:70,3:47,4:2,5:267,6:22,7:2898,9:78,10:1,11:302
+ 23806 multiletter control sequences out of 65536+600000
+ 17 fonts using 695087 bytes
+ 57i,5n,62p,196b,142s stack positions out of 10000i,1000n,20000p,200000b,200000s
+!  ==> Fatal error occurred, no output PDF file produced!
+==
+STDOUT:
+This is LuaHBTeX, Version 1.24.0 (TeX Live 2026_texlyre_busytexwasm) 
+(./main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+ (/texlive/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(/texlive/texmf-dist/tex/latex/base/size10.clo))
+(/texlive/texmf-dist/tex/latex/geometry/geometry.sty
+(/texlive/texmf-dist/tex/latex/graphics/keyval.sty)
+(/texlive/texmf-dist/tex/generic/iftex/ifvtex.sty
+(/texlive/texmf-dist/tex/generic/iftex/iftex.sty)))
+(/texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def)
+No file main.aux.
+*geometry* driver: auto-detecting
+*geometry* detected driver: luatex
+(./chapters/page-001.tex [1{/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updm
+ap/pdftex.map}]) (./chapters/page-002.tex [2]) (./chapters/page-003.tex
+[3]) (./chapters/page-004.tex [4]) (./chapters/page-005.tex [5])
+(./chapters/page-006.tex [6]) (./chapters/page-007.tex [7])
+(./chapters/page-008.tex [8]) (./chapters/page-009.tex [9])
+(./chapters/page-010.tex [10]) (./chapters/page-011.tex [11])
+(./chapters/page-012.tex [12]) (./chapters/page-013.tex [13])
+(./chapters/page-014.tex [14]) (./chapters/page-015.tex [15])
+(./chapters/page-016.tex [16]) (./chapters/page-017.tex [17])
+(./chapters/page-018.tex [18]) (./chapters/page-019.tex [19])
+(./chapters/page-020.tex [20]) (./chapters/page-021.tex [21])
+(./chapters/page-022.tex [22]) (./chapters/page-023.tex [23])
+(./chapters/page-024.tex [24]) (./chapters/page-025.tex [25])
+(./chapters/page-026.tex [26]) (./chapters/page-027.tex [27])
+(./chapters/page-028.tex [28]) (./chapters/page-029.tex [29])
+(./chapters/page-030.tex [30]) (./chapters/page-031.tex [31])
+(./chapters/page-032.tex [32]) (./chapters/page-033.tex [33])
+(./chapters/page-034.tex [34]) (./chapters/page-035.tex [35])
+(./chapters/page-036.tex [36]) (./chapters/page-037.tex [37])
+(./chapters/page-038.tex [38]) (./chapters/page-039.tex [39])
+(./chapters/page-040.tex [40]) (./chapters/page-041.tex [41])
+(./chapters/page-042.tex [42]) (./chapters/page-043.tex [43])
+(./chapters/page-044.tex [44]) (./chapters/page-045.tex [45])
+(./chapters/page-046.tex [46]) (./chapters/page-047.tex [47])
+(./chapters/page-048.tex [48]) (./chapters/page-049.tex [49])
+(./chapters/page-050.tex
+! Undefined control sequence.
+l.1 \undefinedcmd
+                 
+ 373 words of node memory still in use:
+   2 hlist, 1 rule, 1 dir, 3 kern, 1 glyph, 2 attribute, 49 glue_spec, 2 attrib
+ute_list nodes
+   avail lists: 2:70,3:47,4:2,5:267,6:22,7:2898,9:78,10:1,11:302
+!  ==> Fatal error occurred, no output PDF file produced!SyncTeX written on main.synctex.gz.
+
+Transcript written on main.log.
+==
+STDERR:
+program exited (with status: 1), but keepRuntimeAlive() is set (counter=0) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)
+======

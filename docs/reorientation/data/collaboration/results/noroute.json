@@ -1,0 +1,167 @@
+{
+ "LAN no default route ch-ch": {
+  "connected": false,
+  "offer": [],
+  "answer": [],
+  "gather": [
+   122,
+   131,
+   "complete"
+  ],
+  "state": [
+   "new",
+   "new"
+  ]
+ },
+ "LAN no default route, camera granted, ch-ch": {
+  "connected": true,
+  "offer": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 35097,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answer": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.11",
+    "port": 37991,
+    "type": "host",
+    "mdns": false
+   }
+  ]
+ },
+ "default route via VPN-like tun0 ch-ch": {
+  "connected": false,
+  "offer": [
+   {
+    "proto": "udp",
+    "addr": "f32f2252-90b1-40ef-9e64-d680d768ffbf.local",
+    "port": 49232,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answer": [
+   {
+    "proto": "udp",
+    "addr": "6508f80a-60e1-4388-ac97-6f97a292c66f.local",
+    "port": 54895,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "gather": [
+   119,
+   128,
+   "complete"
+  ],
+  "state": [
+   "connecting",
+   "failed"
+  ]
+ },
+ "default route via VPN-like tun0, camera granted, ch-ch": {
+  "connected": true,
+  "offer": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 55840,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "udp",
+    "addr": "10.99.1.2",
+    "port": 47120,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.99.1.2",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answer": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.11",
+    "port": 55628,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "udp",
+    "addr": "10.99.2.2",
+    "port": 59882,
+    "type": "host",
+    "mdns": false
+   }
+  ]
+ },
+ "default route via VPN-like tun0 ff-ff": {
+  "connected": false,
+  "offer": [
+   {
+    "proto": "udp",
+    "addr": "d6cd6a4d-fafc-4f9c-b52e-335ab6858442.local",
+    "port": 36171,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "d6cd6a4d-fafc-4f9c-b52e-335ab6858442.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answer": [
+   {
+    "proto": "udp",
+    "addr": "71456f54-20af-4477-a41e-2decd767cefe.local",
+    "port": 36235,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "71456f54-20af-4477-a41e-2decd767cefe.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "gather": [
+   17,
+   17,
+   "complete"
+  ],
+  "state": [
+   "failed",
+   "failed"
+  ]
+ }
+}

@@ -1,0 +1,22 @@
+/* A quiet card in the preview's lower corner, above the status bar; popups and dialogs stay on top. */
+.update-notice{position:fixed;right:12px;bottom:calc(var(--telemetry-card-height,0px) + 40px);z-index:19;box-sizing:border-box;width:max-content;max-width:min(300px,calc(100vw - 24px));display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:2px 10px;padding:8px 6px 8px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);box-shadow:var(--popup-shadow);font-size:12px;line-height:1.4}
+.update-notice p{margin:0}
+.update-notice-message{grid-column:1;font-weight:550;display:flex;align-items:center;gap:7px}
+.update-notice-message::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--accent);flex-shrink:0}
+.update-notice-detail{grid-column:1/-1;grid-row:2;color:var(--muted);font-size:11px}
+.update-notice-detail:empty{display:none}
+.update-notice-actions{grid-column:2;grid-row:1;display:flex;align-items:center;gap:2px}
+.update-notice .button.compact{min-height:28px;padding:5px 11px}
+.update-notice-close{width:28px;height:28px}
+body:has(.toast) .update-notice{bottom:calc(var(--telemetry-card-height,0px) + 96px)}
+@media(max-width:740px){.update-notice{right:8px;max-width:calc(100vw - 16px);bottom:calc(var(--telemetry-card-height,0px) + 36px)}}
+.update-notice.update-notice-stacked{left:var(--update-notice-left);right:auto;width:var(--update-notice-width);max-width:none;grid-template-columns:minmax(0,1fr);padding:9px 8px 7px 10px;gap:6px}
+.update-notice-stacked .update-notice-message{align-items:baseline;font-size:11.5px}
+.update-notice-stacked .update-notice-message::before{transform:translateY(-1px)}
+.update-notice-stacked .update-notice-actions,.update-notice-stacked .update-notice-detail{grid-column:1;grid-row:auto}
+.update-notice-stacked .update-notice-actions{justify-content:space-between}
+@media(prefers-reduced-motion:no-preference){.update-notice{animation:update-notice-in .18s ease-out}@keyframes update-notice-in{from{opacity:0;transform:translateY(6px)}}}
+.update-notice [hidden]{display:none}
+/* In a live session the longer choices take their own row under the explanation. */
+.update-notice.update-notice-session{max-width:min(340px,calc(100vw - 24px))}
+.update-notice.update-notice-session .update-notice-actions{grid-column:1/-1;grid-row:3;justify-content:flex-end;flex-wrap:wrap;gap:4px}

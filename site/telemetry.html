@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="What the official Scribyra app sends if you opt in, and what it never sends.">
+  <meta name="theme-color" content="#7160d9">
+  <title>What Scribyra collects</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <style>
+    :root{color-scheme:light dark;--ink:#262b40;--muted:#5f6479;--accent:#5d4bbf;--line:#e6e6ef;--paper:#fcfcfe;--soft:#f4f2fc}
+    @media(prefers-color-scheme:dark){:root{--ink:#e9e9f2;--muted:#a9adc2;--accent:#b4a8f5;--line:#34374d;--paper:#181a28;--soft:#232539}}
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}
+    main{max-width:720px;margin:0 auto;padding:48px 24px 72px}
+    a{color:var(--accent)}
+    h1{font:400 38px/1.15 Georgia,'Times New Roman',serif;margin:24px 0 12px}
+    h2{font-size:18px;margin:36px 0 8px}
+    p,li{color:var(--ink)}
+    .lead{font-size:18px;color:var(--muted);margin-top:0}
+    code{font:13px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;background:var(--soft);padding:1px 5px;border-radius:4px;overflow-wrap:anywhere}
+    .table{overflow-x:auto}
+    table{border-collapse:collapse;width:100%;font-size:14px}
+    th,td{border-top:1px solid var(--line);padding:10px 12px 10px 0;text-align:left;vertical-align:top}
+    th{font-weight:600}
+    ul{padding-left:20px}
+    li{margin:4px 0}
+    footer{max-width:720px;margin:0 auto;padding:20px 24px 40px;border-top:1px solid var(--line);font-size:13px;line-height:1.6;color:var(--muted)}
+    footer span{white-space:nowrap}
+    @media(max-width:600px){h1{font-size:32px}thead{display:none}table,tbody,tr,th,td{display:block}th,td{border:0;padding:2px 0}tr{border-top:1px solid var(--line);padding:10px 0}}
+  </style>
+</head>
+<body>
+  <main>
+    <a href="./">Scribyra</a>
+    <h1>What Scribyra collects</h1>
+    <p class="lead">Nothing, unless you choose a category. Dismissing the prompt sends nothing. Every category starts off.</p>
+
+    <h2>Where it goes</h2>
+    <p>Choices you make send data to URUNDEAD LABS S.R.L., the company that operates Scribyra, through Grafana Cloud, a third-party service, in its EU region. Grafana sees your IP address and normal browser request details, as any web host does. Scribyra sends no cookies, no persistent visitor ID and no referrer.</p>
+
+    <h2>Categories and exact fields</h2>
+    <div class="table"><table>
+      <thead><tr><th scope="col">Category</th><th scope="col">Fields</th><th scope="col">Precision</th></tr></thead>
+      <tbody>
+        <tr><th scope="row">Performance and timing</th><td><code>measurements[]</code>: <code>type</code>, <code>values.duration_ms</code>, <code>values.bytes</code>, <code>values.memory_bytes</code></td><td>Duration rounded down to 1, 2 or 5 × a power of ten. Sizes of PDFs and downloads rounded down to a power of four. Memory rounded down to a power of two.</td></tr>
+        <tr><th scope="row">Errors and failures</th><td><code>exceptions[]</code>: <code>type</code>, <code>value</code>, <code>context.outcome</code></td><td><code>value</code> is one of a fixed list, such as <code>timeout</code> or <code>quota</code>. Never a message, log or stack trace.</td></tr>
+        <tr><th scope="row">Feature usage</th><td><code>events[]</code>: <code>name</code>, <code>attributes.count</code></td><td>Count rounded down to 1, 2 or 5 × a power of ten.</td></tr>
+        <tr><th scope="row">Added to every record</th><td><code>timestamp</code>, <code>trace.trace_id</code>, <code>trace.span_id</code>, <code>runtime</code>, <code>source</code>, <code>parent_span_id</code>, <code>dropped</code>, <code>sampled</code>, <code>sampling_rate</code></td><td>Time rounded to the minute. IDs are random, kept in memory only, and link the steps of one operation. <code>sampling_rate</code> is the share of sessions this build lets send, the same for everyone.</td></tr>
+        <tr><th scope="row">Added to every request</th><td><code>meta.app</code>: <code>name</code>, <code>version</code>, <code>release</code>, <code>gitHash</code>, <code>bundleId</code>; <code>meta.sdk</code>: <code>name</code>, <code>version</code></td><td>Which published build is running.</td></tr>
+        <tr><th scope="row">Session ID, on every request</th><td><code>meta.session.id</code> and the same value in the <code>X-Faro-Session-Id</code> header</td><td>A random ID, new on each page load and in each tab, and replaced after at most four hours. It links the records one tab sends within that window and nothing else. It is never stored on your device and is not derived from anything about you.</td></tr>
+      </tbody>
+    </table></div>
+    <p>Operation names come from a closed list: <code>startup</code>, <code>worker_startup</code>, <code>compile</code>, <code>worker_pass</code>, <code>tex_pass</code>, <code>bibliography_pass</code>, <code>index_pass</code>, <code>package_prepare</code>, <code>download</code>, <code>verify</code>, <code>cache</code>, <code>cache_evict</code>, <code>pdf_prepare</code>, <code>runtime_transfer</code>, <code>storage_read</code> and <code>migration</code>.</p>
+    <p>With Errors and failures on, the list also includes <code>exception</code>, <code>rejection</code>, <code>storage_quota</code>, <code>retry</code> and <code>recovery</code>. Those names reveal a failure, so they are never sent without that category.</p>
+    <p>Identical records within the same minute are sent once. Sending stops for the session after a fixed budget or repeated delivery failures. The app may also send from only a share of sessions: each session decides once, at random, and a session that is not picked sends nothing at all.</p>
+
+    <h2>Never sent</h2>
+    <ul>
+      <li>Document contents, file or project names, or paths</li>
+      <li>Prompts, tokens or credentials</li>
+      <li>Saves, edits, keystrokes, searches, commands, or sync and agent activity. These stay on your device, so your writing rhythm is not sent.</li>
+      <li>Error messages, logs or stack traces</li>
+      <li>Session replay, session attributes, user IDs, page URLs or browser fingerprints</li>
+    </ul>
+
+    <h2>What a timing can still suggest</h2>
+    <p>A compile can run automatically after you pause typing, so with these categories on, the record of it shows roughly which minute you compiled. PDF size is sent only as a wide range.</p>
+
+    <h2>How to turn it off</h2>
+    <p>Open Diagnostics in the app, from the projects sidebar or from More tools at the top of an open project, and clear the checkboxes. Turning off a category stops sending it at once and drops anything queued. Other open tabs follow. Clearing this site's storage also clears your choices.</p>
+
+    <h2>Self-hosted builds</h2>
+    <p>A self-hosted or source build has no address and sends nothing unless its operator configures one. The prompt then names that address. This page describes the official app.</p>
+    <p><a href="privacy.html">Everything else that stays on your device or leaves it</a> · <a href="licenses.html">Licences and notices</a></p>
+  </main>
+  <footer><span>© 2026 URUNDEAD LABS S.R.L.</span> · <span>Reg. Com. J2026034271001</span> · <span>CUI 54762154</span> · <span>VAT RO55538423</span> · <span>Strada Pitar Moș 27, et. 5, ap. 17,</span> <span>010452 București, Romania</span></footer>
+</body>
+</html>

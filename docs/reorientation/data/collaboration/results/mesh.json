@@ -1,0 +1,83 @@
+{
+ "mesh2:chromium": {
+  "n": 2,
+  "engines": [
+   "chromium"
+  ],
+  "formMs": 244,
+  "manualExchanges": 1,
+  "relayedLinks": 0,
+  "fullMeshLinks": 1,
+  "editFanoutMaxMs": [
+   17,
+   22
+  ],
+  "converged": true,
+  "counts": [
+   101,
+   101
+  ],
+  "concurrentConverged": true,
+  "concurrentHead": "%CONC1%\n%CONC0%\n%E1%\n%E0%\n\\documentclass[10pt]{article}\n\\usepackage[ma"
+ },
+ "mesh3:chromium,firefox": {
+  "n": 3,
+  "engines": [
+   "chromium",
+   "firefox"
+  ],
+  "formMs": 884,
+  "manualExchanges": 2,
+  "relayedLinks": 1,
+  "fullMeshLinks": 3,
+  "editFanoutMaxMs": [
+   16,
+   14,
+   14
+  ],
+  "converged": true,
+  "counts": [
+   101,
+   101,
+   101
+  ],
+  "concurrentConverged": true,
+  "concurrentHead": "%CONC0%\n%CONC1%\n%CONC2%\n%E2%\n%E1%\n%E0%\n\\documentclass[10pt]{article}\n\\",
+  "afterHostLeaves": [
+   5
+  ]
+ },
+ "mesh5:chromium,firefox": {
+  "n": 5,
+  "engines": [
+   "chromium",
+   "firefox"
+  ],
+  "formMs": 3044,
+  "manualExchanges": 4,
+  "relayedLinks": 6,
+  "fullMeshLinks": 10,
+  "editFanoutMaxMs": [
+   18,
+   18,
+   15,
+   15,
+   16
+  ],
+  "converged": true,
+  "counts": [
+   101,
+   101,
+   101,
+   101,
+   101
+  ],
+  "concurrentConverged": true,
+  "concurrentHead": "%CONC1%\n%CONC4%\n%CONC3%\n%CONC2%\n%CONC0%\n%E4%\n%E3%\n%E2%\n%E1%\n%E0%\n\\docu",
+  "afterHostLeaves": [
+   5,
+   6,
+   5
+  ]
+ }
+}

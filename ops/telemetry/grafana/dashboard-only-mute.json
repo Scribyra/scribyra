@@ -1,0 +1,17 @@
+{
+  "name": "scribyra-dashboard-only",
+  "time_intervals": [
+    {
+      "times": [
+        {
+          "start_time": "00:00",
+          "end_time": "24:00"
+        }
+      ],
+      "weekdays": [
+        "sunday:saturday"
+      ],
+      "location": "UTC"
+    }
+  ]
+}

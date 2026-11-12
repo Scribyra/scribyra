@@ -1,0 +1,44 @@
+[
+ {
+  "part": "listing: name + description",
+  "bytes": 197,
+  "chars4": 49,
+  "cl100k": 46
+ },
+ {
+  "part": "SKILL.md body + frontmatter",
+  "bytes": 2477,
+  "chars4": 619,
+  "cl100k": 614
+ },
+ {
+  "part": "references/page-recipe.md",
+  "bytes": 1393,
+  "chars4": 348,
+  "cl100k": 366
+ },
+ {
+  "part": "scripts/sc.js",
+  "bytes": 2488,
+  "chars4": 622,
+  "cl100k": 784
+ },
+ {
+  "part": "deferred: 25 Playwright tool names",
+  "bytes": 880,
+  "chars4": 220,
+  "cl100k": 244
+ },
+ {
+  "part": "schemas for navigate+evaluate+tabs",
+  "bytes": 2275,
+  "chars4": 569,
+  "cl100k": 488
+ },
+ {
+  "part": "all 25 Playwright schemas",
+  "bytes": 21060,
+  "chars4": 5265,
+  "cl100k": 4464
+ }
+]

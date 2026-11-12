@@ -1,0 +1,10 @@
+import {cl100k,P} from './lib.mjs';import {readFileSync,writeFileSync} from 'node:fs';
+const d=P+'/package/skills/scribyra/';const f=n=>readFileSync(d+n,'utf8');
+const skill=f('SKILL.md');const m=/^---\n([\s\S]*?)\n---\n([\s\S]*)$/.exec(skill);
+const desc=/description: (.*)/.exec(m[1])[1];
+const row=(k,t)=>({part:k,bytes:Buffer.byteLength(t),chars4:Math.round(t.length/4),cl100k:cl100k(t)});
+const tools=JSON.parse(readFileSync(P+'/measure/out/pw-tools.json'));
+const names=tools.map(t=>'mcp__playwright__'+t.name).join('\n');
+const pick=['browser_navigate','browser_evaluate','browser_tabs'].map(n=>JSON.stringify(tools.find(t=>t.name===n))).join('');
+const rows=[row('listing: name + description','scribyra: '+desc),row('SKILL.md body + frontmatter',skill),row('references/page-recipe.md',f('references/page-recipe.md')),row('scripts/sc.js',f('scripts/sc.js')),row('deferred: 25 Playwright tool names',names),row('schemas for navigate+evaluate+tabs',pick),row('all 25 Playwright schemas',JSON.stringify(tools))];
+console.table(rows);writeFileSync(P+'/measure/out/sizes.json',JSON.stringify(rows,null,1));

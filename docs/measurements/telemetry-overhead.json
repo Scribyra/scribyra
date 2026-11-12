@@ -1,0 +1,3347 @@
+{
+  "version": 1,
+  "measuredAt": "2026-11-04T17:31:37.477Z",
+  "host": {
+    "platform": "linux",
+    "kernel": "7.0.6-2-pve",
+    "cpu": "Intel(R) Xeon(R) Gold 6130 CPU @ 2.10GHz",
+    "logicalCpus": 10
+  },
+  "method": {
+    "fixture": "Fixed synthetic one-page LuaLaTeX article; fresh browser process/profile per trial; trials run serially with mode order rotated each repetition.",
+    "startup": "Navigation until Import ZIP is visible. Collection setting exists before startup. Remote export connects through the actual diagnostics UI after startup, so startup compares off versus local instrumentation only.",
+    "compile": "UI click until successful compiler result and visible PDF canvas; includes Playwright dispatch/poll and PDF readiness. Cold worker, two warm builds and one offline reload/build per trial. Compiler-reported duration is recorded separately.",
+    "transfer": "Actual uncompressed asset HTTP response body bytes written by the loopback server; sampled cumulatively at phase boundaries, including in-flight responses. Excludes headers/TLS/compression. Export body bytes count attempted browser POST payloads separately, not network headers or downstream OTLP volume.",
+    "memory": "Linux browser process tree, sampled every 250 ms; reports observed RSS and PSS peaks per phase. RSS double-counts shared pages; PSS apportions them. Peaks are lower bounds; phases shorter than 250 ms can have no sample. Not JS heap, worker-only memory, exact maxima, or native collector memory.",
+    "offline": "Both browser context and asset server refuse the network during reload/build. Local collection remains selected; tab-scoped remote credentials are intentionally not restored after reload.",
+    "limits": "Headless Linux desktop, loopback network, one synthetic article and three repetitions by default. OS file cache is warm/shared across trials. No mobile, internet latency, memory-allocation attribution, native overhead, or statistical-significance claim. Browser driver and sampler overhead are present in all modes."
+  },
+  "rows": [
+    {
+      "run": 1,
+      "browser": "chromium",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 482.267253,
+          "assetBodyBytes": 5780130
+        },
+        "cold": {
+          "wallMs": 9180.472288,
+          "compilerMs": 8875.400000095367,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3208.6207560000003,
+          "compilerMs": 2974,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 2986.443849000001,
+          "compilerMs": 2766.5,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 271.57572000000073,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 6919.198916999998,
+          "compilerMs": 6676.099999904633,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 104,
+        "pssSamples": 104,
+        "peakSampledRss": 1497161728,
+        "peakSampledPss": 1225065472,
+        "byPhase": {
+          "cold": {
+            "samples": 34,
+            "peakSampledRss": 1240686592,
+            "peakSampledPss": 986177536
+          },
+          "startup": {
+            "samples": 2,
+            "peakSampledRss": 442355712,
+            "peakSampledPss": 203679744
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 541286400,
+            "peakSampledPss": 289914880
+          },
+          "warm1": {
+            "samples": 12,
+            "peakSampledRss": 1226588160,
+            "peakSampledPss": 958203904
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1339195392,
+            "peakSampledPss": 1069728768
+          },
+          "preparation": {
+            "samples": 16,
+            "peakSampledRss": 1497161728,
+            "peakSampledPss": 1225065472
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 984928256,
+            "peakSampledPss": 726724608
+          },
+          "offline": {
+            "samples": 25,
+            "peakSampledRss": 1329545216,
+            "peakSampledPss": 1069630464
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1319747584,
+            "peakSampledPss": 1053406208
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "chromium",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 394.0494429999999,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 8954.182299999997,
+          "compilerMs": 8680.099999904633,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3085.587594000004,
+          "compilerMs": 2806,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 2995.488129000005,
+          "compilerMs": 2769.9000000953674,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 275.6107159999956,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 6863.415691000002,
+          "compilerMs": 6618.299999713898,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 25036,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 103,
+        "pssSamples": 103,
+        "peakSampledRss": 1462935552,
+        "peakSampledPss": 1197195264,
+        "byPhase": {
+          "cold": {
+            "samples": 33,
+            "peakSampledRss": 1178402816,
+            "peakSampledPss": 921841664
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 432992256,
+            "peakSampledPss": 195916800
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 541720576,
+            "peakSampledPss": 282702848
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1220329472,
+            "peakSampledPss": 953499648
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1210986496,
+            "peakSampledPss": 941057024
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1283543040,
+            "peakSampledPss": 1011250176
+          },
+          "preparation": {
+            "samples": 17,
+            "peakSampledRss": 1462935552,
+            "peakSampledPss": 1197195264
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1021837312,
+            "peakSampledPss": 746510336
+          },
+          "offline": {
+            "samples": 25,
+            "peakSampledRss": 1335783424,
+            "peakSampledPss": 1072881664
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "chromium",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 372.0796210000044,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 9007.234292999994,
+          "compilerMs": 8727,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 32458
+        },
+        "warm1": {
+          "wallMs": 3182.984562999991,
+          "compilerMs": 2888.699999809265,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 10057
+        },
+        "warm2": {
+          "wallMs": 3217.5596459999942,
+          "compilerMs": 3001.7999997138977,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 10837
+        },
+        "offlineReload": {
+          "wallMs": 228.53697900001134,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7085.7995889999875,
+          "compilerMs": 6760.599999904633,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 25017,
+      "export": {
+        "attempts": 37,
+        "acceptedResponses": 37,
+        "attemptedBodyBytes": 99514
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 105,
+        "pssSamples": 105,
+        "peakSampledRss": 1458245632,
+        "peakSampledPss": 1185587200,
+        "byPhase": {
+          "cold": {
+            "samples": 34,
+            "peakSampledRss": 1116811264,
+            "peakSampledPss": 859244544
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 419770368,
+            "peakSampledPss": 186083328
+          },
+          "setup": {
+            "samples": 3,
+            "peakSampledRss": 558604288,
+            "peakSampledPss": 298663936
+          },
+          "warm1": {
+            "samples": 12,
+            "peakSampledRss": 1233084416,
+            "peakSampledPss": 963051520
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1239162880,
+            "peakSampledPss": 969752576
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1233350656,
+            "peakSampledPss": 963080192
+          },
+          "preparation": {
+            "samples": 16,
+            "peakSampledRss": 1458245632,
+            "peakSampledPss": 1185587200
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 990728192,
+            "peakSampledPss": 724890624
+          },
+          "offline": {
+            "samples": 25,
+            "peakSampledRss": 1346752512,
+            "peakSampledPss": 1085491200
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1322483712,
+            "peakSampledPss": 1052485632
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "firefox",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1835.3010219999996,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13726.619936999996,
+          "compilerMs": 13369,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3818.0998420000105,
+          "compilerMs": 3415,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3599.6578100000042,
+          "compilerMs": 3276,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 476.8618859999988,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8526.594071,
+          "compilerMs": 8098,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 153,
+        "pssSamples": 153,
+        "peakSampledRss": 2001530880,
+        "peakSampledPss": 1628724224,
+        "byPhase": {
+          "cold": {
+            "samples": 51,
+            "peakSampledRss": 1743732736,
+            "peakSampledPss": 1375965184
+          },
+          "startup": {
+            "samples": 11,
+            "peakSampledRss": 868536320,
+            "peakSampledPss": 517087232
+          },
+          "setup": {
+            "samples": 6,
+            "peakSampledRss": 914550784,
+            "peakSampledPss": 558648320
+          },
+          "warm1": {
+            "samples": 14,
+            "peakSampledRss": 1861775360,
+            "peakSampledPss": 1490421760
+          },
+          "warm2": {
+            "samples": 12,
+            "peakSampledRss": 1999810560,
+            "peakSampledPss": 1627403264
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2001530880,
+            "peakSampledPss": 1628724224
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1552035840,
+            "peakSampledPss": 1178340352
+          },
+          "offline": {
+            "samples": 30,
+            "peakSampledRss": 1856471040,
+            "peakSampledPss": 1486286848
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "firefox",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1121.7510849999962,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13222.959925000003,
+          "compilerMs": 12851,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3813.6452470000077,
+          "compilerMs": 3408,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3697.6742320000194,
+          "compilerMs": 3398,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 472.9125890000141,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8726.573774999997,
+          "compilerMs": 8281,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23632,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 151,
+        "pssSamples": 151,
+        "peakSampledRss": 1991274496,
+        "peakSampledPss": 1619829760,
+        "byPhase": {
+          "cold": {
+            "samples": 48,
+            "peakSampledRss": 1752395776,
+            "peakSampledPss": 1381663744
+          },
+          "startup": {
+            "samples": 8,
+            "peakSampledRss": 805597184,
+            "peakSampledPss": 458377216
+          },
+          "setup": {
+            "samples": 6,
+            "peakSampledRss": 948219904,
+            "peakSampledPss": 587913216
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1724022784,
+            "peakSampledPss": 1349337088
+          },
+          "warm1": {
+            "samples": 14,
+            "peakSampledRss": 1864388608,
+            "peakSampledPss": 1491388416
+          },
+          "warm2": {
+            "samples": 13,
+            "peakSampledRss": 1991274496,
+            "peakSampledPss": 1619829760
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 1929793536,
+            "peakSampledPss": 1556473856
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1553002496,
+            "peakSampledPss": 1178783744
+          },
+          "offline": {
+            "samples": 30,
+            "peakSampledRss": 1800724480,
+            "peakSampledPss": 1448382464
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "firefox",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1061.6179389999888,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13189.778801000008,
+          "compilerMs": 12816,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79596791,
+          "exportAttemptBodyBytes": 31637
+        },
+        "warm1": {
+          "wallMs": 3563.3062790000113,
+          "compilerMs": 3191,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 7779
+        },
+        "warm2": {
+          "wallMs": 3725.9870010000013,
+          "compilerMs": 3398,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 9547
+        },
+        "offlineReload": {
+          "wallMs": 532.4705390000017,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8846.359631,
+          "compilerMs": 8423,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 123026410,
+      "localEventsAfterOffline": 95,
+      "localBufferedBytesAfterOffline": 22910,
+      "export": {
+        "attempts": 43,
+        "acceptedResponses": 43,
+        "attemptedBodyBytes": 95453
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 153,
+        "pssSamples": 153,
+        "peakSampledRss": 2017296384,
+        "peakSampledPss": 1645456384,
+        "byPhase": {
+          "cold": {
+            "samples": 48,
+            "peakSampledRss": 1761722368,
+            "peakSampledPss": 1390872576
+          },
+          "startup": {
+            "samples": 8,
+            "peakSampledRss": 857128960,
+            "peakSampledPss": 506013696
+          },
+          "setup": {
+            "samples": 7,
+            "peakSampledRss": 949596160,
+            "peakSampledPss": 590229504
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1726287872,
+            "peakSampledPss": 1354549248
+          },
+          "warm1": {
+            "samples": 13,
+            "peakSampledRss": 1883783168,
+            "peakSampledPss": 1510307840
+          },
+          "warm2": {
+            "samples": 13,
+            "peakSampledRss": 2010914816,
+            "peakSampledPss": 1637075968
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1767665664,
+            "peakSampledPss": 1394193408
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 2017296384,
+            "peakSampledPss": 1645456384
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1822879744,
+            "peakSampledPss": 1448287232
+          },
+          "offline": {
+            "samples": 31,
+            "peakSampledRss": 1962188800,
+            "peakSampledPss": 1585765376
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "webkit",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 519.5315119999868,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 10530.499045000004,
+          "compilerMs": 10132,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3225.0926099999924,
+          "compilerMs": 2896,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3154.5163290000055,
+          "compilerMs": 2866,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 281.0488520000072,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8039.155632000009,
+          "compilerMs": 7653,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 125,
+        "pssSamples": 125,
+        "peakSampledRss": 2145042432,
+        "peakSampledPss": 1988176896,
+        "byPhase": {
+          "cold": {
+            "samples": 38,
+            "peakSampledRss": 1507561472,
+            "peakSampledPss": 1349635072
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 547254272,
+            "peakSampledPss": 392468480
+          },
+          "setup": {
+            "samples": 3,
+            "peakSampledRss": 645980160,
+            "peakSampledPss": 488660992
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1538600960,
+            "peakSampledPss": 1380045824
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1643585536,
+            "peakSampledPss": 1485597696
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1640247296,
+            "peakSampledPss": 1482075136
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 2145042432,
+            "peakSampledPss": 1988176896
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1330597888,
+            "peakSampledPss": 1172230144
+          },
+          "offline": {
+            "samples": 28,
+            "peakSampledRss": 1674854400,
+            "peakSampledPss": 1516420096
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "webkit",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 508.4521609999938,
+          "assetBodyBytes": 4484392
+        },
+        "cold": {
+          "wallMs": 10911.658338999987,
+          "compilerMs": 10460,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3152.2689370000153,
+          "compilerMs": 2897,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3099.5425490000052,
+          "compilerMs": 2828,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 386.39397199999075,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7849.296800000011,
+          "compilerMs": 7485,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23647,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 125,
+        "pssSamples": 125,
+        "peakSampledRss": 2087845888,
+        "peakSampledPss": 1944419328,
+        "byPhase": {
+          "cold": {
+            "samples": 40,
+            "peakSampledRss": 1493381120,
+            "peakSampledPss": 1334963200
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 554192896,
+            "peakSampledPss": 399129600
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 641953792,
+            "peakSampledPss": 485051392
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1627832320,
+            "peakSampledPss": 1468837888
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1628995584,
+            "peakSampledPss": 1469979648
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1614110720,
+            "peakSampledPss": 1455447040
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2087845888,
+            "peakSampledPss": 1944419328
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1308643328,
+            "peakSampledPss": 1149995008
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 1614925824,
+            "peakSampledPss": 1456244736
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 1,
+      "browser": "webkit",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 454.4240089999512,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 10326.465477999998,
+          "compilerMs": 10029,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 31266
+        },
+        "warm1": {
+          "wallMs": 3349.587093000009,
+          "compilerMs": 3047,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 7778
+        },
+        "warm2": {
+          "wallMs": 3227.5901869999943,
+          "compilerMs": 2938,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 9179
+        },
+        "offlineReload": {
+          "wallMs": 310.66538599994965,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8134.121501000016,
+          "compilerMs": 7730,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23647,
+      "export": {
+        "attempts": 43,
+        "acceptedResponses": 43,
+        "attemptedBodyBytes": 95892
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 127,
+        "pssSamples": 127,
+        "peakSampledRss": 2151608320,
+        "peakSampledPss": 1993656320,
+        "byPhase": {
+          "cold": {
+            "samples": 38,
+            "peakSampledRss": 1477005312,
+            "peakSampledPss": 1320564736
+          },
+          "startup": {
+            "samples": 2,
+            "peakSampledRss": 548397056,
+            "peakSampledPss": 394081280
+          },
+          "setup": {
+            "samples": 5,
+            "peakSampledRss": 665485312,
+            "peakSampledPss": 507875328
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1611186176,
+            "peakSampledPss": 1452300288
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1643864064,
+            "peakSampledPss": 1485334528
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1644351488,
+            "peakSampledPss": 1485727744
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1597546496,
+            "peakSampledPss": 1438922752
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2151608320,
+            "peakSampledPss": 1993656320
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1319796736,
+            "peakSampledPss": 1161591808
+          },
+          "offline": {
+            "samples": 28,
+            "peakSampledRss": 1731375104,
+            "peakSampledPss": 1572866048
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "chromium",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 431.7398510000203,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 9030.193777000008,
+          "compilerMs": 8751,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 2879.579060000018,
+          "compilerMs": 2662.0999999046326,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3075.4518950000056,
+          "compilerMs": 2833.699999809265,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 279.9487890000455,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 6748.044128999987,
+          "compilerMs": 6495,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 25178,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 103,
+        "pssSamples": 103,
+        "peakSampledRss": 1445085184,
+        "peakSampledPss": 1172689920,
+        "byPhase": {
+          "cold": {
+            "samples": 33,
+            "peakSampledRss": 1219870720,
+            "peakSampledPss": 965102592
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 424714240,
+            "peakSampledPss": 191511552
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 533217280,
+            "peakSampledPss": 277976064
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1229291520,
+            "peakSampledPss": 966272000
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1211383808,
+            "peakSampledPss": 944399360
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1224228864,
+            "peakSampledPss": 962057216
+          },
+          "preparation": {
+            "samples": 18,
+            "peakSampledRss": 1445085184,
+            "peakSampledPss": 1172689920
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1129615360,
+            "peakSampledPss": 872304640
+          },
+          "offline": {
+            "samples": 24,
+            "peakSampledRss": 1259462656,
+            "peakSampledPss": 1000096768
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "chromium",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 355.00787500001024,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 9146.825450000004,
+          "compilerMs": 8862.900000095367,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 32359
+        },
+        "warm1": {
+          "wallMs": 3109.677420999971,
+          "compilerMs": 2855.5999999046326,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 10769
+        },
+        "warm2": {
+          "wallMs": 2990.8173249999527,
+          "compilerMs": 2738.7999997138977,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 9697
+        },
+        "offlineReload": {
+          "wallMs": 241.012985999987,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7082.59820800001,
+          "compilerMs": 6765,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 25119,
+      "export": {
+        "attempts": 36,
+        "acceptedResponses": 35,
+        "attemptedBodyBytes": 99032
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 104,
+        "pssSamples": 104,
+        "peakSampledRss": 1509654528,
+        "peakSampledPss": 1235043328,
+        "byPhase": {
+          "cold": {
+            "samples": 35,
+            "peakSampledRss": 1197166592,
+            "peakSampledPss": 938253312
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 427180032,
+            "peakSampledPss": 190168064
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 542007296,
+            "peakSampledPss": 286705664
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1150164992,
+            "peakSampledPss": 883002368
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1216847872,
+            "peakSampledPss": 948278272
+          },
+          "warm2": {
+            "samples": 10,
+            "peakSampledRss": 1230430208,
+            "peakSampledPss": 962221056
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1227243520,
+            "peakSampledPss": 956376064
+          },
+          "preparation": {
+            "samples": 17,
+            "peakSampledRss": 1509654528,
+            "peakSampledPss": 1235043328
+          },
+          "offline": {
+            "samples": 26,
+            "peakSampledRss": 1352200192,
+            "peakSampledPss": 1087475712
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "chromium",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 388.40467499999795,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 9135.053796000022,
+          "compilerMs": 8831.400000095367,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3142.2319770000177,
+          "compilerMs": 2913.9000000953674,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3271.987089000002,
+          "compilerMs": 2991.0999999046326,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 246.26249399996595,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 6876.902777000039,
+          "compilerMs": 6566.699999809265,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 104,
+        "pssSamples": 104,
+        "peakSampledRss": 1497690112,
+        "peakSampledPss": 1227433984,
+        "byPhase": {
+          "cold": {
+            "samples": 34,
+            "peakSampledRss": 1221533696,
+            "peakSampledPss": 965195776
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 437477376,
+            "peakSampledPss": 200026112
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 539897856,
+            "peakSampledPss": 281306112
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1189126144,
+            "peakSampledPss": 918916096
+          },
+          "warm2": {
+            "samples": 12,
+            "peakSampledRss": 1200852992,
+            "peakSampledPss": 930124800
+          },
+          "preparation": {
+            "samples": 19,
+            "peakSampledRss": 1497690112,
+            "peakSampledPss": 1227433984
+          },
+          "offline": {
+            "samples": 25,
+            "peakSampledRss": 1312808960,
+            "peakSampledPss": 1044124672
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "firefox",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1441.4527290000115,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13296.104101999954,
+          "compilerMs": 12906,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3675.3563250000007,
+          "compilerMs": 3284,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3639.204151999962,
+          "compilerMs": 3305,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 510.6766410000273,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8426.42566300003,
+          "compilerMs": 7987,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23635,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 150,
+        "pssSamples": 150,
+        "peakSampledRss": 1995087872,
+        "peakSampledPss": 1622848512,
+        "byPhase": {
+          "cold": {
+            "samples": 49,
+            "peakSampledRss": 1724502016,
+            "peakSampledPss": 1354627072
+          },
+          "startup": {
+            "samples": 9,
+            "peakSampledRss": 878084096,
+            "peakSampledPss": 526140416
+          },
+          "setup": {
+            "samples": 5,
+            "peakSampledRss": 946728960,
+            "peakSampledPss": 587197440
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1731088384,
+            "peakSampledPss": 1357238272
+          },
+          "warm1": {
+            "samples": 13,
+            "peakSampledRss": 1853386752,
+            "peakSampledPss": 1482150912
+          },
+          "warm2": {
+            "samples": 12,
+            "peakSampledRss": 1995087872,
+            "peakSampledPss": 1622848512
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 1952636928,
+            "peakSampledPss": 1580385280
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1539678208,
+            "peakSampledPss": 1167160320
+          },
+          "offline": {
+            "samples": 30,
+            "peakSampledRss": 1848975360,
+            "peakSampledPss": 1478811648
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "firefox",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1227.777237000002,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 12889.585809000011,
+          "compilerMs": 12551,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 32369
+        },
+        "warm1": {
+          "wallMs": 3671.943385999999,
+          "compilerMs": 3274,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 7779
+        },
+        "warm2": {
+          "wallMs": 3631.0277519999654,
+          "compilerMs": 3302,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 9546
+        },
+        "offlineReload": {
+          "wallMs": 538.0199060000014,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8398.775514999987,
+          "compilerMs": 7993,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 95,
+      "localBufferedBytesAfterOffline": 22908,
+      "export": {
+        "attempts": 45,
+        "acceptedResponses": 45,
+        "attemptedBodyBytes": 96189
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 150,
+        "pssSamples": 150,
+        "peakSampledRss": 2045181952,
+        "peakSampledPss": 1671413760,
+        "byPhase": {
+          "cold": {
+            "samples": 48,
+            "peakSampledRss": 1751900160,
+            "peakSampledPss": 1381224448
+          },
+          "startup": {
+            "samples": 8,
+            "peakSampledRss": 803999744,
+            "peakSampledPss": 456965120
+          },
+          "setup": {
+            "samples": 6,
+            "peakSampledRss": 954753024,
+            "peakSampledPss": 595390464
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1729105920,
+            "peakSampledPss": 1354080256
+          },
+          "warm1": {
+            "samples": 13,
+            "peakSampledRss": 1876533248,
+            "peakSampledPss": 1502505984
+          },
+          "warm2": {
+            "samples": 13,
+            "peakSampledRss": 2002886656,
+            "peakSampledPss": 1629488128
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1761361920,
+            "peakSampledPss": 1386464256
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2045181952,
+            "peakSampledPss": 1671413760
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1771757568,
+            "peakSampledPss": 1397223424
+          },
+          "offline": {
+            "samples": 30,
+            "peakSampledRss": 1822494720,
+            "peakSampledPss": 1447858176
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "firefox",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1097.663211999985,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13268.68839200004,
+          "compilerMs": 12920,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3524.7351840000483,
+          "compilerMs": 3104,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3517.390238999971,
+          "compilerMs": 3118,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 508.35344800003804,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8459.578389000031,
+          "compilerMs": 8055,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 148,
+        "pssSamples": 147,
+        "peakSampledRss": 1997074432,
+        "peakSampledPss": 1624546304,
+        "byPhase": {
+          "cold": {
+            "samples": 49,
+            "peakSampledRss": 1748078592,
+            "peakSampledPss": 1378249728
+          },
+          "startup": {
+            "samples": 8,
+            "peakSampledRss": 876498944,
+            "peakSampledPss": 525675520
+          },
+          "setup": {
+            "samples": 5,
+            "peakSampledRss": 959348736,
+            "peakSampledPss": 599753728
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1742069760,
+            "peakSampledPss": 1368339456
+          },
+          "warm1": {
+            "samples": 12,
+            "peakSampledRss": 1869684736,
+            "peakSampledPss": 1497357312
+          },
+          "warm2": {
+            "samples": 13,
+            "peakSampledRss": 1997074432,
+            "peakSampledPss": 1624546304
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 1933279232,
+            "peakSampledPss": 1560828928
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1550610432,
+            "peakSampledPss": 1176766464
+          },
+          "offline": {
+            "samples": 29,
+            "peakSampledRss": 1895395328,
+            "peakSampledPss": 1526654976
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "webkit",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 507.6944590000203,
+          "assetBodyBytes": 4484392
+        },
+        "cold": {
+          "wallMs": 10609.74326899997,
+          "compilerMs": 10192,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3313.0448069999693,
+          "compilerMs": 2977,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 2904.8747330000624,
+          "compilerMs": 2638,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 327.50032300001476,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7859.943367999978,
+          "compilerMs": 7468,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23648,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 123,
+        "pssSamples": 123,
+        "peakSampledRss": 2143199232,
+        "peakSampledPss": 2002888704,
+        "byPhase": {
+          "cold": {
+            "samples": 39,
+            "peakSampledRss": 1530560512,
+            "peakSampledPss": 1375896576
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 551940096,
+            "peakSampledPss": 396723200
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 629420032,
+            "peakSampledPss": 472665088
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1529896960,
+            "peakSampledPss": 1371127808
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1664827392,
+            "peakSampledPss": 1506269184
+          },
+          "warm2": {
+            "samples": 10,
+            "peakSampledRss": 1664749568,
+            "peakSampledPss": 1506142208
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2143199232,
+            "peakSampledPss": 2002888704
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1272541184,
+            "peakSampledPss": 1114047488
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 1680752640,
+            "peakSampledPss": 1522501632
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "webkit",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 520.8874940000242,
+          "assetBodyBytes": 4484392
+        },
+        "cold": {
+          "wallMs": 11015.60367900005,
+          "compilerMs": 10644,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 30321
+        },
+        "warm1": {
+          "wallMs": 3199.1047399999807,
+          "compilerMs": 2917,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 8865
+        },
+        "warm2": {
+          "wallMs": 3146.0773340000305,
+          "compilerMs": 2878,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 9179
+        },
+        "offlineReload": {
+          "wallMs": 322.8469439999899,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7733.327239000006,
+          "compilerMs": 7341,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23646,
+      "export": {
+        "attempts": 44,
+        "acceptedResponses": 44,
+        "attemptedBodyBytes": 96261
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 127,
+        "pssSamples": 127,
+        "peakSampledRss": 2070040576,
+        "peakSampledPss": 1931400192,
+        "byPhase": {
+          "cold": {
+            "samples": 40,
+            "peakSampledRss": 1599860736,
+            "peakSampledPss": 1441605632
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 547319808,
+            "peakSampledPss": 392436736
+          },
+          "setup": {
+            "samples": 4,
+            "peakSampledRss": 660287488,
+            "peakSampledPss": 502823936
+          },
+          "warm1": {
+            "samples": 12,
+            "peakSampledRss": 1582055424,
+            "peakSampledPss": 1424122880
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1575157760,
+            "peakSampledPss": 1416705024
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 2070040576,
+            "peakSampledPss": 1931400192
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1320873984,
+            "peakSampledPss": 1163167744
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 1573142528,
+            "peakSampledPss": 1414906880
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1581985792,
+            "peakSampledPss": 1423389696
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 2,
+      "browser": "webkit",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 513.1784710000502,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 10883.219183000037,
+          "compilerMs": 10479,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3351.5258809999796,
+          "compilerMs": 2937,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3334.983114999952,
+          "compilerMs": 2903,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 339.15664099995047,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7758.040055999998,
+          "compilerMs": 7376,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 126,
+        "pssSamples": 126,
+        "peakSampledRss": 2121265152,
+        "peakSampledPss": 1962719232,
+        "byPhase": {
+          "cold": {
+            "samples": 40,
+            "peakSampledRss": 1462202368,
+            "peakSampledPss": 1301403648
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 546349056,
+            "peakSampledPss": 391254016
+          },
+          "setup": {
+            "samples": 3,
+            "peakSampledRss": 651309056,
+            "peakSampledPss": 494097408
+          },
+          "warm1": {
+            "samples": 12,
+            "peakSampledRss": 1622007808,
+            "peakSampledPss": 1463855104
+          },
+          "warm2": {
+            "samples": 12,
+            "peakSampledRss": 1618685952,
+            "peakSampledPss": 1460135936
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2121265152,
+            "peakSampledPss": 1962719232
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1296871424,
+            "peakSampledPss": 1138587648
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 1581514752,
+            "peakSampledPss": 1423561728
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1587818496,
+            "peakSampledPss": 1428914176
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "chromium",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 384.0049209999852,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 8931.405003999942,
+          "compilerMs": 8644.099999904633,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 33359
+        },
+        "warm1": {
+          "wallMs": 2969.714830999961,
+          "compilerMs": 2759.4000000953674,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 3925
+        },
+        "warm2": {
+          "wallMs": 3030.5134059999837,
+          "compilerMs": 2788.0999999046326,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 15851
+        },
+        "offlineReload": {
+          "wallMs": 255.16148700006306,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7005.226158999954,
+          "compilerMs": 6714,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 25113,
+      "export": {
+        "attempts": 37,
+        "acceptedResponses": 37,
+        "attemptedBodyBytes": 99820
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 104,
+        "pssSamples": 104,
+        "peakSampledRss": 1462927360,
+        "peakSampledPss": 1180770304,
+        "byPhase": {
+          "cold": {
+            "samples": 34,
+            "peakSampledRss": 1211002880,
+            "peakSampledPss": 951999488
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 417996800,
+            "peakSampledPss": 182935552
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 536629248,
+            "peakSampledPss": 278730752
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1236185088,
+            "peakSampledPss": 957799424
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1317216256,
+            "peakSampledPss": 1048302592
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1220878336,
+            "peakSampledPss": 949703680
+          },
+          "preparation": {
+            "samples": 18,
+            "peakSampledRss": 1462927360,
+            "peakSampledPss": 1180770304
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 899944448,
+            "peakSampledPss": 634228736
+          },
+          "offline": {
+            "samples": 25,
+            "peakSampledRss": 1365098496,
+            "peakSampledPss": 1106157568
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "chromium",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 356.5017049999442,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 9031.615568000008,
+          "compilerMs": 8748.400000095367,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 2978.5101199999917,
+          "compilerMs": 2744.6000003814697,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3007.487904999987,
+          "compilerMs": 2755.7000002861023,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 286.8375010000309,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 6832.979354000068,
+          "compilerMs": 6525.599999904633,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 101,
+        "pssSamples": 101,
+        "peakSampledRss": 1480318976,
+        "peakSampledPss": 1206353920,
+        "byPhase": {
+          "cold": {
+            "samples": 34,
+            "peakSampledRss": 1184215040,
+            "peakSampledPss": 927588352
+          },
+          "startup": {
+            "samples": 1,
+            "peakSampledRss": 443318272,
+            "peakSampledPss": 204659712
+          },
+          "setup": {
+            "samples": 1,
+            "peakSampledRss": 542089216,
+            "peakSampledPss": 290674688
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1214623744,
+            "peakSampledPss": 947420160
+          },
+          "warm1": {
+            "samples": 10,
+            "peakSampledRss": 1218408448,
+            "peakSampledPss": 947138560
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1238949888,
+            "peakSampledPss": 976912384
+          },
+          "preparation": {
+            "samples": 17,
+            "peakSampledRss": 1480318976,
+            "peakSampledPss": 1206353920
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 860545024,
+            "peakSampledPss": 596851712
+          },
+          "offline": {
+            "samples": 24,
+            "peakSampledRss": 1345810432,
+            "peakSampledPss": 1084779520
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "chromium",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 460.001925000106,
+          "assetBodyBytes": 10650041
+        },
+        "cold": {
+          "wallMs": 9144.738760999986,
+          "compilerMs": 8870.900000095367,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 2926.3698469999945,
+          "compilerMs": 2675.300000190735,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3178.7107789999573,
+          "compilerMs": 2904.699999809265,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 236.60725999996066,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 6833.651469000033,
+          "compilerMs": 6545.400000095367,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "153.0.8010.12",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 25151,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 103,
+        "pssSamples": 103,
+        "peakSampledRss": 1551302656,
+        "peakSampledPss": 1278054400,
+        "byPhase": {
+          "cold": {
+            "samples": 34,
+            "peakSampledRss": 1224953856,
+            "peakSampledPss": 968599552
+          },
+          "startup": {
+            "samples": 2,
+            "peakSampledRss": 497016832,
+            "peakSampledPss": 255924224
+          },
+          "setup": {
+            "samples": 1,
+            "peakSampledRss": 530767872,
+            "peakSampledPss": 274414592
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1154985984,
+            "peakSampledPss": 889737216
+          },
+          "warm1": {
+            "samples": 10,
+            "peakSampledRss": 1212157952,
+            "peakSampledPss": 941805568
+          },
+          "warm2": {
+            "samples": 12,
+            "peakSampledRss": 1238953984,
+            "peakSampledPss": 977240064
+          },
+          "preparation": {
+            "samples": 17,
+            "peakSampledRss": 1551302656,
+            "peakSampledPss": 1278054400
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1045307392,
+            "peakSampledPss": 771962880
+          },
+          "offline": {
+            "samples": 25,
+            "peakSampledRss": 1224392704,
+            "peakSampledPss": 961809408
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "firefox",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1480.5465199999744,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13979.471205999958,
+          "compilerMs": 13601,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79596791,
+          "exportAttemptBodyBytes": 32374
+        },
+        "warm1": {
+          "wallMs": 4000.5545070000226,
+          "compilerMs": 3580,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 64588,
+          "exportAttemptBodyBytes": 7781
+        },
+        "warm2": {
+          "wallMs": 3642.82571200002,
+          "compilerMs": 3272,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 9548
+        },
+        "offlineReload": {
+          "wallMs": 478.8782300000312,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8569.073380000074,
+          "compilerMs": 8152,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 123058704,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23635,
+      "export": {
+        "attempts": 45,
+        "acceptedResponses": 45,
+        "attemptedBodyBytes": 96648
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 156,
+        "pssSamples": 156,
+        "peakSampledRss": 2016288768,
+        "peakSampledPss": 1646092288,
+        "byPhase": {
+          "cold": {
+            "samples": 52,
+            "peakSampledRss": 1744105472,
+            "peakSampledPss": 1373684736
+          },
+          "startup": {
+            "samples": 10,
+            "peakSampledRss": 869842944,
+            "peakSampledPss": 519280640
+          },
+          "setup": {
+            "samples": 5,
+            "peakSampledRss": 947597312,
+            "peakSampledPss": 588521472
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1820758016,
+            "peakSampledPss": 1446718464
+          },
+          "warm1": {
+            "samples": 14,
+            "peakSampledRss": 1877176320,
+            "peakSampledPss": 1504854016
+          },
+          "warm2": {
+            "samples": 13,
+            "peakSampledRss": 1958658048,
+            "peakSampledPss": 1587838976
+          },
+          "delivery": {
+            "samples": 1,
+            "peakSampledRss": 1827827712,
+            "peakSampledPss": 1455513600
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2016288768,
+            "peakSampledPss": 1646092288
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1458126848,
+            "peakSampledPss": 1084600320
+          },
+          "offline": {
+            "samples": 30,
+            "peakSampledRss": 1917218816,
+            "peakSampledPss": 1544236032
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "firefox",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1331.270485999994,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 13222.131850000005,
+          "compilerMs": 12830,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3682.8145050000167,
+          "compilerMs": 3292,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3746.4985890000826,
+          "compilerMs": 3405,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 459.18682199995965,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8239.080570999999,
+          "compilerMs": 7842,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 148,
+        "pssSamples": 148,
+        "peakSampledRss": 2003636224,
+        "peakSampledPss": 1631524864,
+        "byPhase": {
+          "cold": {
+            "samples": 49,
+            "peakSampledRss": 1743409152,
+            "peakSampledPss": 1373679616
+          },
+          "startup": {
+            "samples": 9,
+            "peakSampledRss": 868192256,
+            "peakSampledPss": 517025792
+          },
+          "setup": {
+            "samples": 4,
+            "peakSampledRss": 946151424,
+            "peakSampledPss": 587037696
+          },
+          "warm1": {
+            "samples": 13,
+            "peakSampledRss": 1854345216,
+            "peakSampledPss": 1482344448
+          },
+          "warm2": {
+            "samples": 14,
+            "peakSampledRss": 2003636224,
+            "peakSampledPss": 1631524864
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 1946906624,
+            "peakSampledPss": 1573960704
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1569042432,
+            "peakSampledPss": 1195166720
+          },
+          "offline": {
+            "samples": 30,
+            "peakSampledRss": 1833193472,
+            "peakSampledPss": 1465768960
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "firefox",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 1122.7057679999853,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 12750.473530999967,
+          "compilerMs": 12430,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79564497,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3650.7780669999775,
+          "compilerMs": 3256,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3751.163700999925,
+          "compilerMs": 3403,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 32294,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 448.3793820000719,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8670.842737999978,
+          "compilerMs": 8285,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "157.0",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32714990,
+      "assetTotalBodyBytes": 122994116,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23634,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 148,
+        "pssSamples": 148,
+        "peakSampledRss": 1973350400,
+        "peakSampledPss": 1599978496,
+        "byPhase": {
+          "cold": {
+            "samples": 46,
+            "peakSampledRss": 1730514944,
+            "peakSampledPss": 1359748096
+          },
+          "startup": {
+            "samples": 8,
+            "peakSampledRss": 833036288,
+            "peakSampledPss": 485630976
+          },
+          "setup": {
+            "samples": 6,
+            "peakSampledRss": 946647040,
+            "peakSampledPss": 586428416
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1676038144,
+            "peakSampledPss": 1303691264
+          },
+          "warm1": {
+            "samples": 13,
+            "peakSampledRss": 1840144384,
+            "peakSampledPss": 1467939840
+          },
+          "warm2": {
+            "samples": 14,
+            "peakSampledRss": 1973350400,
+            "peakSampledPss": 1599978496
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 1907654656,
+            "peakSampledPss": 1533824000
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1429528576,
+            "peakSampledPss": 1054852096
+          },
+          "offline": {
+            "samples": 31,
+            "peakSampledRss": 1938636800,
+            "peakSampledPss": 1564761088
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "webkit",
+      "mode": "remote",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 537.6786169999978,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 10719.339910999988,
+          "compilerMs": 10400,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 32681
+        },
+        "warm1": {
+          "wallMs": 3254.4776389999315,
+          "compilerMs": 2889,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 8865
+        },
+        "warm2": {
+          "wallMs": 3147.5289849999826,
+          "compilerMs": 2858,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 9546
+        },
+        "offlineReload": {
+          "wallMs": 320.3606409999775,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 8151.002838999964,
+          "compilerMs": 7745,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "remoteCompileReceived": true,
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23647,
+      "export": {
+        "attempts": 46,
+        "acceptedResponses": 46,
+        "attemptedBodyBytes": 96995
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 126,
+        "pssSamples": 126,
+        "peakSampledRss": 2395246592,
+        "peakSampledPss": 2236569600,
+        "byPhase": {
+          "cold": {
+            "samples": 39,
+            "peakSampledRss": 1648476160,
+            "peakSampledPss": 1490357248
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 546914304,
+            "peakSampledPss": 392010752
+          },
+          "setup": {
+            "samples": 4,
+            "peakSampledRss": 656379904,
+            "peakSampledPss": 498859008
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 2395246592,
+            "peakSampledPss": 2236569600
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1752674304,
+            "peakSampledPss": 1599050752
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1739624448,
+            "peakSampledPss": 1579279360
+          },
+          "preparation": {
+            "samples": 28,
+            "peakSampledRss": 2382110720,
+            "peakSampledPss": 2201564160
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1773387776,
+            "peakSampledPss": 1615733760
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 2392723456,
+            "peakSampledPss": 2234275840
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "webkit",
+      "mode": "disabled",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 561.5326139999088,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 10529.71720199997,
+          "compilerMs": 10130,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3120.71632700006,
+          "compilerMs": 2847,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3291.5408290000632,
+          "compilerMs": 2928,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 294.92390199995134,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7701.483818999957,
+          "compilerMs": 7330,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 0,
+      "localBufferedBytesAfterOffline": 0,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 123,
+        "pssSamples": 123,
+        "peakSampledRss": 2057748480,
+        "peakSampledPss": 1911240704,
+        "byPhase": {
+          "cold": {
+            "samples": 39,
+            "peakSampledRss": 1479475200,
+            "peakSampledPss": 1321585664
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 547037184,
+            "peakSampledPss": 391773184
+          },
+          "setup": {
+            "samples": 2,
+            "peakSampledRss": 635219968,
+            "peakSampledPss": 478387200
+          },
+          "inspection": {
+            "samples": 2,
+            "peakSampledRss": 1574199296,
+            "peakSampledPss": 1415239680
+          },
+          "warm1": {
+            "samples": 10,
+            "peakSampledRss": 1585041408,
+            "peakSampledPss": 1427372032
+          },
+          "warm2": {
+            "samples": 12,
+            "peakSampledRss": 1614651392,
+            "peakSampledPss": 1456154624
+          },
+          "preparation": {
+            "samples": 27,
+            "peakSampledRss": 2057748480,
+            "peakSampledPss": 1911240704
+          },
+          "offlineReload": {
+            "samples": 1,
+            "peakSampledRss": 1329713152,
+            "peakSampledPss": 1168017408
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 1551421440,
+            "peakSampledPss": 1397385216
+          }
+        },
+        "samplerFailed": false
+      }
+    },
+    {
+      "run": 3,
+      "browser": "webkit",
+      "mode": "local",
+      "outcome": "success",
+      "phases": {
+        "startup": {
+          "wallMs": 547.8326339999912,
+          "assetBodyBytes": 4516686
+        },
+        "cold": {
+          "wallMs": 10513.506727,
+          "compilerMs": 10072,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 79532203,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm1": {
+          "wallMs": 3342.7088890000014,
+          "compilerMs": 3082,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "warm2": {
+          "wallMs": 3132.6067969999276,
+          "compilerMs": 2865,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        },
+        "offlineReload": {
+          "wallMs": 351.72275499999523,
+          "assetBodyBytes": 0
+        },
+        "offline": {
+          "wallMs": 7690.292771999957,
+          "compilerMs": 7342,
+          "pdfBytes": 26210,
+          "assetBodyBytes": 0,
+          "exportAttemptBodyBytes": 0
+        }
+      },
+      "browserVersion": "27.2",
+      "buildIdentity": {
+        "version": "0.1.0",
+        "revision": "08f368e6c2f13198a9cb8eb6c702c54ba1b8e9ed",
+        "dirty": true,
+        "compilerAdapterSha256": "db89b3b760c42ceadf7626ddebbbb200ca3ad9ae7b7e1cad20d31616505b2580"
+      },
+      "preparationAssetBodyBytes": 32682696,
+      "assetTotalBodyBytes": 122864940,
+      "localEventsAfterOffline": 98,
+      "localBufferedBytesAfterOffline": 23646,
+      "export": {
+        "attempts": 0,
+        "acceptedResponses": 0,
+        "attemptedBodyBytes": 0
+      },
+      "memory": {
+        "intervalMs": 250,
+        "samples": 125,
+        "pssSamples": 125,
+        "peakSampledRss": 2190606336,
+        "peakSampledPss": 2032026624,
+        "byPhase": {
+          "cold": {
+            "samples": 38,
+            "peakSampledRss": 1531625472,
+            "peakSampledPss": 1372808192
+          },
+          "startup": {
+            "samples": 3,
+            "peakSampledRss": 548110336,
+            "peakSampledPss": 393127936
+          },
+          "setup": {
+            "samples": 3,
+            "peakSampledRss": 646156288,
+            "peakSampledPss": 488543232
+          },
+          "inspection": {
+            "samples": 1,
+            "peakSampledRss": 1541877760,
+            "peakSampledPss": 1384117248
+          },
+          "warm1": {
+            "samples": 11,
+            "peakSampledRss": 1649508352,
+            "peakSampledPss": 1493087232
+          },
+          "warm2": {
+            "samples": 11,
+            "peakSampledRss": 1677176832,
+            "peakSampledPss": 1518814208
+          },
+          "preparation": {
+            "samples": 29,
+            "peakSampledRss": 2190606336,
+            "peakSampledPss": 2032026624
+          },
+          "offlineReload": {
+            "samples": 2,
+            "peakSampledRss": 1194065920,
+            "peakSampledPss": 1035355136
+          },
+          "offline": {
+            "samples": 27,
+            "peakSampledRss": 1646923776,
+            "peakSampledPss": 1492321280
+          }
+        },
+        "samplerFailed": false
+      }
+    }
+  ],
+  "privacyChecked": true,
+  "summary": [
+    {
+      "browser": "chromium",
+      "modes": [
+        {
+          "mode": "disabled",
+          "trials": 3,
+          "medians": {
+            "startupMs": 388.40467499999795,
+            "coldCompileMs": 9135.053796000022,
+            "warmCompileMs": 3097.5323025000007,
+            "offlineCompileMs": 6876.902777000039,
+            "peakPssBytes": 1225065472,
+            "assetBodyBytes": 122994116,
+            "exportAttemptBodyBytes": 0
+          }
+        },
+        {
+          "mode": "local",
+          "trials": 3,
+          "medians": {
+            "startupMs": 431.7398510000203,
+            "coldCompileMs": 9030.193777000008,
+            "warmCompileMs": 3040.5378615000045,
+            "offlineCompileMs": 6833.651469000033,
+            "peakPssBytes": 1197195264,
+            "assetBodyBytes": 122994116,
+            "exportAttemptBodyBytes": 0
+          }
+        },
+        {
+          "mode": "remote",
+          "trials": 3,
+          "medians": {
+            "startupMs": 372.0796210000044,
+            "coldCompileMs": 9007.234292999994,
+            "warmCompileMs": 3050.247372999962,
+            "offlineCompileMs": 7082.59820800001,
+            "peakPssBytes": 1185587200,
+            "assetBodyBytes": 122994116,
+            "exportAttemptBodyBytes": 99514
+          }
+        }
+      ],
+      "pairedChanges": [
+        {
+          "mode": "local",
+          "medianPercentVersusDisabled": {
+            "startupMs": 11.157223068960898,
+            "coldCompileMs": -1.147886168398149,
+            "warmCompileMs": -1.839995048768217,
+            "offlineCompileMs": -0.806209312221684,
+            "peakPssBytes": -2.274997429688397,
+            "assetBodyBytes": 0
+          }
+        },
+        {
+          "mode": "remote",
+          "medianPercentVersusDisabled": {
+            "startupMs": -8.598454691614588,
+            "coldCompileMs": -1.1095530278671606,
+            "warmCompileMs": 0.2377249698468864,
+            "offlineCompileMs": 2.5208155341352123,
+            "peakPssBytes": -2.1207388292815432,
+            "assetBodyBytes": 0
+          }
+        }
+      ]
+    },
+    {
+      "browser": "firefox",
+      "modes": [
+        {
+          "mode": "disabled",
+          "trials": 3,
+          "medians": {
+            "startupMs": 1331.270485999994,
+            "coldCompileMs": 13268.68839200004,
+            "warmCompileMs": 3708.8788260000074,
+            "offlineCompileMs": 8459.578389000031,
+            "peakPssBytes": 1628724224,
+            "assetBodyBytes": 122994116,
+            "exportAttemptBodyBytes": 0
+          }
+        },
+        {
+          "mode": "local",
+          "trials": 3,
+          "medians": {
+            "startupMs": 1122.7057679999853,
+            "coldCompileMs": 13222.959925000003,
+            "warmCompileMs": 3700.970883999951,
+            "offlineCompileMs": 8670.842737999978,
+            "peakPssBytes": 1619829760,
+            "assetBodyBytes": 122994116,
+            "exportAttemptBodyBytes": 0
+          }
+        },
+        {
+          "mode": "remote",
+          "trials": 3,
+          "medians": {
+            "startupMs": 1227.777237000002,
+            "coldCompileMs": 13189.778801000008,
+            "warmCompileMs": 3651.485568999982,
+            "offlineCompileMs": 8569.073380000074,
+            "peakPssBytes": 1646092288,
+            "assetBodyBytes": 123026410,
+            "exportAttemptBodyBytes": 96189
+          }
+        }
+      ],
+      "pairedChanges": [
+        {
+          "mode": "local",
+          "medianPercentVersusDisabled": {
+            "startupMs": -15.666592190943351,
+            "coldCompileMs": -3.5671881384244264,
+            "warmCompileMs": 1.2613222403509816,
+            "offlineCompileMs": 2.3453644249367134,
+            "peakPssBytes": -0.5461000621797107,
+            "assetBodyBytes": 0
+          }
+        },
+        {
+          "mode": "remote",
+          "medianPercentVersusDisabled": {
+            "startupMs": 11.213050658736012,
+            "coldCompileMs": -2.857121757630521,
+            "warmCompileMs": 2.8813851602623064,
+            "offlineCompileMs": 3.7502144154787587,
+            "peakPssBytes": 1.0273169486548994,
+            "assetBodyBytes": 0.026256540597446865
+          }
+        }
+      ]
+    },
+    {
+      "browser": "webkit",
+      "modes": [
+        {
+          "mode": "disabled",
+          "trials": 3,
+          "medians": {
+            "startupMs": 519.5315119999868,
+            "coldCompileMs": 10530.499045000004,
+            "warmCompileMs": 3206.1285780000617,
+            "offlineCompileMs": 7758.040055999998,
+            "peakPssBytes": 1962719232,
+            "assetBodyBytes": 122864940,
+            "exportAttemptBodyBytes": 0
+          }
+        },
+        {
+          "mode": "local",
+          "trials": 3,
+          "medians": {
+            "startupMs": 508.4521609999938,
+            "coldCompileMs": 10609.74326899997,
+            "warmCompileMs": 3125.9057430000103,
+            "offlineCompileMs": 7849.296800000011,
+            "peakPssBytes": 2002888704,
+            "assetBodyBytes": 122864940,
+            "exportAttemptBodyBytes": 0
+          }
+        },
+        {
+          "mode": "remote",
+          "trials": 3,
+          "medians": {
+            "startupMs": 520.8874940000242,
+            "coldCompileMs": 10719.339910999988,
+            "warmCompileMs": 3201.003311999957,
+            "offlineCompileMs": 8134.121501000016,
+            "peakPssBytes": 1993656320,
+            "assetBodyBytes": 122864940,
+            "exportAttemptBodyBytes": 96261
+          }
+        }
+      ],
+      "pairedChanges": [
+        {
+          "mode": "local",
+          "medianPercentVersusDisabled": {
+            "startupMs": -2.1325657335667714,
+            "coldCompileMs": -0.15394976606676325,
+            "warmCompileMs": -2.0032176614889763,
+            "offlineCompileMs": -0.14531027089080828,
+            "peakPssBytes": 2.046623446954632,
+            "assetBodyBytes": 0
+          }
+        },
+        {
+          "mode": "remote",
+          "medianPercentVersusDisabled": {
+            "startupMs": -4.248016304875735,
+            "coldCompileMs": 1.216409352545278,
+            "warmCompileMs": -0.15985840478368596,
+            "offlineCompileMs": 1.1812915851758587,
+            "peakPssBytes": 0.27560042625101033,
+            "assetBodyBytes": 0
+          }
+        }
+      ]
+    }
+  ]
+}

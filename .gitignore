@@ -1,0 +1,29 @@
+/target/
+/node_modules
+/dist/
+/.pages/
+/.telemetry/
+/web/pkg/
+/public/core/
+/public/fixtures/
+/.cache/
+/tmp/
+/test-results/
+/playwright-report/
+*.sqlite*
+.env
+/.private/
+.env.*
+!.env.example
+/credentials/
+
+# Native browser crash dumps are local disposable diagnostics.
+/core.[0-9]*
+/.pages-release.env
+
+# Local opaque service state and operator configuration.
+/service-data/
+/service.json
+
+# Local agent tooling configuration.
+/.claude/

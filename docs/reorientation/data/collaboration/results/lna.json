@@ -1,0 +1,131 @@
+{
+ "public,default": {
+  "args": [
+   "--ip-address-space-overrides=127.0.0.1:5191=public"
+  ],
+  "permissions": [],
+  "fetch": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 9
+  },
+  "connected": true,
+  "state": [
+   "connected",
+   "connected",
+   "connected",
+   "connected"
+  ],
+  "ms": 12
+ },
+ "public,feature": {
+  "args": [
+   "--ip-address-space-overrides=127.0.0.1:5191=public",
+   "--enable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebRTC"
+  ],
+  "permissions": [],
+  "fetch": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 7
+  },
+  "connected": false,
+  "state": [
+   "new",
+   "new",
+   "new",
+   "new"
+  ]
+ },
+ "public,feature,loopbackonly=true": {
+  "args": [
+   "--ip-address-space-overrides=127.0.0.1:5191=public",
+   "--enable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebRTC:LocalNetworkAccessChecksWebRTCLoopbackOnly/true"
+  ],
+  "permissions": [],
+  "fetch": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 8
+  },
+  "connected": true,
+  "state": [
+   "connected",
+   "connected",
+   "connected",
+   "connected"
+  ],
+  "ms": 12
+ },
+ "public,feature,granted local-network": {
+  "args": [
+   "--ip-address-space-overrides=127.0.0.1:5191=public",
+   "--enable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebRTC"
+  ],
+  "permissions": [
+   "local-network"
+  ],
+  "error": "Error: agent start timeout chromium node:internal/modules/run_main:123\n    triggerUncaughtException(\n    ^\n\nbrowser.newContext: Unknown permission: local-network\n    at async file://<scratch>/collab/agent.mjs:10:152 {\n  log: [],\n  name: 'Error'\n}\n\nNode.js v22.23.4\n"
+ },
+ "public,feature,granted local-network-access": {
+  "args": [
+   "--ip-address-space-overrides=127.0.0.1:5191=public",
+   "--enable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebRTC"
+  ],
+  "permissions": [
+   "local-network-access"
+  ],
+  "fetch": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 5
+  },
+  "connected": true,
+  "state": [
+   "connected",
+   "connected",
+   "connected",
+   "connected"
+  ],
+  "ms": 15
+ },
+ "localpage,feature": {
+  "args": [
+   "--enable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebRTC"
+  ],
+  "permissions": [],
+  "fetch": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 10
+  },
+  "connected": true,
+  "state": [
+   "connected",
+   "connected",
+   "connected",
+   "connected"
+  ],
+  "ms": 16
+ },
+ "privatepage,feature": {
+  "args": [
+   "--ip-address-space-overrides=127.0.0.1:5191=local",
+   "--enable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebRTC"
+  ],
+  "permissions": [],
+  "fetch": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 9
+  },
+  "connected": true,
+  "state": [
+   "connected",
+   "connected",
+   "connected",
+   "connected"
+  ],
+  "ms": 14
+ }
+}

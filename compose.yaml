@@ -1,0 +1,20 @@
+services:
+  sync:
+    # Built locally with nix build .#service-image, pinned by flake.lock/Cargo.lock.
+    image: scribyra-sync:0.1.0-s1
+    pull_policy: never
+    ports:
+      - "127.0.0.1:8787:8787"
+    environment:
+      SCRIBYRA_SERVICE_CONFIG: /config/service.json
+    volumes:
+      - sync-data:/data
+      - ./service.json:/config/service.json:ro
+    init: true
+    read_only: true
+    stop_grace_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  sync-data:

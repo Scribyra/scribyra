@@ -1,0 +1,450 @@
+helper-paste missing-package 1 S0b-inject 16 2570 520 true 
+helper-paste missing-package 1 S1 67 68 516 true ### Result
+"project=missing-package active=main.tex files=1 busy=0"
+helper-paste missing-package 1 S2 341 73 7713 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+
+helper-paste missing-package 1 S3 120 69 520 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+helper-paste missing-package 1 S4 95 70 521 true ### Result
+"error Missing TeX file: scribyra-does-not-exist.sty scribyra-does-not-exist.sty:\n"
+helper-paste missing-package 1 S5 145 71 517 true want \documentclass{article}\usepackage{scribyra-does-n
+helper-paste missing-package 1 S6 26 118 555 true ### Result
+"edited line=1"
+helper-paste missing-package 1 S7 311 73 4002 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 2.77 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste missing-package 2 S0b-inject 16 2570 520 true 
+helper-paste missing-package 2 S1 67 68 518 true ### Result
+"project=missing-package active=main.tex files=1 busy=0"
+helper-paste missing-package 2 S2 341 73 7627 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+
+helper-paste missing-package 2 S3 120 69 543 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+helper-paste missing-package 2 S4 95 70 526 true ### Result
+"error Missing TeX file: scribyra-does-not-exist.sty scribyra-does-not-exist.sty:\n"
+helper-paste missing-package 2 S5 145 71 516 true want \documentclass{article}\usepackage{scribyra-does-n
+helper-paste missing-package 2 S6 26 118 538 true ### Result
+"edited line=1"
+helper-paste missing-package 2 S7 311 73 4262 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 3.05 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste missing-package 3 S0b-inject 16 2570 517 true 
+helper-paste missing-package 3 S1 67 68 516 true ### Result
+"project=missing-package active=main.tex files=1 busy=0"
+helper-paste missing-package 3 S2 341 73 7761 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+
+helper-paste missing-package 3 S3 120 69 526 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+helper-paste missing-package 3 S4 95 70 518 true ### Result
+"error Missing TeX file: scribyra-does-not-exist.sty scribyra-does-not-exist.sty:\n"
+helper-paste missing-package 3 S5 145 71 521 true want \documentclass{article}\usepackage{scribyra-does-n
+helper-paste missing-package 3 S6 26 118 555 true ### Result
+"edited line=1"
+helper-paste missing-package 3 S7 311 73 3986 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 2.77 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste article 4 S0b-inject 16 2570 517 true 
+helper-paste article 4 S1 59 68 513 true ### Result
+"project=article active=main.tex files=2 busy=0"
+helper-paste article 4 S2 310 73 11017 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 9.75 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste article 4 S3 88 69 530 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 9.75 s · 1 page"
+helper-paste article 4 S4 216 70 524 true ### Result
+"\nLaTeX Warning: Reference `sec:math' on page 1 undefined on input line 8.\nLaTeX Warning: There were undefi
+helper-paste article 4 S5 454 71 524 true want \section{Mathematics}\label{sec:math}
+helper-paste article 4 S6 26 109 540 true ### Result
+"edited line=5"
+helper-paste article 4 S7 280 73 4729 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 3.54 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste article 5 S0b-inject 16 2570 522 true 
+helper-paste article 5 S1 59 68 519 true ### Result
+"project=article active=main.tex files=2 busy=0"
+helper-paste article 5 S2 310 73 11223 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 9.97 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste article 5 S3 88 69 526 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 9.97 s · 1 page"
+helper-paste article 5 S4 216 70 517 true ### Result
+"\nLaTeX Warning: Reference `sec:math' on page 1 undefined on input line 8.\nLaTeX Warning: There were undefi
+helper-paste article 5 S5 454 71 521 true want \section{Mathematics}\label{sec:math}
+helper-paste article 5 S6 26 109 540 true ### Result
+"edited line=5"
+helper-paste article 5 S7 280 73 4788 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 3.58 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste article 6 S0b-inject 16 2570 519 true 
+helper-paste article 6 S1 59 68 519 true ### Result
+"project=article active=main.tex files=2 busy=0"
+helper-paste article 6 S2 311 73 11651 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 10.39 s · 1 page"
+### Page
+- Page URL: http://127.
+helper-paste article 6 S3 89 69 527 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 10.39 s · 1 page"
+helper-paste article 6 S4 216 70 532 true ### Result
+"\nLaTeX Warning: Reference `sec:math' on page 1 undefined on input line 8.\nLaTeX Warning: There were undefi
+helper-paste article 6 S5 454 71 523 true want \section{Mathematics}\label{sec:math}
+helper-paste article 6 S6 26 109 549 true ### Result
+"edited line=5"
+helper-paste article 6 S7 280 73 5131 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 3.93 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-paste thesis 7 S0b-inject 16 2570 523 true 
+helper-paste thesis 7 S1 60 68 512 true ### Result
+"project=thesis active=main.tex files=102 busy=0"
+helper-paste thesis 7 S2 282 73 15273 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 13.96 s · 100 pages"
+### Page
+- Page URL: http://1
+helper-paste thesis 7 S3 92 69 523 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 13.96 s · 100 pages"
+helper-paste thesis 7 S4 15 70 520 true ### Result
+"\n"
+helper-paste thesis 7 S5 747 166 2109 true want Research is a conversation between evidence and id
+helper-paste thesis 7 S6 26 119 562 true ### Result
+"edited line=1"
+helper-paste thesis 7 S7 314 73 2832 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log
+helper-paste thesis 7 S8 173 139 1051 true truth chapters/page-050.tex:1 got ### Result
+"error Undefined control sequence. :1\n"
+ATTR ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log" truth chapters/page-050.tex:1
+helper-paste thesis 8 S0b-inject 16 2570 520 true 
+helper-paste thesis 8 S1 60 68 518 true ### Result
+"project=thesis active=main.tex files=102 busy=0"
+helper-paste thesis 8 S2 282 73 15173 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 13.84 s · 100 pages"
+### Page
+- Page URL: http://1
+helper-paste thesis 8 S3 92 69 523 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 13.84 s · 100 pages"
+helper-paste thesis 8 S4 15 70 525 true ### Result
+"\n"
+helper-paste thesis 8 S5 747 166 2114 true want Research is a conversation between evidence and id
+helper-paste thesis 8 S6 26 119 559 true ### Result
+"edited line=1"
+helper-paste thesis 8 S7 314 73 2843 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log
+helper-paste thesis 8 S8 173 139 1039 true truth chapters/page-050.tex:1 got ### Result
+"error Undefined control sequence. :1\n"
+ATTR ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log" truth chapters/page-050.tex:1
+helper-paste thesis 9 S0b-inject 16 2570 517 true 
+helper-paste thesis 9 S1 60 68 517 true ### Result
+"project=thesis active=main.tex files=102 busy=0"
+helper-paste thesis 9 S2 282 73 14687 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 13.36 s · 100 pages"
+### Page
+- Page URL: http://1
+helper-paste thesis 9 S3 92 69 524 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 13.36 s · 100 pages"
+helper-paste thesis 9 S4 15 70 522 true ### Result
+"\n"
+helper-paste thesis 9 S5 747 166 2100 true want Research is a conversation between evidence and id
+helper-paste thesis 9 S6 26 119 562 true ### Result
+"edited line=1"
+helper-paste thesis 9 S7 314 73 2892 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log
+helper-paste thesis 9 S8 173 139 1038 true truth chapters/page-050.tex:1 got ### Result
+"error Undefined control sequence. :1\n"
+ATTR ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log" truth chapters/page-050.tex:1
+inline missing-package 1 S1 86 279 521 true ### Result
+{
+  "project": "missing-package",
+  "active": "main.tex",
+  "busy": false
+}
+inline missing-package 1 S2 354 422 7864 true ### Result
+{
+  "ok": false,
+  "issues": 1,
+  "warnings": 0,
+  "status": "Missing TeX file: scribyra-does-not-exist.sty ·
+inline missing-package 1 S3 70 127 528 true ### Result
+"Missing TeX file: scribyra-does-not-exist.sty · open log"
+inline missing-package 1 S4 132 157 521 true ### Result
+[
+  [
+    "error",
+    "Missing TeX file: scribyra-does-not-exist.sty",
+    "scribyra-does-not-exist.sty",
+  
+inline missing-package 1 S5 112 238 538 true want \documentclass{article}\usepackage{scribyra-does-n
+inline missing-package 1 S6 19 403 555 true ### Result
+"edited"
+inline missing-package 1 S7 326 422 4167 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 0,
+  "status": "Compiled · 2.94 s · 1 page"
+}
+### Page
+- Page UR
+inline missing-package 2 S1 86 279 520 true ### Result
+{
+  "project": "missing-package",
+  "active": "main.tex",
+  "busy": false
+}
+inline missing-package 2 S2 354 422 7967 true ### Result
+{
+  "ok": false,
+  "issues": 1,
+  "warnings": 0,
+  "status": "Missing TeX file: scribyra-does-not-exist.sty ·
+inline missing-package 2 S3 70 127 523 true ### Result
+"Missing TeX file: scribyra-does-not-exist.sty · open log"
+inline missing-package 2 S4 132 157 520 true ### Result
+[
+  [
+    "error",
+    "Missing TeX file: scribyra-does-not-exist.sty",
+    "scribyra-does-not-exist.sty",
+  
+inline missing-package 2 S5 112 238 518 true want \documentclass{article}\usepackage{scribyra-does-n
+inline missing-package 2 S6 19 403 539 true ### Result
+"edited"
+inline missing-package 2 S7 326 422 4225 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 0,
+  "status": "Compiled · 2.98 s · 1 page"
+}
+### Page
+- Page UR
+inline article 3 S1 78 279 521 true ### Result
+{
+  "project": "article",
+  "active": "main.tex",
+  "busy": false
+}
+inline article 3 S2 326 422 11330 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 3,
+  "status": "Compiled · 10.06 s · 1 page"
+}
+### Page
+- Page U
+inline article 3 S3 42 127 524 true ### Result
+"Compiled · 10.06 s · 1 page"
+inline article 3 S4 13 157 519 true ### Result
+[]
+inline article 3 S5 421 238 522 true want \section{Mathematics}\label{sec:math}
+inline article 3 S6 19 338 540 true ### Result
+"edited"
+inline article 3 S7 295 422 4819 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 3,
+  "status": "Compiled · 3.60 s · 1 page"
+}
+### Page
+- Page UR
+inline article 4 S1 78 279 520 true ### Result
+{
+  "project": "article",
+  "active": "main.tex",
+  "busy": false
+}
+inline article 4 S2 326 422 11392 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 3,
+  "status": "Compiled · 10.13 s · 1 page"
+}
+### Page
+- Page U
+inline article 4 S3 42 127 522 true ### Result
+"Compiled · 10.13 s · 1 page"
+inline article 4 S4 13 157 520 true ### Result
+[]
+inline article 4 S5 421 238 521 true want \section{Mathematics}\label{sec:math}
+inline article 4 S6 19 338 546 true ### Result
+"edited"
+inline article 4 S7 295 422 5065 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 3,
+  "status": "Compiled · 3.87 s · 1 page"
+}
+### Page
+- Page UR
+inline thesis 5 S1 77 279 521 true ### Result
+{
+  "project": "thesis",
+  "active": "main.tex",
+  "busy": false
+}
+inline thesis 5 S2 297 422 18331 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 0,
+  "status": "Compiled · 16.97 s · 100 pages"
+}
+### Page
+- Pag
+inline thesis 5 S3 45 127 524 true ### Result
+"Compiled · 16.97 s · 100 pages"
+inline thesis 5 S4 13 157 525 true ### Result
+[]
+inline thesis 5 S5 713 593 1260 true want Research is a conversation between evidence and id
+inline thesis 5 S6 19 346 573 true ### Result
+"edited"
+inline thesis 5 S7 307 422 3033 true ### Result
+{
+  "ok": false,
+  "issues": 1,
+  "warnings": 0,
+  "status": "Undefined control sequence. · open log"
+}
+### P
+inline thesis 5 S8 138 284 1047 true truth chapters/page-050.tex:1 got ### Result
+[
+  [
+    "error",
+    "Undefined control sequence.",
+    null,
+    1
+  ]
+]
+inline thesis 6 S1 77 279 523 true ### Result
+{
+  "project": "thesis",
+  "active": "main.tex",
+  "busy": false
+}
+inline thesis 6 S2 297 422 15653 true ### Result
+{
+  "ok": true,
+  "issues": 0,
+  "warnings": 0,
+  "status": "Compiled · 14.28 s · 100 pages"
+}
+### Page
+- Pag
+inline thesis 6 S3 45 127 522 true ### Result
+"Compiled · 14.28 s · 100 pages"
+inline thesis 6 S4 13 157 523 true ### Result
+[]
+inline thesis 6 S5 713 593 1262 true want Research is a conversation between evidence and id
+inline thesis 6 S6 19 346 559 true ### Result
+"edited"
+inline thesis 6 S7 307 422 2761 true ### Result
+{
+  "ok": false,
+  "issues": 1,
+  "warnings": 0,
+  "status": "Undefined control sequence. · open log"
+}
+### P
+inline thesis 6 S8 138 284 1052 true truth chapters/page-050.tex:1 got ### Result
+[
+  [
+    "error",
+    "Undefined control sequence.",
+    null,
+    1
+  ]
+]
+helper-init missing-package 1 S1 67 68 517 true ### Result
+"project=missing-package active=main.tex files=1 busy=0"
+helper-init missing-package 1 S2 341 73 8115 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+
+helper-init missing-package 1 S3 120 69 529 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=?:1 status=Missing TeX file: scribyra-does-not-exist.sty · open log"
+helper-init missing-package 1 S4 95 70 524 true ### Result
+"error Missing TeX file: scribyra-does-not-exist.sty scribyra-does-not-exist.sty:\n"
+helper-init missing-package 1 S5 145 71 520 true want \documentclass{article}\usepackage{scribyra-does-n
+helper-init missing-package 1 S6 26 118 540 true ### Result
+"edited line=1"
+helper-init missing-package 1 S7 311 73 4301 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 3.07 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-init article 2 S1 59 68 511 true ### Result
+"project=article active=main.tex files=2 busy=0"
+helper-init article 2 S2 311 73 11617 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 10.36 s · 1 page"
+### Page
+- Page URL: http://127.
+helper-init article 2 S3 89 69 522 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 10.36 s · 1 page"
+helper-init article 2 S4 216 70 520 true ### Result
+"\nLaTeX Warning: Reference `sec:math' on page 1 undefined on input line 8.\nLaTeX Warning: There were undefi
+helper-init article 2 S5 454 71 522 true want \section{Mathematics}\label{sec:math}
+helper-init article 2 S6 26 109 545 true ### Result
+"edited line=5"
+helper-init article 2 S7 280 73 5091 true ### Result
+"ok=1 errors=0 warnings=3 overfull=0 at= status=Compiled · 3.89 s · 1 page"
+### Page
+- Page URL: http://127.0
+helper-init thesis 3 S1 60 68 516 true ### Result
+"project=thesis active=main.tex files=102 busy=0"
+helper-init thesis 3 S2 282 73 15360 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 14.04 s · 100 pages"
+### Page
+- Page URL: http://1
+helper-init thesis 3 S3 92 69 524 true ### Result
+"ok=1 errors=0 warnings=0 overfull=0 at= status=Compiled · 14.04 s · 100 pages"
+helper-init thesis 3 S4 15 70 520 true ### Result
+"\n"
+helper-init thesis 3 S5 747 166 2099 true want Research is a conversation between evidence and id
+helper-init thesis 3 S6 26 119 558 true ### Result
+"edited line=1"
+helper-init thesis 3 S7 314 73 2853 true ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log
+helper-init thesis 3 S8 173 139 1048 true truth chapters/page-050.tex:1 got ### Result
+"error Undefined control sequence. :1\n"
+ATTR ### Result
+"ok=0 errors=1 warnings=0 overfull=0 at=chapters/page-050.tex:1 status=Undefined control sequence. · open log" truth chapters/page-050.tex:1
+dt-slim missing-package 1 S0b-inject 2 2560 212 false 
+dt-slim missing-package 1 S1 2 58 5 false {}
+dt-slim missing-package 1 S2 2 63 4 false {}
+dt-slim missing-package 1 S3 2 59 3 false {}
+dt-slim missing-package 1 S4 2 60 2 true {}
+dt-slim missing-package 1 S5 2 61 2 false want \documentclass{article}\usepackage{scribyra-does-n
+dt-slim missing-package 1 S6 2 108 2 false {}
+dt-slim missing-package 1 S7 2 63 2 false {}
+dt-slim article 2 S0b-inject 2 2560 221 false 
+dt-slim article 2 S1 2 58 8 false {}
+dt-slim article 2 S2 2 63 3 false {}
+dt-slim article 2 S3 2 59 3 false {}
+dt-slim article 2 S4 2 60 3 true {}
+dt-slim article 2 S5 2 61 3 false want \section{Mathematics}\label{sec:math}
+dt-slim article 2 S6 2 99 3 false {}
+dt-slim article 2 S7 2 63 3 false {}
+dt-slim thesis 3 S0b-inject 2 2560 218 false 
+dt-slim thesis 3 S1 2 58 5 false {}
+dt-slim thesis 3 S2 2 63 3 false {}
+dt-slim thesis 3 S3 2 59 3 false {}
+dt-slim thesis 3 S4 2 60 3 true {}
+dt-slim thesis 3 S5 4 146 9 false want Research is a conversation between evidence and id
+dt-slim thesis 3 S6 2 109 3 false {}
+dt-slim thesis 3 S7 2 63 3 false {}
+dt-slim thesis 3 S8 4 119 6 true truth chapters/page-050.tex:1 got {}
+ATTR {} truth chapters/page-050.tex:1
+ALLDONE

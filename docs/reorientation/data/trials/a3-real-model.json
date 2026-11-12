@@ -1,0 +1,144 @@
+[
+ {
+  "trial": "plain-edit-1",
+  "seconds": 79,
+  "usage": {
+   "input_tokens": 278265,
+   "cached_input_tokens": 253056,
+   "cache_write_input_tokens": 0,
+   "output_tokens": 791,
+   "reasoning_output_tokens": 54
+  },
+  "toolResultChars": 48995,
+  "largestResultChars": 30890,
+  "tools": [
+   "browser_tabs",
+   "browser_snapshot",
+   "browser_click",
+   "browser_snapshot",
+   "browser_evaluate",
+   "browser_evaluate",
+   "browser_click",
+   "browser_press_key",
+   "browser_run_code_unsafe",
+   "browser_evaluate",
+   "browser_click",
+   "browser_find",
+   "browser_wait_for",
+   "browser_find"
+  ],
+  "state": {
+   "title": "thesis — Scribyra",
+   "status": "Compiled · 40.79 s · 100 pages · 0 warnings",
+   "line1": "% reviewed",
+   "line2": "\\section*{Chapter 50}"
+  },
+  "answer": "- Original line 1: `\\section*{Chapter 50}`\n- Blank lines in the original first 20 lines: **9**\n- Inserted `% reviewed` as the new line 1; everything else unchanged.\n- Compilation succeeded: **100 pages, 0 warnings**."
+ },
+ {
+  "trial": "plain-fix-1",
+  "seconds": 84,
+  "usage": {
+   "input_tokens": 289973,
+   "cached_input_tokens": 267136,
+   "cache_write_input_tokens": 0,
+   "output_tokens": 599,
+   "reasoning_output_tokens": 37
+  },
+  "toolResultChars": 36229,
+  "largestResultChars": 16493,
+  "tools": [
+   "browser_tabs",
+   "browser_snapshot",
+   "browser_click",
+   "browser_snapshot",
+   "browser_wait_for",
+   "browser_snapshot",
+   "browser_click",
+   "browser_type",
+   "browser_snapshot",
+   "browser_click",
+   "browser_find",
+   "browser_find"
+  ],
+  "state": {
+   "title": "missing-package — Scribyra",
+   "status": "Compiled · 2.98 s · 1 page · 0 warnings",
+   "line1": "\\documentclass{article}\\begin{document}Test\\end{document}"
+  },
+  "answer": "The error was in `main.tex`, line 1: `\\usepackage{scribyra-does-not-exist}` referenced a missing package.\n\nI removed that declaration and recompiled successfully.\n\n- Pages: **1**\n- Warnings: **0**"
+ },
+ {
+  "trial": "pointer-edit-1",
+  "seconds": 117,
+  "usage": {
+   "input_tokens": 363634,
+   "cached_input_tokens": 332032,
+   "cache_write_input_tokens": 0,
+   "output_tokens": 1175,
+   "reasoning_output_tokens": 21
+  },
+  "toolResultChars": 43022,
+  "largestResultChars": 28583,
+  "tools": [
+   "browser_tabs",
+   "browser_evaluate",
+   "browser_evaluate",
+   "browser_run_code_unsafe",
+   "browser_click",
+   "browser_evaluate",
+   "browser_run_code_unsafe",
+   "browser_run_code_unsafe",
+   "browser_run_code_unsafe",
+   "browser_run_code_unsafe"
+  ],
+  "state": {
+   "title": "thesis — Scribyra",
+   "status": "Compiled · 40.33 s · 100 pages · 0 warnings",
+   "line1": "% reviewed",
+   "line2": "\\section*{Chapter 50}"
+  },
+  "answer": "In `chapters/page-050.tex`:\n\n- Original line 1: `\\section*{Chapter 50}`\n- Blank lines in the original first 20 lines: **9**\n- Inserted `% reviewed` as the new line 1; everything else unchanged.\n- Compilation succeeded: **100 pages, 0 warnings**."
+ },
+ {
+  "trial": "pointer-fix-1",
+  "seconds": 95,
+  "usage": {
+   "input_tokens": 333374,
+   "cached_input_tokens": 308096,
+   "cache_write_input_tokens": 0,
+   "output_tokens": 1193,
+   "reasoning_output_tokens": 56
+  },
+  "toolResultChars": 11219,
+  "largestResultChars": 1946,
+  "tools": [
+   "browser_tabs",
+   "browser_evaluate",
+   "browser_snapshot",
+   "browser_snapshot",
+   "browser_click",
+   "browser_evaluate",
+   "browser_snapshot",
+   "browser_wait_for",
+   "browser_evaluate",
+   "browser_snapshot",
+   "browser_snapshot",
+   "browser_click",
+   "browser_press_key",
+   "browser_press_key",
+   "browser_press_key",
+   "browser_press_key",
+   "browser_run_code_unsafe",
+   "browser_run_code_unsafe",
+   "browser_click",
+   "browser_run_code_unsafe"
+  ],
+  "state": {
+   "title": "missing-package — Scribyra",
+   "status": "Compiled · 3.09 s · 1 page · 0 warnings",
+   "line1": "\\documentclass{article}\\begin{document}Test\\end{document}"
+  },
+  "answer": "The error was in `main.tex`, line 1: `\\usepackage{scribyra-does-not-exist}` referenced a missing package.\n\nI removed that declaration and compiled again successfully: **1 page, 0 warnings**."
+ }
+]

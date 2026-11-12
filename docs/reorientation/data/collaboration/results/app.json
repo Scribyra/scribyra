@@ -1,0 +1,44 @@
+{
+ "chromium": {
+  "undoDepth": {
+   "a": 1,
+   "b": 1
+  },
+  "afterBobUndo": {
+   "a": "%ALICE%\\documentclass[10pt]{ar",
+   "b": "%ALICE%\\documentclass[10pt]{ar"
+  },
+  "trash": {
+   "deleted": "chapters/page-001.tex",
+   "updateContains": true
+  },
+  "deleted": {
+   "updateContains": true,
+   "gc": true
+  },
+  "deletedWithUndoManager": {
+   "updateContains": true
+  }
+ },
+ "firefox": {
+  "undoDepth": {
+   "a": 1,
+   "b": 1
+  },
+  "afterBobUndo": {
+   "a": "%ALICE%\\documentclass[10pt]{ar",
+   "b": "%ALICE%\\documentclass[10pt]{ar"
+  },
+  "trash": {
+   "deleted": "chapters/page-001.tex",
+   "updateContains": true
+  },
+  "deleted": {
+   "updateContains": true,
+   "gc": true
+  },
+  "deletedWithUndoManager": {
+   "updateContains": true
+  }
+ }
+}

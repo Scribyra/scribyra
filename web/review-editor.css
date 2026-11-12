@@ -1,0 +1,141 @@
+/* Editor-side review surfaces: toolbar, mode control, inline marks, selection pill. */
+/* Selectors are deliberately specific: older rules in review-workspace.css and comments.css load lazily. */
+:root:root{
+  --review-author-0:#405e7c;--review-author-1:#80536b;--review-author-2:#356663;--review-author-3:#795b3e;--review-author-4:#625982;
+  --mode-accent-text:#4c3cbc;--comment-tint:#f5bf2e47;--comment-tint-active:#f5bf2e99;--comment-mark:#a97c10;
+}
+:root:root[data-theme=dark]{
+  --review-author-0:#abc5df;--review-author-1:#d5b0c3;--review-author-2:#a3ccc4;--review-author-3:#d4b99a;--review-author-4:#bfb7dd;
+  --mode-accent-text:#d5ccff;--comment-tint:#f7cf5a2e;--comment-tint-active:#f7cf5a61;--comment-mark:#e2bb52;
+}
+
+/* Top bar */
+.editor-header{gap:10px}
+.editor-header .save-indicator{font-size:11px;white-space:nowrap;margin-left:2px}
+.editor-header .button.compact{font-size:12px;box-shadow:none;gap:6px;padding:6px 10px;min-height:30px}
+.editor-header .button.compact svg{width:15px;height:15px}
+.editor-header .history-feature>button::before{content:"";width:15px;height:15px;background:currentColor;
+  -webkit-mask:var(--icon-history) center/contain no-repeat;mask:var(--icon-history) center/contain no-repeat;
+  --icon-history:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2'/%3E%3C/svg%3E")}
+.header-tools{display:flex;align-items:center;gap:1px}
+.header-tools .icon-button{width:30px;height:30px;border-radius:6px}
+.header-tools .icon-button svg{width:16px;height:16px}
+.tools-toggle{position:relative}
+.tools-toggle[data-active=true]::after{content:"";position:absolute;top:5px;right:5px;width:6px;height:6px;border-radius:50%;background:var(--accent)}
+
+/* Toolbar */
+.writing-area>.workspace-toolbar{flex-wrap:nowrap;height:46px;min-height:46px;padding:0 10px 0 12px;gap:10px}
+
+/* Mode control: a native select keeps keyboard and screen-reader behaviour. */
+.workspace-toolbar .review-mode{position:relative;display:inline-flex;align-items:center;flex:none;gap:0;height:30px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font-size:12px;transition:background .12s,border-color .12s}
+.review-mode:hover{background:var(--subtle)}
+.review-mode>svg{position:absolute;pointer-events:none;width:15px;height:15px}
+.review-mode>svg:first-child{left:9px}
+.review-mode>svg:last-child{right:6px;width:14px;height:14px;opacity:.65}
+.workspace-toolbar .review-mode select{appearance:none;-webkit-appearance:none;width:auto;max-width:none;height:100%;border:0;border-radius:6px;background:transparent;color:inherit;font-size:12px;font-weight:550;padding:0 25px 0 30px;cursor:pointer}
+.review-mode:has(select:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.review-mode select:focus-visible{outline:0}
+.review-mode[data-mode=reviewing]{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 55%,transparent);color:var(--mode-accent-text)}
+.review-mode[data-mode=reviewing]:hover{background:color-mix(in srgb,var(--accent) 22%,var(--surface))}
+.review-mode-hint{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
+.review-mode-tip{flex:none;font-size:12px;color:var(--muted);white-space:nowrap;padding-left:10px;border-left:1px solid var(--border)}
+
+/* Compile group */
+.compile-controls{display:flex;align-items:center;gap:6px;flex:none}
+.compile-controls .engine-label{display:flex}
+.compile-controls select{height:30px;max-width:150px;border:1px solid transparent;border-radius:6px;background:transparent;color:var(--muted);font-size:12px;padding:0 2px 0 6px;cursor:pointer}
+.compile-controls select:hover{background-color:var(--subtle);color:var(--text)}
+.compile-cancel[hidden]{display:none}
+.compile-controls .compile-cancel{font-size:12px;min-height:30px;padding:5px 10px;box-shadow:none;margin-left:4px}
+.compile-split{display:flex;align-items:stretch;margin-left:4px}
+.compile-split .compile-button{font-size:12px;min-height:30px;padding:5px 11px;border-radius:7px 0 0 7px;gap:6px}
+.compile-split .compile-button svg{width:13px;height:13px;fill:currentColor}
+.compile-split .compile-button kbd{margin-left:4px;font-size:10px;padding:0 4px}
+.compile-split .compile-button:focus-visible{position:relative;z-index:1}
+.compile-options{position:relative;display:flex}
+.compile-caret{position:relative;width:26px;display:grid;place-items:center;background:#6856d8;color:#fff;border-left:1px solid #ffffff40;border-radius:0 7px 7px 0}
+.compile-caret:hover,.compile-caret[aria-expanded=true]{background:#5947c8}
+.compile-caret svg{width:14px;height:14px}
+.compile-caret[data-active=true]::after{content:"";position:absolute;top:4px;right:4px;width:6px;height:6px;border-radius:50%;background:#fff;box-shadow:0 0 0 1.5px #6856d8}
+
+/* PDF tools share one icon size with the rest of the toolbars. */
+.preview-toolbar .icon-button.icon-button svg{width:15px;height:15px}
+
+/* Source pane strip */
+.preview-toolbar>span:first-child{white-space:nowrap}
+.source-pane .editor-tab{align-items:stretch}
+.editor-tab-actions{position:sticky;right:0;margin-left:auto;display:flex;align-items:center;gap:4px;padding:0 8px 0 10px;background:var(--subtle);flex:none}
+.editor-tab-actions .icon-button{width:26px;height:26px}
+.editor-tab-actions .icon-button svg{width:15px;height:15px}
+.review-toggle{display:inline-flex;align-items:center;gap:6px;height:27px;padding:0 9px;border:1px solid var(--border);border-radius:7px;background:var(--surface);font-size:12px;font-weight:550;color:var(--text);white-space:nowrap}
+.review-toggle:hover{background:var(--subtle)}
+.review-toggle svg{width:15px;height:15px}
+.review-toggle[aria-expanded=true]{background:var(--accent-soft);border-color:color-mix(in srgb,var(--accent) 45%,transparent);color:var(--mode-accent-text)}
+.review-count{min-width:17px;height:17px;padding:0 5px;display:inline-grid;place-items:center;border-radius:9px;background:var(--accent);color:var(--surface);font-size:10px;font-weight:650;line-height:1}
+
+/* Reviewing frame */
+.writing-area[data-review-mode=reviewing] .source-pane{box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--accent) 35%,transparent)}
+.writing-area[data-review-mode=reviewing] .editor-tab{border-bottom:2px solid var(--accent)}
+.writing-area[data-review-mode=reviewing] #code-editor .cm-editor{background-color:color-mix(in srgb,var(--accent) 3.5%,var(--surface))}
+.writing-area[data-review-mode=reviewing] #code-editor .cm-gutters{background:transparent!important}
+
+/* Inline marks */
+/* A translucent active line keeps the selection layer visible beneath it. */
+#code-editor .cm-activeLine{background-color:color-mix(in srgb,var(--text) 3.5%,transparent)}
+#code-editor .cm-selectionMatch{background-color:color-mix(in srgb,var(--accent) 12%,transparent)}
+#code-editor .tracked-insert{color:inherit;background:color-mix(in srgb,var(--change-author) 10%,transparent);text-decoration:underline 1px var(--change-author);text-underline-offset:3px;text-decoration-skip-ink:none;border-radius:2px;cursor:pointer}
+#code-editor .tracked-delete{color:var(--change-author);opacity:1;text-decoration:line-through 1px var(--change-author);border-radius:2px;cursor:pointer}
+#code-editor .tracked-delete{margin-right:3px}
+#code-editor .tracked-insert.review-active{outline:0;background:color-mix(in srgb,var(--change-author) 18%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--change-author) 24%,transparent)}
+#code-editor .tracked-delete.review-active{outline:0;background:color-mix(in srgb,var(--change-author) 10%,transparent);box-shadow:0 0 0 1px color-mix(in srgb,var(--change-author) 24%,transparent)}
+#code-editor .comment-highlight{background:var(--comment-tint);border-bottom:0;border-radius:2px;cursor:pointer}
+#code-editor .comment-highlight.review-active{outline:0;background:var(--comment-tint-active)}
+#code-editor .comment-point{border-left:2px solid var(--comment-mark)}
+#code-editor .review-changed-line{box-shadow:inset 2px 0 0 color-mix(in srgb,var(--change-author) 55%,transparent)}
+
+/* Selection pill */
+button.add-comment-floating{display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 11px 0 9px;background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:14px;box-shadow:0 2px 10px #171a3026,0 1px 2px #171a301a;font-size:12px;font-weight:550;white-space:nowrap;cursor:pointer;animation:comment-pill-in .12s ease-out}
+button.add-comment-floating svg{color:var(--mode-accent-text);flex:none}
+button.add-comment-floating:hover{background:var(--subtle)}
+button.add-comment-floating:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+button.add-comment-floating[hidden]{display:none}
+:root[data-theme=dark] button.add-comment-floating{box-shadow:0 3px 12px #0007;background:var(--subtle)}
+@keyframes comment-pill-in{from{opacity:0;transform:translateY(2px)}}
+@media(prefers-reduced-motion:reduce){button.add-comment-floating{animation:none}}
+
+/* Narrower layouts */
+/* The overlay panel opens under the tab strip so its toggle stays reachable. */
+@media(max-width:1200px){.review-mode-hint,.review-mode-tip{display:none}.split-panes .review-workspace{top:39px}.preview-toolbar{overflow-x:auto;scrollbar-width:none}.preview-toolbar>span:first-child{display:none}}
+@media(max-width:1050px){.compile-controls .engine-label{display:none}.compile-split .compile-button kbd{display:none}}
+/* From here the overlay would cover the source, so the panel takes the preview's place beside it. */
+@media(max-width:900px){
+  .split-panes:has(.review-workspace:not([hidden])) .preview-pane,.split-panes:has(.review-workspace:not([hidden])) .pane-divider{display:none}
+  .split-panes:has(.review-workspace:not([hidden])) .source-pane{flex:1 1 0;width:auto;min-width:0}
+  .split-panes .review-workspace.review-workspace{position:relative;top:0;width:300px;min-width:0;flex:0 0 300px;box-shadow:none}
+}
+@media(max-width:760px){.workspace:has(.review-workspace:not([hidden])) .file-sidebar{display:none}}
+@media(max-width:740px){
+  .file-sidebar{width:170px;min-width:0}
+  .workspace-navigation button svg{display:none}
+  .sidebar-heading span{white-space:nowrap;font-size:9.5px;letter-spacing:.04em}
+  .editor-header{gap:6px}
+  .editor-header .project-title{flex:0 1 auto;min-width:48px}
+  .editor-header .header-tools{flex:0 1 auto;min-width:0;overflow-x:auto;scrollbar-width:none;padding:0 3px;margin-inline:0}
+  .header-tools .icon-button{width:26px}
+  .editor-header .button.compact:not(.recover-button),.editor-header .history-feature>button{font-size:0;gap:0;padding:5px 8px}
+  .editor-header .recover-button{font-size:11px;padding:4px 6px;white-space:normal;line-height:1.1}
+  .review-toggle-label{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+  .split-panes{overflow-x:auto}
+}
+/* A phone has room for one thing: the panel covers the source until it is closed. */
+@media(max-width:560px){
+  .split-panes .review-workspace.review-workspace{position:absolute;left:0;right:0;top:39px;bottom:0;width:auto;flex:none}
+  .split-panes{overflow-x:visible}
+  .split-panes:not(:has(.review-workspace:not([hidden]))){overflow-x:auto}
+  .workspace{overflow-x:auto}
+  .writing-area{min-width:300px}
+  .compile-split .compile-button{font-size:0;gap:0}
+  .compile-split .compile-button svg{width:14px;height:14px}
+}
+.tools-toggle svg{stroke-width:2.8}
+.compile-split .compile-button kbd{color:#fff;opacity:1}

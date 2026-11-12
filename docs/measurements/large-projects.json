@@ -1,0 +1,653 @@
+{
+  "generatedBy": "scripts/large-projects-report.mjs",
+  "statistic": "median",
+  "scenarios": {
+    "heavy-history-before-history-fix": {
+      "chromium": {
+        "runs": 2,
+        "incompleteRuns": 1,
+        "seeded": {
+          "journal": 5220,
+          "checkpoints": 105,
+          "objects": 43
+        },
+        "seededNote": "No complete backup could be generated; records installed directly.",
+        "idbBytes": 136294400,
+        "openMs": 912.7,
+        "heapAfterOpen": 76149552,
+        "typingIdle": {
+          "p50": 259.6,
+          "p95": 955.5,
+          "max": 1254.1,
+          "n": 40
+        },
+        "saveMs": 1610.5,
+        "saveMaxFrameGapMs": 683.3,
+        "historyOpenMs": 252481.9,
+        "historyOptions": 127,
+        "backupExportMs": 128819.5,
+        "backupBytes": null,
+        "backupError": "Complete backup could not be exported. Export a source ZIP to save the current files; it does not include history or discussions. Details: This project’s history is too large for one complete backup (533 MiB of 512 MiB). Clean up history to remove automatic versions, then export again.",
+        "cleanupPlanMs": 56316,
+        "cleanupMs": 76258,
+        "cleanupFreedBytes": -3872768,
+        "backupAfterCleanupMs": 50652.5,
+        "backupAfterCleanupBytes": 32250329,
+        "backupAfterCleanupError": null,
+        "restoreAfterCleanupMs": 57797,
+        "zipExportMs": 227.5,
+        "zipExportBytes": 244401,
+        "storageFinal": 182474510,
+        "heapFinal": 300250247.5,
+        "pageErrors": []
+      }
+    },
+    "heavy-history-before-review-fix": {
+      "chromium": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "seeded": {
+          "journal": 5220,
+          "checkpoints": 105,
+          "objects": 43
+        },
+        "seededNote": "No complete backup could be generated; records installed directly.",
+        "idbBytes": 136294400,
+        "openMs": 889.2,
+        "heapAfterOpen": 76122284,
+        "typingIdle": {
+          "p50": 253.4,
+          "p95": 955.1,
+          "max": 1138.1,
+          "n": 40
+        },
+        "saveMs": 1443.3,
+        "saveMaxFrameGapMs": 583.4,
+        "historyOpenMs": 43100.4,
+        "historyOptions": 127,
+        "backupExportMs": 37907,
+        "backupBytes": null,
+        "backupError": "Complete backup could not be exported. Export a source ZIP to save the current files; it does not include history or discussions. Details: This project’s history is too large for one complete backup (533 MiB of 512 MiB). Clean up history to remove automatic versions, then export again.",
+        "cleanupPlanMs": 10521,
+        "cleanupMs": 31433,
+        "cleanupFreedBytes": -4722688,
+        "backupAfterCleanupMs": 35604,
+        "backupAfterCleanupBytes": 32250477,
+        "backupAfterCleanupError": null,
+        "restoreAfterCleanupMs": 51797,
+        "zipExportMs": 225,
+        "zipExportBytes": 244401,
+        "storageFinal": 183353676,
+        "heapFinal": 354982872,
+        "pageErrors": []
+      }
+    },
+    "heavy-history": {
+      "chromium": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "seeded": {
+          "journal": 5220,
+          "checkpoints": 105,
+          "objects": 43
+        },
+        "seededNote": "No complete backup could be generated; records installed directly.",
+        "idbBytes": 136294400,
+        "openMs": 877.7,
+        "heapAfterOpen": 76103128,
+        "typingIdle": {
+          "p50": 212.6,
+          "p95": 831.6,
+          "max": 1019.1,
+          "n": 40
+        },
+        "saveMs": 1377.4,
+        "saveMaxFrameGapMs": 550,
+        "historyOpenMs": 42508.3,
+        "historyOptions": 127,
+        "backupExportMs": 36375,
+        "backupBytes": null,
+        "backupError": "Complete backup could not be exported. Export a source ZIP to save the current files; it does not include history or discussions. Details: This project’s history is too large for one complete backup (533 MiB of 512 MiB). Clean up history to remove automatic versions, then export again.",
+        "cleanupPlanMs": 10036,
+        "cleanupMs": 30432,
+        "cleanupFreedBytes": -4722688,
+        "backupAfterCleanupMs": 34975,
+        "backupAfterCleanupBytes": 32251095,
+        "backupAfterCleanupError": null,
+        "restoreAfterCleanupMs": 52416,
+        "zipExportMs": 231,
+        "zipExportBytes": 244401,
+        "storageFinal": 183305214,
+        "heapFinal": 352883237,
+        "pageErrors": []
+      },
+      "firefox": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "seeded": {
+          "journal": 5220,
+          "checkpoints": 105,
+          "objects": 43
+        },
+        "seededNote": "No complete backup could be generated; records installed directly.",
+        "idbBytes": 165954921,
+        "openMs": 962,
+        "heapAfterOpen": null,
+        "typingIdle": {
+          "p50": 673,
+          "p95": 1390,
+          "max": 1446,
+          "n": 40
+        },
+        "saveMs": 1933,
+        "saveMaxFrameGapMs": 800.6,
+        "historyOpenMs": 56360,
+        "historyOptions": 127,
+        "backupExportMs": 42928,
+        "backupBytes": null,
+        "backupError": "Complete backup could not be exported. Export a source ZIP to save the current files; it does not include history or discussions. Details: This project’s history is too large for one complete backup (533 MiB of 512 MiB). Clean up history to remove automatic versions, then export again.",
+        "cleanupPlanMs": 14221,
+        "cleanupMs": 45229,
+        "cleanupFreedBytes": -2582371,
+        "backupAfterCleanupMs": 46151,
+        "backupAfterCleanupBytes": 32250470,
+        "backupAfterCleanupError": null,
+        "restoreAfterCleanupMs": 66237,
+        "zipExportMs": 310,
+        "zipExportBytes": 244401,
+        "storageFinal": 202819227,
+        "heapFinal": null,
+        "pageErrors": []
+      },
+      "webkit": {
+        "runs": 3,
+        "incompleteRuns": 3,
+        "seeded": {
+          "journal": 5220,
+          "checkpoints": 105,
+          "objects": 43
+        },
+        "seededNote": "No complete backup could be generated; records installed directly.",
+        "idbBytes": 307701936,
+        "openMs": 1140,
+        "heapAfterOpen": null,
+        "typingIdle": {
+          "p50": 314,
+          "p95": 1181,
+          "max": 1456,
+          "n": 40
+        },
+        "saveMs": 1568,
+        "saveMaxFrameGapMs": 582,
+        "historyOpenMs": 46968,
+        "historyOptions": 127,
+        "backupExportMs": 40434,
+        "backupBytes": null,
+        "backupError": "Complete backup could not be exported. Export a source ZIP to save the current files; it does not include history or discussions. Details: This project’s history is too large for one complete backup (533 MiB of 512 MiB). Clean up history to remove automatic versions, then export again.",
+        "cleanupPlanMs": 11482,
+        "cleanupMs": 33423,
+        "cleanupFreedBytes": -303201515,
+        "backupAfterCleanupMs": 38082,
+        "backupAfterCleanupBytes": 32251001,
+        "backupAfterCleanupError": null,
+        "restoreAfterCleanupMs": 53442,
+        "zipExportMs": 381,
+        "zipExportBytes": 244401,
+        "storageFinal": 898422228,
+        "heapFinal": null,
+        "pageErrors": []
+      }
+    },
+    "limits": {
+      "chromium": {
+        "runs": 1,
+        "incompleteRuns": 0,
+        "zipOver64MiB": {
+          "message": "ZIP exceeds 64 MiB.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "expandedOver64MiB": {
+          "message": "Expanded ZIP exceeds 64 MiB.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "over512Files": {
+          "message": "Projects support up to 512 files and 1024 total tree entries.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "uploadOverLimit": {
+          "message": "Project and recoverable deleted files exceed 64 MiB. Export a backup or use a new project.×",
+          "tree": 2
+        },
+        "textOverLimit": {
+          "saveStatus": "Not saved · export a backup",
+          "message": "Local save failed (Error): Project and recoverable deleted files exceed 64 MiB.. Export your project before closing this tab.×",
+          "afterUndo": "Saved locally",
+          "afterReloadContainsNearText": true
+        }
+      },
+      "firefox": {
+        "runs": 1,
+        "incompleteRuns": 0,
+        "zipOver64MiB": {
+          "message": "ZIP exceeds 64 MiB.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "expandedOver64MiB": {
+          "message": "Expanded ZIP exceeds 64 MiB.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "over512Files": {
+          "message": "Projects support up to 512 files and 1024 total tree entries.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "uploadOverLimit": {
+          "message": "Project and recoverable deleted files exceed 64 MiB. Export a backup or use a new project.×",
+          "tree": 2
+        },
+        "textOverLimit": {
+          "saveStatus": "Not saved · export a backup",
+          "message": "Local save failed (Error): Project and recoverable deleted files exceed 64 MiB.. Export your project before closing this tab.×",
+          "afterUndo": "Saved locally",
+          "afterReloadContainsNearText": true
+        }
+      },
+      "webkit": {
+        "runs": 1,
+        "incompleteRuns": 0,
+        "zipOver64MiB": {
+          "message": "ZIP exceeds 64 MiB.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "expandedOver64MiB": {
+          "message": "Expanded ZIP exceeds 64 MiB.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "over512Files": {
+          "message": "Projects support up to 512 files and 1024 total tree entries.×",
+          "projectsBefore": 0,
+          "projectsAfter": 0
+        },
+        "uploadOverLimit": {
+          "message": "Project and recoverable deleted files exceed 64 MiB. Export a backup or use a new project.×",
+          "tree": 2
+        },
+        "textOverLimit": {
+          "saveStatus": "Not saved · export a backup",
+          "message": "Local save failed (Error): Project and recoverable deleted files exceed 64 MiB.. Export your project before closing this tab.×",
+          "afterUndo": "Saved locally",
+          "afterReloadContainsNearText": true
+        }
+      }
+    },
+    "long-file": {
+      "chromium": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 650.8,
+        "storageBefore": 8713566,
+        "storageAfter": 9901406,
+        "idbBytes": 1187840,
+        "openMs": 128.2,
+        "heapAfterOpen": 79192152,
+        "typing_start": {
+          "p50": 21.4,
+          "p95": 28.7,
+          "max": 70,
+          "n": 40
+        },
+        "typing_middle": {
+          "p50": 23.7,
+          "p95": 49.8,
+          "max": 132.4,
+          "n": 40
+        },
+        "typing_end": {
+          "p50": 26.4,
+          "p95": 50.3,
+          "max": 53.7,
+          "n": 40
+        },
+        "saveMs": 405.6,
+        "saveMaxFrameGapMs": 100,
+        "searchMs": 1362.5,
+        "searchStatus": "Preview limit reached. Narrow the search before replacing.",
+        "searchRare": {
+          "searchMs": 321.3,
+          "searchStatus": "1 matches"
+        },
+        "zipExportMs": 306,
+        "zipExportBytes": 444672,
+        "storageFinal": 11461046,
+        "heapFinal": 78719110,
+        "pageErrors": []
+      },
+      "firefox": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 640,
+        "storageBefore": 4140109,
+        "storageAfter": 5737454,
+        "idbBytes": 1597345,
+        "openMs": 118,
+        "heapAfterOpen": null,
+        "typing_start": {
+          "p50": 20,
+          "p95": 39,
+          "max": 47,
+          "n": 40
+        },
+        "typing_middle": {
+          "p50": 19,
+          "p95": 27,
+          "max": 29,
+          "n": 40
+        },
+        "typing_end": {
+          "p50": 18,
+          "p95": 27,
+          "max": 59,
+          "n": 40
+        },
+        "saveMs": 430,
+        "saveMaxFrameGapMs": 83.6,
+        "searchMs": 1333,
+        "searchStatus": "Preview limit reached. Narrow the search before replacing.",
+        "searchRare": {
+          "searchMs": 253,
+          "searchStatus": "1 matches"
+        },
+        "zipExportMs": 302,
+        "zipExportBytes": 444672,
+        "storageFinal": 5796793,
+        "heapFinal": null,
+        "pageErrors": []
+      },
+      "webkit": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 740,
+        "storageBefore": 8415419,
+        "storageAfter": 14708432,
+        "idbBytes": 6293013,
+        "openMs": 197,
+        "heapAfterOpen": null,
+        "typing_start": {
+          "p50": 32,
+          "p95": 109,
+          "max": 124,
+          "n": 40
+        },
+        "typing_middle": {
+          "p50": 32,
+          "p95": 119,
+          "max": 141,
+          "n": 40
+        },
+        "typing_end": {
+          "p50": 31,
+          "p95": 128,
+          "max": 152,
+          "n": 40
+        },
+        "saveMs": 373,
+        "saveMaxFrameGapMs": 81,
+        "searchMs": 1701,
+        "searchStatus": "Preview limit reached. Narrow the search before replacing.",
+        "searchRare": {
+          "searchMs": 316,
+          "searchStatus": "1 matches"
+        },
+        "zipExportMs": 256,
+        "zipExportBytes": 444672,
+        "storageFinal": 319305312,
+        "heapFinal": null,
+        "pageErrors": []
+      }
+    },
+    "thesis-history": {
+      "chromium": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 3610.3,
+        "storageBefore": 8715967,
+        "storageAfter": 49663679,
+        "idbBytes": 40947712,
+        "historyOpenMs": 2001.6,
+        "backupExportMs": 12818,
+        "backupBytes": 40930683,
+        "backupError": null,
+        "restorePlanMs": 9663,
+        "restoreImportMs": 6719,
+        "restoreMs": 16382,
+        "restoreIdbBytes": 1343488,
+        "zipExportMs": 2776,
+        "zipExportBytes": 40446300,
+        "storageFinal": 51011263,
+        "heapFinal": 374773284,
+        "pageErrors": []
+      },
+      "firefox": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 5188,
+        "storageBefore": 4141102,
+        "storageAfter": 86028837,
+        "idbBytes": 81887735,
+        "historyOpenMs": 1980,
+        "backupExportMs": 11538,
+        "backupBytes": 40930602,
+        "backupError": null,
+        "restorePlanMs": 6889,
+        "restoreImportMs": 9208,
+        "restoreMs": 16132,
+        "restoreIdbBytes": 42418710,
+        "zipExportMs": 3337,
+        "zipExportBytes": 40446300,
+        "storageFinal": 87763613,
+        "heapFinal": null,
+        "pageErrors": []
+      },
+      "webkit": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 3682,
+        "storageBefore": 8415419,
+        "storageAfter": 51618372,
+        "idbBytes": 43202953,
+        "historyOpenMs": 1654,
+        "backupExportMs": 10540,
+        "backupBytes": 40930616,
+        "backupError": null,
+        "restorePlanMs": 6983,
+        "restoreImportMs": 6485,
+        "restoreMs": 13503,
+        "restoreIdbBytes": 46197631,
+        "zipExportMs": 2887,
+        "zipExportBytes": 40446300,
+        "storageFinal": 99310920,
+        "heapFinal": null,
+        "pageErrors": []
+      }
+    },
+    "thesis": {
+      "chromium": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 3708.6,
+        "storageBefore": 8713566,
+        "storageAfter": 49661278,
+        "idbBytes": 40947712,
+        "openMs": 973.4,
+        "heapAfterOpen": 153318911,
+        "typingIdle": {
+          "p50": 71.3,
+          "p95": 90.1,
+          "max": 95.3,
+          "n": 40
+        },
+        "snapshotBytesPerTypedChar": 414.2,
+        "saveMs": 389.2,
+        "saveMaxFrameGapMs": 33.4,
+        "searchMs": 549.2,
+        "searchStatus": "868 matches",
+        "searchRare": {
+          "searchMs": 193.7,
+          "searchStatus": "1 matches"
+        },
+        "firstCompile": {
+          "ms": 236212.8,
+          "maxFrameGapMs": 249.9,
+          "pages": 305,
+          "success": true,
+          "bytes": 41580310,
+          "log": ""
+        },
+        "heapAfterCompile": 242050211,
+        "pdfJumpMs": 404.9,
+        "pdfScrollMaxFrameGapMs": 149.9,
+        "pdfScrollP95FrameGapMs": 116.7,
+        "pdfScrollFrames": 68,
+        "pdfSettleAfterScrollMs": 42.5,
+        "recompile": {
+          "ms": 173246.5,
+          "maxFrameGapMs": 250,
+          "pages": 305,
+          "success": true,
+          "bytes": 41580325,
+          "log": ""
+        },
+        "typingDuringCompile": {
+          "p50": 112.5,
+          "p95": 155.8,
+          "max": 168.4,
+          "n": 30,
+          "compileStillRunning": true
+        },
+        "note": "Run before the History steps moved to thesis-history; ended waiting for an unpublished compile result."
+      },
+      "firefox": {
+        "runs": 3,
+        "incompleteRuns": 1,
+        "importMs": 5450,
+        "storageBefore": 4140109,
+        "storageAfter": 86027863,
+        "idbBytes": 81887744,
+        "openMs": 1416,
+        "heapAfterOpen": null,
+        "typingIdle": {
+          "p50": 65,
+          "p95": 98,
+          "max": 119,
+          "n": 40
+        },
+        "snapshotBytesPerTypedChar": 414.2,
+        "saveMs": 645,
+        "saveMaxFrameGapMs": 99.7,
+        "searchMs": 528,
+        "searchStatus": "868 matches",
+        "searchRare": {
+          "searchMs": 204,
+          "searchStatus": "1 matches"
+        },
+        "firstCompile": {
+          "ms": 249436,
+          "maxFrameGapMs": 167.3,
+          "pages": 305,
+          "success": true,
+          "bytes": 41580310,
+          "log": ""
+        },
+        "heapAfterCompile": null,
+        "pdfJumpMs": 314,
+        "pdfScrollMaxFrameGapMs": 67.5,
+        "pdfScrollP95FrameGapMs": 66.4,
+        "pdfScrollFrames": 131,
+        "pdfSettleAfterScrollMs": 32,
+        "recompile": {
+          "ms": 182653,
+          "maxFrameGapMs": 167.1,
+          "pages": 305,
+          "success": true,
+          "bytes": 41580325,
+          "log": ""
+        },
+        "typingDuringCompile": {
+          "p50": 59,
+          "p95": 92,
+          "max": 112,
+          "n": 30,
+          "compileStillRunning": true
+        },
+        "note": "Run before the History steps moved to thesis-history; ended waiting for an unpublished compile result.",
+        "storageFinal": 129579317,
+        "heapFinal": null,
+        "pageErrors": []
+      },
+      "webkit": {
+        "runs": 3,
+        "incompleteRuns": 0,
+        "importMs": 3566,
+        "storageBefore": 8415419,
+        "storageAfter": 51618372,
+        "idbBytes": 43202953,
+        "openMs": 1075,
+        "heapAfterOpen": null,
+        "typingIdle": {
+          "p50": 62,
+          "p95": 91,
+          "max": 96,
+          "n": 40
+        },
+        "snapshotBytesPerTypedChar": 414.2,
+        "saveMs": 365,
+        "saveMaxFrameGapMs": 59,
+        "searchMs": 738,
+        "searchStatus": "868 matches",
+        "searchRare": {
+          "searchMs": 311,
+          "searchStatus": "1 matches"
+        },
+        "firstCompile": {
+          "ms": 248185,
+          "maxFrameGapMs": 264,
+          "pages": 305,
+          "success": true,
+          "bytes": 41580310,
+          "log": ""
+        },
+        "heapAfterCompile": null,
+        "pdfJumpMs": 483,
+        "pdfScrollMaxFrameGapMs": 105,
+        "pdfScrollP95FrameGapMs": 90,
+        "pdfScrollFrames": 78,
+        "pdfSettleAfterScrollMs": 32,
+        "recompile": {
+          "ms": 225235,
+          "maxFrameGapMs": 396,
+          "pages": 305,
+          "success": true,
+          "bytes": 41580325,
+          "log": ""
+        },
+        "typingDuringCompile": {
+          "p50": 63,
+          "p95": 123,
+          "max": 141,
+          "n": 30,
+          "compileStillRunning": true
+        },
+        "storageFinal": 383986277,
+        "heapFinal": null,
+        "pageErrors": []
+      }
+    }
+  }
+}

@@ -1,0 +1,49 @@
+apiVersion: 1
+datasources:
+  - name: Scribyra Metrics
+    uid: scribyra-prom
+    type: prometheus
+    access: proxy
+    url: $SCRIBYRA_PROMETHEUS_URL
+    isDefault: true
+    editable: false
+    jsonData:
+      httpMethod: POST
+      timeInterval: 15s
+  - name: Scribyra Events
+    uid: scribyra-loki
+    type: loki
+    access: proxy
+    url: $SCRIBYRA_LOKI_URL
+    editable: false
+    jsonData:
+      maxLines: 1000
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"traceId":"([a-f0-9]{32})"'
+          datasourceUid: scribyra-tempo
+          url: '$${__value.raw}'
+        - name: ScribyraRunID
+          matcherRegex: "\"runId\":\"([a-f0-9]{32})\""
+          datasourceUid: "scribyra-tempo"
+          url: "$${__value.raw}"
+          urlDisplayLabel: "Suite trace"
+        - name: ScribyraCIArtifacts
+          matcherRegex: "\"jobId\":([0-9]+)"
+          url: "https://gitlab.com/urundead-labs/scribyra/-/jobs/$${__value.raw}/artifacts/browse/.telemetry/"
+          urlDisplayLabel: "Safe run artifacts"
+  - name: Scribyra Traces
+    uid: scribyra-tempo
+    type: tempo
+    access: proxy
+    url: $SCRIBYRA_TEMPO_URL
+    editable: false
+    jsonData:
+      nodeGraph:
+        enabled: true
+      tracesToLogsV2:
+        datasourceUid: scribyra-loki
+        spanStartTimeShift: '-1m'
+        spanEndTimeShift: '1m'
+        customQuery: true
+        query: '{service_name="scribyra"} |= "$${__trace.traceId}"'

@@ -1,0 +1,36 @@
+// Validation/smoke pipeline: the destination must be an operator-controlled OTLP
+// receiver. Full storage, Grafana and managed-cloud profiles are separate work.
+logging {
+  level = "warn"
+}
+otelcol.receiver.otlp "scribyra" {
+  http {
+    endpoint = sys.env("SCRIBYRA_OTLP_LISTEN")
+  }
+  output {
+    logs = [otelcol.exporter.otlphttp.scribyra.input]
+    traces = [otelcol.exporter.otlphttp.scribyra.input]
+    metrics = [otelcol.processor.deltatocumulative.scribyra.input]
+  }
+}
+otelcol.processor.deltatocumulative "scribyra" {
+  max_stale = "15m"
+  max_streams = 2048
+  output {
+    metrics = [otelcol.exporter.otlphttp.scribyra.input]
+  }
+}
+otelcol.exporter.otlphttp "scribyra" {
+  client {
+    endpoint = sys.env("SCRIBYRA_OTLP_FORWARD")
+    compression = "none"
+    timeout = "2s"
+  }
+  sending_queue {
+    queue_size = 8
+    num_consumers = 1
+  }
+  retry_on_failure {
+    enabled = false
+  }
+}

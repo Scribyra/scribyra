@@ -1,0 +1,112 @@
+[
+  {
+    "fixture": "article",
+    "step": "S1",
+    "bytes": 79
+  },
+  {
+    "fixture": "article",
+    "step": "S2",
+    "bytes": 107
+  },
+  {
+    "fixture": "article",
+    "step": "S3",
+    "bytes": 369
+  },
+  {
+    "fixture": "article",
+    "step": "S4",
+    "bytes": 1294
+  },
+  {
+    "fixture": "article",
+    "step": "S5",
+    "bytes": 724
+  },
+  {
+    "fixture": "article",
+    "step": "S6",
+    "bytes": 784
+  },
+  {
+    "fixture": "article",
+    "step": "S7",
+    "bytes": 368
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S1",
+    "bytes": 79
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S2",
+    "bytes": 107
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S3",
+    "bytes": 419
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S4",
+    "bytes": 547
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S5",
+    "bytes": 167
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S6",
+    "bytes": 139
+  },
+  {
+    "fixture": "missing-package",
+    "step": "S7",
+    "bytes": 368
+  },
+  {
+    "fixture": "thesis",
+    "step": "S1",
+    "bytes": 79
+  },
+  {
+    "fixture": "thesis",
+    "step": "S2",
+    "bytes": 107
+  },
+  {
+    "fixture": "thesis",
+    "step": "S3",
+    "bytes": 372
+  },
+  {
+    "fixture": "thesis",
+    "step": "S4",
+    "bytes": 0
+  },
+  {
+    "fixture": "thesis",
+    "step": "S5",
+    "bytes": 2095
+  },
+  {
+    "fixture": "thesis",
+    "step": "S6",
+    "bytes": 2151
+  },
+  {
+    "fixture": "thesis",
+    "step": "S7",
+    "bytes": 399
+  },
+  {
+    "fixture": "thesis",
+    "step": "S8",
+    "bytes": 506
+  }
+]

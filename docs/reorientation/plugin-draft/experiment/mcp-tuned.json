@@ -1,0 +1,1 @@
+{"mcpServers":{"playwright":{"command":"node","args":["<scratch>/tools/node_modules/@playwright/mcp/cli.js","--cdp-endpoint","http://127.0.0.1:9592","--codegen","none","--snapshot-mode","none","--output-dir","<trial>/mcp"]}}}

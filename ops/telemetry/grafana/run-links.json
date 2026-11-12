@@ -1,0 +1,15 @@
+[
+  {
+    "name": "ScribyraRunID",
+    "matcherRegex": "\"runId\":\"([a-f0-9]{32})\"",
+    "datasourceUid": "scribyra-tempo",
+    "url": "${__value.raw}",
+    "urlDisplayLabel": "Suite trace"
+  },
+  {
+    "name": "ScribyraCIArtifacts",
+    "matcherRegex": "\"jobId\":([0-9]+)",
+    "url": "https://gitlab.com/urundead-labs/scribyra/-/jobs/${__value.raw}/artifacts/browse/.telemetry/",
+    "urlDisplayLabel": "Safe run artifacts"
+  }
+]

@@ -1,0 +1,396 @@
+{
+ "thesis ch-ch none": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 0,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 41,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "connected": true,
+  "sync": {
+   "ms": 42,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 28.42
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4.2,
+   "max": 4.3
+  }
+ },
+ "thesis ch-ff none": {
+  "ea": "chromium",
+  "eb": "firefox",
+  "blob": 0,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 31,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "connected": true,
+  "sync": {
+   "ms": 51,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 23.18
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4.1,
+   "max": 4.3
+  }
+ },
+ "thesis ff-ch none": {
+  "ea": "firefox",
+  "eb": "chromium",
+  "blob": 0,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 31,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "connected": true,
+  "sync": {
+   "ms": 51,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 23.41
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4,
+   "max": 5
+  }
+ },
+ "thesis ch-ch wifi": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 0,
+  "netem": "wifi-ish 20Mbit/5ms/0.5%loss",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 33,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "connected": true,
+  "sync": {
+   "ms": 140,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 8.44
+  },
+  "converged": true,
+  "rtt": {
+   "median": 16.3,
+   "max": 16.4
+  }
+ },
+ "thesis ch-ch wifi e2e": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 0,
+  "encrypt": true,
+  "netem": "wifi-ish 20Mbit/5ms/0.5%loss",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 33,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "connected": true,
+  "sync": {
+   "ms": 117,
+   "rxBytes": 147826,
+   "txBytes": 39,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 10.07
+  },
+  "converged": true,
+  "rtt": {
+   "median": 12.4,
+   "max": 16.3
+  }
+ },
+ "60MiB ch-ch none": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 62914560,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 1044,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 11996,
+   "rxBytes": 63101191,
+   "txBytes": 85,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 1120,
+   "files": 102,
+   "mbps": 42.08
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4.1,
+   "max": 4.2
+  }
+ },
+ "60MiB ch-ch none e2e": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 62914560,
+  "encrypt": true,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 993,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 3716,
+   "rxBytes": 63101247,
+   "txBytes": 141,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 888,
+   "files": 102,
+   "mbps": 135.85
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4.1,
+   "max": 4.3
+  }
+ },
+ "60MiB ch-ff none": {
+  "ea": "chromium",
+  "eb": "firefox",
+  "blob": 62914560,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 1090,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 4024,
+   "rxBytes": 63101191,
+   "txBytes": 85,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 861,
+   "files": 102,
+   "mbps": 125.45
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4.3,
+   "max": 23.9
+  }
+ },
+ "60MiB ff-ch none": {
+  "ea": "firefox",
+  "eb": "chromium",
+  "blob": 62914560,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 1930,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 4011,
+   "rxBytes": 63101191,
+   "txBytes": 85,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 940,
+   "files": 102,
+   "mbps": 125.87
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4,
+   "max": 6
+  }
+ },
+ "60MiB ff-ff none": {
+  "ea": "firefox",
+  "eb": "firefox",
+  "blob": 62914560,
+  "netem": "none",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 1703,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 4742,
+   "rxBytes": 63101191,
+   "txBytes": 85,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 837,
+   "files": 102,
+   "mbps": 106.45
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4,
+   "max": 5
+  }
+ },
+ "60MiB ch-ch 64KiB chunks": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 62914560,
+  "netem": "none",
+  "chunk": 65536,
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 1031,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 6604,
+   "rxBytes": 63072321,
+   "txBytes": 85,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 958,
+   "files": 102,
+   "mbps": 76.4
+  },
+  "converged": true,
+  "rtt": {
+   "median": 4.1,
+   "max": 8.7
+  }
+ },
+ "60MiB ch-ch wifi": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 62914560,
+  "netem": "wifi-ish 20Mbit/5ms/0.5%loss",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 1049,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 42399,
+   "rxBytes": 63101191,
+   "txBytes": 85,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 939,
+   "files": 102,
+   "mbps": 11.91
+  },
+  "converged": true,
+  "rtt": {
+   "median": 12.2,
+   "max": 16.2
+  }
+ },
+ "60MiB ch-ch wifi e2e": {
+  "ea": "chromium",
+  "eb": "chromium",
+  "blob": 62914560,
+  "encrypt": true,
+  "netem": "wifi-ish 20Mbit/5ms/0.5%loss",
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 1017,
+   "updateBytes": 148056,
+   "files": 102,
+   "schema": 5,
+   "refs": 1
+  },
+  "connected": true,
+  "sync": {
+   "ms": 41817,
+   "rxBytes": 63101247,
+   "txBytes": 141,
+   "updateBytes": 148056,
+   "blobBytes": 62914560,
+   "verifyMs": 951,
+   "files": 102,
+   "mbps": 12.07
+  },
+  "converged": true,
+  "rtt": {
+   "median": 12.3,
+   "max": 18.3
+  }
+ }
+}

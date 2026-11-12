@@ -1,0 +1,35 @@
+// Two real machines on real Wi-Fi with default firewalls, connecting through the self-hostable connection service, then transferring directly.
+import {execSync} from 'node:child_process';import {appendFileSync} from 'node:fs';
+const out=process.argv[2],bearer=process.argv[3],reps=+process.argv[4]||2;const sleep=ms=>new Promise(r=>setTimeout(r,ms));
+const M={machine-a:{ssh:'nixos',gecko:9411,chrome:9412,ifc:'wifi-if'},machine-b:{ssh:'machine-b',gecko:9421,chrome:9422,ifc:'wifi-if'}};
+const wd=async(base,m,p,b)=>{const r=await fetch(base+p,{method:m,headers:{'content-type':'application/json'},body:b?JSON.stringify(b):undefined});const j=await r.json();if(j.value&&j.value.error)throw Error(j.value.error+': '+String(j.value.message).slice(0,240));return j.value;};
+const open=async(machine,browser)=>{const base=`http://127.0.0.1:${M[machine][browser==='firefox'?'gecko':'chrome']}`;
+ const caps=browser==='firefox'?{browserName:'firefox','moz:firefoxOptions':{args:['-headless']}}:{browserName:'chrome','goog:chromeOptions':{args:['--headless=new','--no-sandbox','--disable-gpu'],prefs:{}}};
+ const v=await wd(base,'POST','/session',{capabilities:{alwaysMatch:caps}});const s=`/session/${v.sessionId}`;
+ await wd(base,'POST',s+'/url',{url:'http://127.0.0.1:18765/index.html'});
+ let seq=0;const raw=(script,args)=>wd(base,'POST',s+'/execute/sync',{script,args});
+ // Run in the page's own realm through an injected script, since Firefox's WebDriver sandbox differs from a normal page.
+ const pageRun=async(code,args,asyncMode)=>{const id='r'+(++seq);await raw(`const s=document.createElement('script');s.textContent=${'`'}(function(){const __id=${'$'}{JSON.stringify(arguments[0])},__args=${'$'}{JSON.stringify(arguments[1])};const __done=v=>document.documentElement.setAttribute('data-'+__id,JSON.stringify(v===undefined?null:v));try{${asyncMode?`const arguments_=[...__args,__done];(function(){\${arguments[2]}}).apply(null,arguments_);`:`__done((function(){\${arguments[2]}}).apply(null,__args));`}}catch(e){__done('ERR '+e);}})();${'`'};document.head.append(s);s.remove();`,[id,args,code]);
+  for(let i=0;i<400;i++){const v=await raw('return document.documentElement.getAttribute(arguments[0])',['data-'+id]);if(v!==null)return JSON.parse(v);await sleep(50);}throw Error('page script timeout');};
+ return {version:v.capabilities.browserVersion,x:(script,...args)=>pageRun(script,args,false),ax:(script,...args)=>pageRun(script,args,true),close:()=>wd(base,'DELETE',s).catch(()=>{})};};
+const setup=`const done=arguments[arguments.length-1];(async()=>{window.api=await import('/service-client.js');window.errors=[];window.got=0;window.t={};const [inv,bearer]=[arguments[0],arguments[1]];
+ window.pc=new RTCPeerConnection({iceServers:[]});window.cq=[];window.states=[];pc.onconnectionstatechange=()=>states.push(pc.connectionState);pc.oniceconnectionstatechange=()=>states.push('ice:'+pc.iceConnectionState);
+ window.chan=d=>{window.dc=d;d.binaryType='arraybuffer';d.onopen=()=>{t.open=performance.now();};d.onmessage=e=>{if(typeof e.data==='string'){if(e.data==='end')t.end=performance.now();return;}if(!t.first)t.first=performance.now();got+=e.data.byteLength;};};pc.ondatachannel=e=>chan(e.channel);
+ window.relay=await api.connectService({endpoint:'http://127.0.0.1:18787/',bearer,invitation:inv,onSignal:async v=>{if(v.type==='candidate'){if(!pc.remoteDescription)cq.push(v.candidate);else await pc.addIceCandidate(v.candidate);return;}t.remote=performance.now();await pc.setRemoteDescription(v);for(const c of cq.splice(0))await pc.addIceCandidate(c);if(v.type==='offer'){await pc.setLocalDescription(await pc.createAnswer());await relay.send({type:'answer',sdp:pc.localDescription.sdp});}},onError:e=>errors.push(e.message)});
+ pc.onicecandidate=e=>{if(e.candidate)relay.send({type:'candidate',candidate:e.candidate.toJSON()}).catch(x=>errors.push(String(x)));};done('ok');})().catch(e=>done('ERR '+e));`;
+const counters=m=>Object.fromEntries(execSync(`ssh -i $HOME/.ssh/field_test_key -o IdentitiesOnly=yes -o BatchMode=yes <user>@${M[m].ssh}.<mesh> "cat /sys/class/net/${M[m].ifc}/statistics/tx_bytes /sys/class/net/wt0/statistics/tx_bytes"`).toString().trim().split('\n').map((v,i)=>[i?'mesh':'wifi',Number(v)]));
+const wait=async(f,ms)=>{for(let t=0;t<ms;t+=250){const v=await f();if(v)return v;await sleep(250);}return null;};
+const trial=async(mA,bA,mB,bB,delay)=>{const row={at:new Date().toISOString(),A:mA,bA,B:mB,bB,delay,open:false};let A,B;try{
+ A=await open(mA,bA);B=await open(mB,bB);row.vA=A.version;row.vB=B.version;
+ const inv=await A.ax("const done=arguments[0];import('/service-client.js').then(m=>done(m.createInvitation()),e=>done('ERR '+e));");
+ row.setupA=await A.ax(setup,inv,bearer);if(delay)await sleep(delay*1000);row.setupB=await B.ax(setup,inv,bearer);
+ const started=Date.now();
+ await A.ax(`const done=arguments[0];(async()=>{chan(pc.createDataChannel('t'));await pc.setLocalDescription(await pc.createOffer());await relay.send({type:'offer',sdp:pc.localDescription.sdp});done(1);})().catch(e=>done(String(e)));`);
+ row.open=!!await wait(async()=>await A.x("return window.dc&&dc.readyState==='open'")&&await B.x("return window.dc&&dc.readyState==='open'"),25000);row.ms=row.open?Date.now()-started:null;
+ if(row.open){const before=counters(mA);const startT=Date.now();await A.ax(`const done=arguments[0];(async()=>{const n=20*1048576,c=16384,b=new Uint8Array(c);crypto.getRandomValues(b);dc.bufferedAmountLowThreshold=262144;for(let o=0;o<n;o+=c){if(dc.bufferedAmount>1048576)await new Promise(r=>{dc.onbufferedamountlow=r;});dc.send(b);}dc.send('end');done(1);})().catch(e=>done(String(e)));`);
+  const got=await wait(()=>B.x("return window.t&&t.end?got:0"),90000);const after=counters(mA);row.bytes=got;row.mbps=got?+(got*8/(Date.now()-startT)/1000).toFixed(1):null;row.txWifi=after.wifi-before.wifi;row.txMesh=after.mesh-before.mesh;}
+ row.statesA=await A.x('return states.slice(-5)');row.statesB=await B.x('return states.slice(-5)');row.errA=await A.x('return errors.slice(0,2)');row.errB=await B.x('return errors.slice(0,2)');
+}catch(e){row.error=String(e.message).slice(0,260);}finally{await A?.close();await B?.close();}
+ appendFileSync(out,JSON.stringify(row)+'\n');console.log(JSON.stringify({delay,A:`${mA}/${bA}`,B:`${mB}/${bB}`,open:row.open,ms:row.ms,mbps:row.mbps,wifiMB:row.txWifi&&Math.round(row.txWifi/1e6),meshMB:row.txMesh!==undefined?Math.round(row.txMesh/1e6):undefined,sA:row.statesA?.slice(-2),sB:row.statesB?.slice(-2),err:row.error||row.errA?.[0]||row.errB?.[0]}));};
+if(process.env.SMOKE){await trial('machine-a','firefox','machine-b','firefox',0);await trial('machine-b','firefox','machine-a','chrome',0);await trial('machine-a','chrome','machine-b','firefox',0);process.exit(0);}
+for(let r=0;r<reps;r++)for(const [bA,bB] of [['chrome','chrome'],['firefox','firefox'],['firefox','chrome'],['chrome','firefox']])for(const [mA,mB] of [['machine-a','machine-b'],['machine-b','machine-a']])for(const d of [0,20])await trial(mA,bA,mB,bB,d);

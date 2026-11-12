@@ -1,0 +1,314 @@
+{
+  "capturedAt": "2026-11-02T13:25:55.854Z",
+  "cpu": "AMD Ryzen 7 7800X3D 8-Core Processor",
+  "logicalCpus": 16,
+  "memoryBytes": 32746774528,
+  "platform": "linux 6.18.34",
+  "compiler": "TeXlyre-BusyTeX 1.4.1 / TeX Live 2026",
+  "methodology": "Single sequential sample per case on a loopback static server; cold means a newly initialized worker, not necessarily an empty HTTP/package cache. Article first sample has fresh browser storage. Warm reuses the live worker. Main-thread heap excludes compiler worker/WASM memory. Timer gap is a 16 ms interval probe, not a production latency percentile.",
+  "browsers": {
+    "chromium": [
+      {
+        "fixture": "article",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 18437.799999952316,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 55.90000003576279,
+        "mainThreadHeapBytes": 16451172
+      },
+      {
+        "fixture": "article",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": false,
+        "durationMs": 582.3000000119209,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 26,
+        "mainThreadHeapBytes": 14921429
+      },
+      {
+        "fixture": "unicode",
+        "engine": "xelatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 9548.800000011921,
+        "exitCode": 0,
+        "bytes": 11746,
+        "mainThreadMaxTimerGapMs": 20.5,
+        "mainThreadHeapBytes": 10709812
+      },
+      {
+        "fixture": "unicode",
+        "engine": "lualatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 9083.899999976158,
+        "exitCode": 0,
+        "bytes": 12593,
+        "mainThreadMaxTimerGapMs": 20.5,
+        "mainThreadHeapBytes": 9645528
+      },
+      {
+        "fixture": "bibtex",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 7327.300000011921,
+        "exitCode": 0,
+        "bytes": 35706,
+        "mainThreadMaxTimerGapMs": 22.69999998807907,
+        "mainThreadHeapBytes": 10388782
+      },
+      {
+        "fixture": "biber",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 10999.800000011921,
+        "exitCode": 0,
+        "bytes": 35703,
+        "mainThreadMaxTimerGapMs": 19.600000023841858,
+        "mainThreadHeapBytes": 12192926
+      },
+      {
+        "fixture": "thesis",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 7822.300000011921,
+        "exitCode": 0,
+        "bytes": 76469,
+        "mainThreadMaxTimerGapMs": 24,
+        "mainThreadHeapBytes": 15098279
+      },
+      {
+        "fixture": "thesis-warm",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": false,
+        "durationMs": 979.6999999880791,
+        "exitCode": 0,
+        "bytes": 76469,
+        "mainThreadMaxTimerGapMs": 23.100000023841858,
+        "mainThreadHeapBytes": 15160212
+      },
+      {
+        "fixture": "article-offline",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 7279.300000011921,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 27.80000001192093,
+        "mainThreadHeapBytes": 12815538
+      }
+    ],
+    "firefox": [
+      {
+        "fixture": "article",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 15848,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 25,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "article",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": false,
+        "durationMs": 707,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 24,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "unicode",
+        "engine": "xelatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 6761,
+        "exitCode": 0,
+        "bytes": 11746,
+        "mainThreadMaxTimerGapMs": 22,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "unicode",
+        "engine": "lualatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 5513,
+        "exitCode": 0,
+        "bytes": 12593,
+        "mainThreadMaxTimerGapMs": 23,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "bibtex",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 3810,
+        "exitCode": 0,
+        "bytes": 35706,
+        "mainThreadMaxTimerGapMs": 23,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "biber",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 6891,
+        "exitCode": 0,
+        "bytes": 35703,
+        "mainThreadMaxTimerGapMs": 23,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "thesis",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 11588,
+        "exitCode": 0,
+        "bytes": 76469,
+        "mainThreadMaxTimerGapMs": 26,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "thesis-warm",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": false,
+        "durationMs": 1031,
+        "exitCode": 0,
+        "bytes": 76469,
+        "mainThreadMaxTimerGapMs": 24,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "article-offline",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 3614,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 23,
+        "mainThreadHeapBytes": null
+      }
+    ],
+    "webkit": [
+      {
+        "fixture": "article",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 18080,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 601,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "article",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": false,
+        "durationMs": 550,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 82,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "unicode",
+        "engine": "xelatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 4541,
+        "exitCode": 0,
+        "bytes": 11746,
+        "mainThreadMaxTimerGapMs": 125,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "unicode",
+        "engine": "lualatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 4199,
+        "exitCode": 0,
+        "bytes": 12593,
+        "mainThreadMaxTimerGapMs": 106,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "bibtex",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 2496,
+        "exitCode": 0,
+        "bytes": 35706,
+        "mainThreadMaxTimerGapMs": 135,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "biber",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 5960,
+        "exitCode": 0,
+        "bytes": 35703,
+        "mainThreadMaxTimerGapMs": 87,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "thesis",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 2947,
+        "exitCode": 0,
+        "bytes": 76469,
+        "mainThreadMaxTimerGapMs": 135,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "thesis-warm",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": false,
+        "durationMs": 983,
+        "exitCode": 0,
+        "bytes": 76469,
+        "mainThreadMaxTimerGapMs": 142,
+        "mainThreadHeapBytes": null
+      },
+      {
+        "fixture": "article-offline",
+        "engine": "pdflatex",
+        "success": true,
+        "cold": true,
+        "durationMs": 2589,
+        "exitCode": 0,
+        "bytes": 96047,
+        "mainThreadMaxTimerGapMs": 142,
+        "mainThreadHeapBytes": null
+      }
+    ]
+  }
+}

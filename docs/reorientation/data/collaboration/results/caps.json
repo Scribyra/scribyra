@@ -1,0 +1,435 @@
+{
+ "chromium": {
+  "version": "156.0.8078.79",
+  "caps": {
+   "RTCPeerConnection": "function",
+   "BarcodeDetector": "undefined",
+   "bluetooth": false,
+   "nfc": false,
+   "TCPSocket": "undefined",
+   "TCPServerSocket": "undefined",
+   "UDPSocket": "undefined",
+   "WebTransport": "function",
+   "subtle": true,
+   "RTCQuicTransport": "undefined",
+   "isSecureContext": true,
+   "gum": true,
+   "locks": true,
+   "dcTransfer": false,
+   "sctpMax": null
+  },
+  "curves": {
+   "X25519": true,
+   "Ed25519": true,
+   "ECDH-P256": true
+  },
+  "cert": {
+   "expires": 365,
+   "fp": {
+    "algorithm": "sha-256",
+    "value": "b7:39:09:ba:81:25:80:65:95:94:b3:14:68:54:78:f8:15:b2:ab:5b:c6:19:5b:71:86:26:9d:cb:72:bc:e5:b1"
+   },
+   "idbRoundTrip": true,
+   "offerUsesPinned": true
+  },
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 37,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "eth_up_default_route": {
+   "gatherMs": 128,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "3fe93136-3b38-4f1b-b719-9ea213eac70c.local",
+     "port": 44129,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 647,
+    "deflateBytes": 446,
+    "base64url": 595,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "eth_up_no_default_route": {
+   "gatherMs": 124,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "3fe93136-3b38-4f1b-b719-9ea213eac70c.local",
+     "port": 57670,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 587,
+    "jsonBytes": 648,
+    "deflateBytes": 454,
+    "base64url": 606,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "loopback_only": {
+   "gatherMs": 126,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "3fe93136-3b38-4f1b-b719-9ea213eac70c.local",
+     "port": 39982,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 587,
+    "jsonBytes": 648,
+    "deflateBytes": 452,
+    "base64url": 603,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "no_interfaces_up": {
+   "gatherMs": 129,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "3fe93136-3b38-4f1b-b719-9ea213eac70c.local",
+     "port": 59577,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 647,
+    "deflateBytes": 452,
+    "base64url": 603,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  }
+ },
+ "firefox": {
+  "version": "157.0",
+  "caps": {
+   "RTCPeerConnection": "function",
+   "BarcodeDetector": "undefined",
+   "bluetooth": false,
+   "nfc": false,
+   "TCPSocket": "undefined",
+   "TCPServerSocket": "undefined",
+   "UDPSocket": "undefined",
+   "WebTransport": "function",
+   "subtle": true,
+   "RTCQuicTransport": "undefined",
+   "isSecureContext": true,
+   "gum": true,
+   "locks": true,
+   "dcTransfer": false,
+   "sctpMax": null
+  },
+  "curves": {
+   "X25519": true,
+   "Ed25519": true,
+   "ECDH-P256": true
+  },
+  "cert": {
+   "expires": 365,
+   "fp": {
+    "algorithm": "sha-256",
+    "value": "e8:81:78:ed:73:3f:45:3f:89:05:96:98:d9:85:80:05:fc:c4:4d:a2:44:d2:f1:80:1d:f4:f6:4f:47:c9:9b:ba"
+   },
+   "idbRoundTrip": true,
+   "offerUsesPinned": true
+  },
+  "setup": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 26,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "eth_up_default_route": {
+   "gatherMs": 6,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "a989c027-4eaa-45f8-82e5-ed7b585c11fc.local",
+     "port": 37763,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "a989c027-4eaa-45f8-82e5-ed7b585c11fc.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 716,
+    "jsonBytes": 783,
+    "deflateBytes": 487,
+    "base64url": 650,
+    "qrVersionL": 18,
+    "qrVersionM": 20,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "eth_up_no_default_route": {
+   "gatherMs": 20001,
+   "why": "timeout",
+   "candidates": [],
+   "size": {
+    "sdpBytes": 504,
+    "jsonBytes": 565,
+    "deflateBytes": 390,
+    "base64url": 520,
+    "qrVersionL": 15,
+    "qrVersionM": 18,
+    "qrBinaryVersionL": 13,
+    "minimalBytes": 77,
+    "minimalDerivedIceBytes": 35,
+    "minimalB32Chars": 56,
+    "qrMinimalVersionL": 3,
+    "qrMinimalVersionM": 3
+   }
+  },
+  "loopback_only": {
+   "gatherMs": 20001,
+   "why": "timeout",
+   "candidates": [],
+   "size": {
+    "sdpBytes": 504,
+    "jsonBytes": 565,
+    "deflateBytes": 389,
+    "base64url": 519,
+    "qrVersionL": 15,
+    "qrVersionM": 18,
+    "qrBinaryVersionL": 13,
+    "minimalBytes": 77,
+    "minimalDerivedIceBytes": 35,
+    "minimalB32Chars": 56,
+    "qrMinimalVersionL": 3,
+    "qrMinimalVersionM": 3
+   }
+  },
+  "no_interfaces_up": {
+   "gatherMs": 20000,
+   "why": "timeout",
+   "candidates": [],
+   "size": {
+    "sdpBytes": 504,
+    "jsonBytes": 565,
+    "deflateBytes": 389,
+    "base64url": 519,
+    "qrVersionL": 15,
+    "qrVersionM": 18,
+    "qrBinaryVersionL": 13,
+    "minimalBytes": 77,
+    "minimalDerivedIceBytes": 35,
+    "minimalB32Chars": 56,
+    "qrMinimalVersionL": 3,
+    "qrMinimalVersionM": 3
+   }
+  }
+ },
+ "webkit": {
+  "version": "27.2",
+  "caps": {
+   "RTCPeerConnection": "function",
+   "BarcodeDetector": "undefined",
+   "bluetooth": false,
+   "nfc": false,
+   "TCPSocket": "undefined",
+   "TCPServerSocket": "undefined",
+   "UDPSocket": "undefined",
+   "WebTransport": "undefined",
+   "subtle": true,
+   "RTCQuicTransport": "undefined",
+   "isSecureContext": true,
+   "gum": true,
+   "locks": true,
+   "dcTransfer": false,
+   "sctpMax": null
+  },
+  "curves": {
+   "X25519": true,
+   "Ed25519": true,
+   "ECDH-P256": true
+  },
+  "cert": {
+   "expires": 365,
+   "fp": {
+    "algorithm": "sha-256",
+    "value": "ee:ce:3f:5a:af:b0:a6:68:4e:96:e3:69:63:c6:44:6c:0c:95:be:fa:54:10:d0:f0:03:d9:bb:0f:6c:94:3f:36"
+   },
+   "idbRoundTrip": true,
+   "offerUsesPinned": true
+  },
+  "setup": {
+   "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
+   "buildMs": 25,
+   "updateBytes": 147697,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "eth_up_default_route": {
+   "gatherMs": 104,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "711de262-00a7-49f4-ba6e-c3b94c9fa99d.local",
+     "port": 46933,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 647,
+    "deflateBytes": 452,
+    "base64url": 603,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "eth_up_no_default_route": {
+   "gatherMs": 102,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "339c530e-ca74-4cd7-acbc-33f9045b3ad6.local",
+     "port": 54059,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 647,
+    "deflateBytes": 452,
+    "base64url": 603,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "loopback_only": {
+   "gatherMs": 103,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "19489b94-a5e1-4d92-81ac-05334935fc7e.local",
+     "port": 35382,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 585,
+    "jsonBytes": 646,
+    "deflateBytes": 452,
+    "base64url": 603,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  },
+  "no_interfaces_up": {
+   "gatherMs": 102,
+   "why": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "845db48e-8b19-49e5-8283-061698fc785f.local",
+     "port": 57051,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "size": {
+    "sdpBytes": 585,
+    "jsonBytes": 646,
+    "deflateBytes": 451,
+    "base64url": 602,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   }
+  }
+ }
+}

@@ -1,0 +1,100 @@
+/* One look for every popup: menus, select listboxes, action panels and small prompts. */
+:root{--popup-shadow:0 2px 6px #171a300f,0 10px 28px #171a3024;--danger:#b3261e;--danger-soft:#fbeceb}
+:root[data-theme=dark]{--popup-shadow:0 2px 6px #0000004d,0 12px 32px #00000073;--danger:#ff9d94;--danger-soft:#47292a}
+
+.ui-popup,.review-menu-items,.compile-options-menu,.history-manage-panel,.tools-menu{
+  position:fixed;inset:auto;z-index:1000;margin:0;box-sizing:border-box;min-width:176px;max-width:min(380px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;overscroll-behavior:contain;
+  padding:4px;display:flex;flex-direction:column;gap:1px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);box-shadow:var(--popup-shadow);font-size:12.5px;line-height:1.35;outline:0;
+}
+.ui-popup[hidden],.review-menu-items[hidden],.compile-options-menu[hidden],.history-manage-panel[hidden],.tools-menu[hidden]{display:none}
+.compile-options-menu,.history-manage-panel{width:276px}
+.ui-popup-title{padding:5px 8px 6px;font-size:11px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ui-popup-note,.history-manage-panel p{margin:0;padding:2px 8px 7px;font-size:11px;line-height:1.45;color:var(--muted)}
+.ui-popup-note{margin-top:3px;padding-top:7px;border-top:1px solid var(--border);white-space:normal;width:0;min-width:100%}
+.ui-listbox{max-height:min(320px,calc(100vh - 16px))}
+.ui-separator,.review-menu-items hr,.history-manage-panel hr,.tools-menu hr{flex:none;height:0;margin:4px 0;border:0;border-top:1px solid var(--border)}
+
+.ui-item,.review-menu-items button,.history-manage-panel button,.compile-option,.tools-menu button,.tools-menu a{
+  display:flex;flex:none;align-items:center;gap:8px;width:100%;min-height:28px;padding:5px 8px;border:0;border-radius:6px;background:none;color:inherit;font:inherit;font-weight:400;text-align:left;cursor:pointer;outline:0;box-sizing:border-box;
+}
+.ui-item[hidden]{display:none}
+.tools-menu button:hover:not(:disabled),.tools-menu button:focus,.tools-menu a:hover,.tools-menu a:focus,.ui-item:hover,.ui-item:focus,.review-menu-items button:hover:not(:disabled),.review-menu-items button:focus,.history-manage-panel button:hover:not(:disabled),.history-manage-panel button:focus,.compile-option:hover,.compile-option:has(input:focus){background:var(--accent-soft);color:var(--text)}
+.tools-menu button:focus-visible,.tools-menu a:focus-visible,.ui-item:focus-visible,.review-menu-items button:focus-visible,.history-manage-panel button:focus-visible,.compile-option:has(input:focus-visible){outline:0;box-shadow:inset 0 0 0 1px var(--accent)}
+[data-modality=pointer] .ui-item:focus:not(:hover),[data-modality=pointer] button:focus:not(:hover),[data-modality=pointer] .compile-option:has(input:focus):not(:hover){background:none;box-shadow:none}
+.ui-item[aria-disabled=true],.review-menu-items button:disabled,.history-manage-panel button:disabled{opacity:1;color:var(--muted);cursor:default;background:none}
+.ui-item[aria-disabled=true]:hover{background:none;color:var(--muted)}
+.ui-item[aria-disabled=true]:focus{background:var(--subtle);color:var(--muted)}
+.ui-danger:not([aria-disabled=true]),.review-menu-items button.danger{color:var(--danger)}
+.ui-danger:not([aria-disabled=true]):hover,.ui-danger:not([aria-disabled=true]):focus,.review-menu-items button.danger:hover:not(:disabled),.review-menu-items button.danger:focus{background:var(--danger-soft);color:var(--danger)}
+.ui-item-text{display:flex;flex-direction:column;flex:1;min-width:0}
+.ui-item-label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ui-item-hint{margin-top:1px;font-size:11px;line-height:1.35;color:var(--muted);white-space:normal}
+.ui-icon{flex:none;width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;opacity:.8}
+.ui-item[aria-selected=true] .ui-item-label{font-weight:600}
+.ui-listbox .ui-item[aria-selected=true]{background:var(--subtle)}
+.ui-listbox .ui-item[aria-selected=true]:hover,.ui-listbox:not([data-modality=pointer]) .ui-item[aria-selected=true]:focus{background:var(--accent-soft)}
+.ui-item-check{margin-left:auto;color:var(--accent);opacity:1;stroke-width:2}
+.compile-option{align-items:flex-start;padding:7px 8px}
+.compile-option input{margin:2px 0 0;accent-color:var(--accent)}
+.compile-option input:focus-visible{outline:0}
+.compile-option strong{display:block;font-weight:550}
+.compile-option small{display:block;margin-top:1px;font-size:11px;line-height:1.35;color:var(--muted)}
+
+/* Small prompts: naming, moving and confirming beside the thing being changed. */
+.ui-prompt{width:min(320px,calc(100vw - 16px));padding:12px;gap:8px}
+.ui-prompt-title{margin:0;font-size:13px;font-weight:600;letter-spacing:0;overflow-wrap:anywhere}
+.ui-prompt-message{margin:0;font-size:11.5px;line-height:1.45;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
+.ui-input,.tree-rename{box-sizing:border-box;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font:inherit;font-size:12.5px;outline:0}
+.ui-input{width:100%;padding:6px 8px}
+.ui-input:focus,.tree-rename:focus{border-color:var(--accent);box-shadow:0 0 0 1px var(--accent);outline:0}
+.ui-input:focus-visible,.tree-rename:focus-visible{outline:0}
+.ui-destinations{display:flex;flex-direction:column;gap:1px;max-height:164px;overflow:auto;padding:3px;border:1px solid var(--border);border-radius:6px;background:var(--bg)}
+.ui-prompt-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:2px}
+.ui-prompt-actions .button{min-height:28px;padding:5px 11px;font-size:12px}
+.ui-danger-button.button.primary{background:var(--danger);color:var(--surface)}
+.ui-danger-button.button.primary:hover{background:color-mix(in srgb,var(--danger) 88%,var(--text))}
+
+/* Inline rename: the row stays where it is and its name becomes editable. */
+.file-row{position:relative}
+.file-row.renaming .file-path{visibility:hidden}
+.file-row.renaming .file-menu{visibility:hidden}
+.tree-rename{position:absolute;top:5px;right:4px;height:24px;min-width:0;padding:2px 5px}
+.file-row.menu-open{background:var(--subtle)}
+.file-row.menu-open .file-menu,.file-row:focus-within .file-menu{opacity:1}
+@media(hover:none){.file-menu{opacity:1}.file-row{-webkit-touch-callout:none;user-select:none}}
+
+/* The closed select shares one chevron and, while its popup is open, one pressed state. */
+select:not(.review-filter select,.review-mode select,[multiple]){appearance:none;-webkit-appearance:none;background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23808899' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 5px center;background-size:14px;padding-right:23px;cursor:pointer}
+select[aria-expanded=true]:not(.review-filter select,.review-mode select){background-color:var(--subtle);color:var(--text)}
+.review-filter:has(select[aria-expanded=true]){background:var(--review-hover);color:var(--text)}
+.review-mode:has(select[aria-expanded=true]){background:var(--subtle)}
+.modal select{box-sizing:border-box;width:100%;max-width:none;border:1px solid var(--border);border-radius:6px;background-color:var(--bg);color:var(--text);padding-top:8px;padding-bottom:8px;padding-left:9px;font-size:13px}
+@supports (field-sizing:content){.compile-controls select{field-sizing:content}}
+.tool-panel label:has(>select){display:flex;flex-direction:column}
+.tool-panel select{max-width:none}
+
+/* Dialogs: every modal shares one heading, field and group treatment. */
+.modal{max-height:min(90vh,calc(100vh - 32px));overflow:auto;font-size:12.5px}
+.modal label{font-size:12.5px}
+.modal fieldset{min-width:0;margin:14px 0;padding:12px;display:grid;gap:10px;border:1px solid var(--border);border-radius:8px}
+.modal legend{padding:0 4px;font-size:12.5px;font-weight:600}
+.modal summary{font-size:12.5px;font-weight:550;cursor:pointer}
+.modal details[open]>summary{margin-bottom:6px}
+.modal input[type=checkbox]{width:auto;margin:0;accent-color:var(--accent)}
+.modal label:has(>input[type=checkbox]){display:flex;align-items:center;gap:8px;margin:6px 0}
+.modal fieldset>label:has(>input[type=checkbox]){margin:0}
+.modal fieldset>label:has(>select),.modal fieldset>label:has(>input:not([type=checkbox])){display:grid;gap:5px}
+.modal fieldset input:not([type=checkbox]){margin:0;padding:8px 9px}
+.modal fieldset>.button{justify-self:start}
+.modal table{width:100%;border-collapse:collapse;font-size:11.5px}
+.modal th,.modal td{padding:4px 6px;border-bottom:1px solid var(--border);text-align:left}
+.modal th{font-weight:600;color:var(--muted)}
+.modal pre{font-size:11.5px}
+.diagnostics-dialog{width:min(640px,94vw)}
+
+.tools-menu{width:252px}
+.tools-menu svg{flex:none;width:15px;height:15px;opacity:.8}
+.tools-menu button:disabled{opacity:1;color:var(--muted);cursor:default;background:none}
+.tools-item-text{display:flex;flex-direction:column;min-width:0}
+.tools-item-text small{margin-top:1px;font-size:11px;line-height:1.35;color:var(--muted)}
+.tools-menu button[data-connected=true] svg{color:var(--accent);opacity:1}

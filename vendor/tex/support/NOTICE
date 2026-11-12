@@ -1,0 +1,20 @@
+Scribyra optional TeX language support inputs
+
+These are unmodified TeX Live runtime archives and the corresponding separately
+published source archives where available. Package names, TeX Live revisions,
+upstream repository, archive sizes, SHA-512 pins and reported catalogue license
+identifiers are recorded in scripts/tex-support.json. Copyright and license
+notices remain in the archives and their TeX sources; an unspecified catalogue
+license is not a replacement for the source-file notices.
+
+Upstream: https://ctan.math.illinois.edu/systems/texlive/tlnet/archive/
+Package database/format: https://tug.org/texlive/doc/tlmgr.html
+General TeX distribution notices: public/core/busytex/LICENSE.TL and LICENSE.CTAN
+(after installing the pinned compiler assets).
+
+The native Rust asset builder verifies these inputs and their runtime file
+manifests using the same verifier as the browser. It publishes optional,
+content-addressed runtime/source archives and immutable metadata. They are
+not added to the initial LuaLaTeX data baseline. No source headers or runtime
+files are modified. Source releases retain this directory and the recipe so
+building this support set does not depend on a moving mirror or a bot challenge.

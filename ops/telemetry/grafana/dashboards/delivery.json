@@ -1,0 +1,186 @@
+{
+  "uid": "scribyra-delivery",
+  "title": "Scribyra collection health",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "tags": [
+    "scribyra",
+    "private",
+    "telemetry"
+  ],
+  "timezone": "browser",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "panels": [
+    {
+      "id": 1,
+      "title": "Collector target reachable",
+      "type": "stat",
+      "description": "1 reachable, 0 unreachable. No series means this deployment has not configured the ingress scrape.",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "up{job=\"scribyra-ingress\"}",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Seconds since last accepted batch",
+      "type": "stat",
+      "description": "No data before the first accepted batch. Increasing age can mean deliberately idle/disabled clients; not a failed save.",
+      "gridPos": {
+        "x": 12,
+        "y": 0,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "(time() - scribyra_ingress_last_success_timestamp_seconds) and (scribyra_ingress_last_success_timestamp_seconds > 0)",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "title": "Ingress results",
+      "type": "timeseries",
+      "description": "accepted/auth/origin/oversize/rate/unavailable/conflict/invalid: fixed labels only.",
+      "gridPos": {
+        "x": 0,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(scribyra_ingress_requests_total[5m]))",
+          "legendFormat": "{{result}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "title": "Accepted event count",
+      "type": "stat",
+      "description": "Since ingress startup, including finite receipt deduplication. Acceptance is not a durable storage acknowledgement.",
+      "gridPos": {
+        "x": 12,
+        "y": 8,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "scribyra_ingress_events_total",
+          "legendFormat": "{{scribyra_runtime}} {{scribyra_operation}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "templating": {
+    "list": []
+  },
+  "links": [
+    {
+      "title": "Operations overview",
+      "url": "/d/scribyra-operations",
+      "type": "link",
+      "includeVars": false,
+      "keepTime": true
+    },
+    {
+      "title": "Test runs",
+      "url": "/d/scribyra-test-runs",
+      "type": "link",
+      "includeVars": false,
+      "keepTime": true
+    }
+  ]
+}

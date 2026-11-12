@@ -1,0 +1,56 @@
+# Single-node, private development/small deployment. Retention is time based;
+# provision a separate quota/volume for a hard disk budget.
+auth_enabled: false
+server:
+  http_listen_address: 127.0.0.1
+  http_listen_port: ${SCRIBYRA_LOKI_PORT}
+  grpc_listen_address: 127.0.0.1
+  grpc_listen_port: ${SCRIBYRA_LOKI_GRPC_PORT}
+  log_level: warn
+common:
+  instance_addr: 127.0.0.1
+  path_prefix: ${SCRIBYRA_STATE}/loki
+  replication_factor: 1
+  ring:
+    kvstore:
+      store: inmemory
+  storage:
+    filesystem:
+      chunks_directory: ${SCRIBYRA_STATE}/loki/chunks
+      rules_directory: ${SCRIBYRA_STATE}/loki/rules
+schema_config:
+  configs:
+    - from: 2020-01-01
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+compactor:
+  working_directory: ${SCRIBYRA_STATE}/loki/compactor
+  retention_enabled: true
+  delete_request_store: filesystem
+limits_config:
+  retention_period: 168h
+  ingestion_rate_mb: 1
+  ingestion_burst_size_mb: 2
+  max_global_streams_per_user: 2048
+  max_query_parallelism: 2
+  split_queries_by_interval: 15m
+  allow_structured_metadata: true
+  otlp_config:
+    resource_attributes:
+      ignore_defaults: true
+      attributes_config:
+        - action: index_label
+          attributes: [service.name]
+analytics:
+  reporting_enabled: false
+
+# Run reports may arrive up to 24h late. In filesystem/TSDB mode the ingester
+# store lookback takes precedence over the querier window; configure both.
+ingester:
+  query_store_max_look_back_period: 25h
+querier:
+  query_ingesters_within: 25h

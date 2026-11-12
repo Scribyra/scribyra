@@ -1,0 +1,9 @@
+{
+  "note": "Not loaded by anything. Copy into your own MCP config only if you already run Playwright MCP. A plugin that bundled this would start a program on every session.",
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@0.0.84", "--extension", "--codegen", "none", "--snapshot-mode", "none"]
+    }
+  }
+}

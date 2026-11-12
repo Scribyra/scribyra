@@ -1,0 +1,74 @@
+// Browser/native clients send only to the authenticated Rust policy ingress.
+// Cloud credentials are runtime files on the collector and never client inputs.
+logging {
+  level = "warn"
+}
+local.file "cloud_username" {
+  filename = sys.env("SCRIBYRA_CLOUD_USERNAME_FILE")
+}
+local.file "cloud_token" {
+  filename = sys.env("SCRIBYRA_CLOUD_TOKEN_FILE")
+  is_secret = true
+}
+// Alloy 1.21.3 rejects client_auth at runtime with "no credential source"
+// (both literal and file-based credentials). Its supported top-level arguments
+// work; retain them for this pin and recheck client_auth on the next upgrade.
+otelcol.auth.basic "cloud" {
+  username = local.file.cloud_username.content
+  password = local.file.cloud_token.content
+}
+otelcol.receiver.otlp "scribyra" {
+  http {
+    endpoint = sys.env("SCRIBYRA_OTLP_LISTEN")
+  }
+  output {
+    logs = [otelcol.exporter.otlphttp.cloud.input]
+    traces = [otelcol.exporter.otlphttp.cloud.input]
+    metrics = [otelcol.processor.deltatocumulative.scribyra.input]
+  }
+}
+otelcol.processor.deltatocumulative "scribyra" {
+  max_stale = "15m"
+  max_streams = 2048
+  output {
+    metrics = [otelcol.exporter.otlphttp.cloud.input]
+  }
+}
+// Only fixed ingress metrics/labels cross this boundary. Actual listen addresses
+// remain discovery metadata; they are never emitted as an instance label.
+prometheus.scrape "ingress" {
+  targets = [{"__address__" = sys.env("SCRIBYRA_INGRESS_SCRAPE"), "instance" = "scribyra-ingress"}]
+  job_name = "scribyra-ingress"
+  scrape_interval = "15s"
+  scrape_timeout = "2s"
+  sample_limit = 64
+  forward_to = [prometheus.relabel.ingress.receiver]
+}
+prometheus.relabel "ingress" {
+  forward_to = [otelcol.receiver.prometheus.ingress.receiver]
+  rule {
+    source_labels = ["__name__"]
+    regex = "up|scribyra_ingress_(requests_total|events_total|last_success_timestamp_seconds)"
+    action = "keep"
+  }
+}
+otelcol.receiver.prometheus "ingress" {
+  output {
+    metrics = [otelcol.exporter.otlphttp.cloud.input]
+  }
+}
+otelcol.exporter.otlphttp "cloud" {
+  client {
+    endpoint = sys.env("SCRIBYRA_CLOUD_OTLP_URL")
+    auth = otelcol.auth.basic.cloud.handler
+    compression = "gzip"
+    timeout = "5s"
+  }
+  sending_queue {
+    queue_size = 8
+    num_consumers = 1
+  }
+  retry_on_failure {
+    max_elapsed_time = "15s"
+  }
+}

@@ -1,0 +1,63 @@
+// Only the closed-policy ingress may send to this private OTLP receiver.
+logging {
+  level = "warn"
+}
+otelcol.receiver.otlp "scribyra" {
+  http {
+    endpoint = sys.env("SCRIBYRA_OTLP_LISTEN")
+  }
+  output {
+    logs = [otelcol.exporter.otlphttp.loki.input]
+    traces = [otelcol.exporter.otlphttp.tempo.input]
+    metrics = [otelcol.processor.deltatocumulative.scribyra.input]
+  }
+}
+otelcol.processor.deltatocumulative "scribyra" {
+  max_stale = "15m"
+  max_streams = 2048
+  output {
+    metrics = [otelcol.exporter.otlphttp.prometheus.input]
+  }
+}
+otelcol.exporter.otlphttp "prometheus" {
+  client {
+    endpoint = sys.env("SCRIBYRA_PROMETHEUS_URL") + "/api/v1/otlp"
+    compression = "gzip"
+    timeout = "2s"
+  }
+  sending_queue {
+    queue_size = 8
+    num_consumers = 1
+  }
+  retry_on_failure {
+    max_elapsed_time = "15s"
+  }
+}
+otelcol.exporter.otlphttp "loki" {
+  client {
+    endpoint = sys.env("SCRIBYRA_LOKI_URL") + "/otlp"
+    compression = "gzip"
+    timeout = "2s"
+  }
+  sending_queue {
+    queue_size = 8
+    num_consumers = 1
+  }
+  retry_on_failure {
+    max_elapsed_time = "15s"
+  }
+}
+otelcol.exporter.otlphttp "tempo" {
+  client {
+    endpoint = sys.env("SCRIBYRA_TEMPO_OTLP_URL")
+    compression = "gzip"
+    timeout = "2s"
+  }
+  sending_queue {
+    queue_size = 8
+    num_consumers = 1
+  }
+  retry_on_failure {
+    max_elapsed_time = "15s"
+  }
+}

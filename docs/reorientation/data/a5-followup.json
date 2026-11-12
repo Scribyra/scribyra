@@ -1,0 +1,376 @@
+{
+  "method": "One fresh Chromium profile per fixture; JSON.stringify receipts, UTF-8 bytes; S2/S7 start + terminal poll; bounded 25s waits with intermediate polls and discovery separate; pretty-printed sizes also recorded. No MCP framing, model or token measurement.",
+  "browser": "156.0.8078.79",
+  "recipeBytes": 1987,
+  "identities": [
+    {
+      "fixture": "article",
+      "build": {
+        "version": "0.1.0",
+        "revision": "36f9e39ccbd8f5f49e9b5243c6c3a25cc4916c14",
+        "dirty": true,
+        "compilerAdapterSha256": "449c744f5a94db8fad8c34cc79e97915a042a6a47115f8e2c1d8732998c6e55f"
+      }
+    },
+    {
+      "fixture": "missing-package",
+      "build": {
+        "version": "0.1.0",
+        "revision": "36f9e39ccbd8f5f49e9b5243c6c3a25cc4916c14",
+        "dirty": true,
+        "compilerAdapterSha256": "449c744f5a94db8fad8c34cc79e97915a042a6a47115f8e2c1d8732998c6e55f"
+      }
+    },
+    {
+      "fixture": "thesis",
+      "build": {
+        "version": "0.1.0",
+        "revision": "36f9e39ccbd8f5f49e9b5243c6c3a25cc4916c14",
+        "dirty": true,
+        "compilerAdapterSha256": "449c744f5a94db8fad8c34cc79e97915a042a6a47115f8e2c1d8732998c6e55f"
+      }
+    }
+  ],
+  "rows": [
+    {
+      "fixture": "article",
+      "step": "S1",
+      "prettyBytes": 351,
+      "prettyCharacters": 351,
+      "bytes": 278,
+      "characters": 278,
+      "maxReceiptBytes": 278,
+      "maxReceiptCharacters": 278,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "describe",
+      "prettyBytes": 613,
+      "prettyCharacters": 613,
+      "bytes": 509,
+      "characters": 509,
+      "maxReceiptBytes": 509,
+      "maxReceiptCharacters": 509,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S2",
+      "prettyBytes": 723,
+      "prettyCharacters": 723,
+      "bytes": 583,
+      "characters": 583,
+      "maxReceiptBytes": 292,
+      "maxReceiptCharacters": 292,
+      "calls": 2,
+      "success": true,
+      "pages": 1,
+      "warnings": 3,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0
+    },
+    {
+      "fixture": "article",
+      "step": "S3",
+      "prettyBytes": 361,
+      "prettyCharacters": 361,
+      "bytes": 291,
+      "characters": 291,
+      "maxReceiptBytes": 291,
+      "maxReceiptCharacters": 291,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S4",
+      "prettyBytes": 942,
+      "prettyCharacters": 942,
+      "bytes": 687,
+      "characters": 687,
+      "maxReceiptBytes": 687,
+      "maxReceiptCharacters": 687,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S5",
+      "prettyBytes": 768,
+      "prettyCharacters": 768,
+      "bytes": 686,
+      "characters": 686,
+      "maxReceiptBytes": 686,
+      "maxReceiptCharacters": 686,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S6",
+      "prettyBytes": 285,
+      "prettyCharacters": 285,
+      "bytes": 239,
+      "characters": 239,
+      "maxReceiptBytes": 239,
+      "maxReceiptCharacters": 239,
+      "calls": 1
+    },
+    {
+      "fixture": "article",
+      "step": "S7",
+      "prettyBytes": 723,
+      "prettyCharacters": 723,
+      "bytes": 583,
+      "characters": 583,
+      "maxReceiptBytes": 292,
+      "maxReceiptCharacters": 292,
+      "calls": 2,
+      "success": true,
+      "pages": 1,
+      "warnings": 3,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S1",
+      "prettyBytes": 359,
+      "prettyCharacters": 359,
+      "bytes": 286,
+      "characters": 286,
+      "maxReceiptBytes": 286,
+      "maxReceiptCharacters": 286,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "describe",
+      "prettyBytes": 613,
+      "prettyCharacters": 613,
+      "bytes": 509,
+      "characters": 509,
+      "maxReceiptBytes": 509,
+      "maxReceiptCharacters": 509,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S2",
+      "prettyBytes": 721,
+      "prettyCharacters": 721,
+      "bytes": 581,
+      "characters": 581,
+      "maxReceiptBytes": 292,
+      "maxReceiptCharacters": 292,
+      "calls": 2,
+      "success": false,
+      "pages": 0,
+      "warnings": 0,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S3",
+      "prettyBytes": 359,
+      "prettyCharacters": 359,
+      "bytes": 289,
+      "characters": 289,
+      "maxReceiptBytes": 289,
+      "maxReceiptCharacters": 289,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S4",
+      "prettyBytes": 482,
+      "prettyCharacters": 482,
+      "bytes": 355,
+      "characters": 355,
+      "maxReceiptBytes": 355,
+      "maxReceiptCharacters": 355,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S5",
+      "prettyBytes": 475,
+      "prettyCharacters": 475,
+      "bytes": 393,
+      "characters": 393,
+      "maxReceiptBytes": 393,
+      "maxReceiptCharacters": 393,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S6",
+      "prettyBytes": 285,
+      "prettyCharacters": 285,
+      "bytes": 239,
+      "characters": 239,
+      "maxReceiptBytes": 239,
+      "maxReceiptCharacters": 239,
+      "calls": 1
+    },
+    {
+      "fixture": "missing-package",
+      "step": "S7",
+      "prettyBytes": 723,
+      "prettyCharacters": 723,
+      "bytes": 583,
+      "characters": 583,
+      "maxReceiptBytes": 292,
+      "maxReceiptCharacters": 292,
+      "calls": 2,
+      "success": true,
+      "pages": 1,
+      "warnings": 0,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0
+    },
+    {
+      "fixture": "thesis",
+      "step": "S1",
+      "prettyBytes": 350,
+      "prettyCharacters": 350,
+      "bytes": 277,
+      "characters": 277,
+      "maxReceiptBytes": 277,
+      "maxReceiptCharacters": 277,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "describe",
+      "prettyBytes": 613,
+      "prettyCharacters": 613,
+      "bytes": 509,
+      "characters": 509,
+      "maxReceiptBytes": 509,
+      "maxReceiptCharacters": 509,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S2",
+      "prettyBytes": 725,
+      "prettyCharacters": 725,
+      "bytes": 585,
+      "characters": 585,
+      "maxReceiptBytes": 293,
+      "maxReceiptCharacters": 293,
+      "calls": 2,
+      "success": true,
+      "pages": 100,
+      "warnings": 0,
+      "intermediatePolls": 1,
+      "intermediatePollBytes": 292
+    },
+    {
+      "fixture": "thesis",
+      "step": "S3",
+      "prettyBytes": 363,
+      "prettyCharacters": 363,
+      "bytes": 293,
+      "characters": 293,
+      "maxReceiptBytes": 293,
+      "maxReceiptCharacters": 293,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S4",
+      "prettyBytes": 285,
+      "prettyCharacters": 285,
+      "bytes": 227,
+      "characters": 227,
+      "maxReceiptBytes": 227,
+      "maxReceiptCharacters": 227,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "path-lookup",
+      "prettyBytes": 342,
+      "prettyCharacters": 342,
+      "bytes": 243,
+      "characters": 243,
+      "maxReceiptBytes": 243,
+      "maxReceiptCharacters": 243,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S5",
+      "prettyBytes": 1035,
+      "prettyCharacters": 1035,
+      "bytes": 953,
+      "characters": 953,
+      "maxReceiptBytes": 953,
+      "maxReceiptCharacters": 953,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S6",
+      "prettyBytes": 285,
+      "prettyCharacters": 285,
+      "bytes": 239,
+      "characters": 239,
+      "maxReceiptBytes": 239,
+      "maxReceiptCharacters": 239,
+      "calls": 1
+    },
+    {
+      "fixture": "thesis",
+      "step": "S7",
+      "prettyBytes": 721,
+      "prettyCharacters": 721,
+      "bytes": 581,
+      "characters": 581,
+      "maxReceiptBytes": 292,
+      "maxReceiptCharacters": 292,
+      "calls": 2,
+      "success": false,
+      "pages": 0,
+      "warnings": 0,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0
+    }
+  ],
+  "totals": [
+    {
+      "fixture": "article",
+      "prettyBytes": 4153,
+      "bytes": 3347,
+      "maxReceiptBytes": 687,
+      "calls": 9,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0,
+      "previousScopedUiBytes": 3725,
+      "previousOption2RawMedianBytes": 2807
+    },
+    {
+      "fixture": "missing-package",
+      "prettyBytes": 3404,
+      "bytes": 2726,
+      "maxReceiptBytes": 393,
+      "calls": 9,
+      "intermediatePolls": 0,
+      "intermediatePollBytes": 0,
+      "previousScopedUiBytes": 1826,
+      "previousOption2RawMedianBytes": 2687
+    },
+    {
+      "fixture": "thesis",
+      "prettyBytes": 3764,
+      "bytes": 3155,
+      "maxReceiptBytes": 953,
+      "calls": 9,
+      "intermediatePolls": 1,
+      "intermediatePollBytes": 292,
+      "previousScopedUiBytes": 5203,
+      "previousOption2RawMedianBytes": 2737
+    }
+  ]
+}

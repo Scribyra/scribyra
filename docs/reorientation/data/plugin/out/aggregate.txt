@@ -1,0 +1,12 @@
+helper-paste missing-package n=3 {'resp': 1105, 'req': 542, 'tok': 412, 'cl': 516, 'trips': 7, 'fail': 0, 'injtok': 647}
+helper-paste article n=3 {'resp': 1433, 'req': 533, 'tok': 491, 'cl': 621, 'trips': 7, 'fail': 0, 'injtok': 647}
+helper-paste thesis n=3 {'resp': 1536, 'req': 638, 'tok': 544, 'cl': 592, 'trips': 8, 'fail': 0, 'injtok': 647}
+inline missing-package n=2 {'resp': 1099.0, 'req': 2048.0, 'tok': 788.0, 'cl': 906.0, 'trips': 7.0, 'fail': 0, 'injtok': 0.0}
+inline article n=2 {'resp': 1194.0, 'req': 1983.0, 'tok': 795.0, 'cl': 928.0, 'trips': 7.0, 'fail': 0, 'injtok': 0.0}
+inline thesis n=2 {'resp': 1471.0, 'req': 2346.0, 'tok': 953.0, 'cl': 1005.0, 'trips': 8.0, 'fail': 0, 'injtok': 0.0}
+helper-init missing-package n=1 {'resp': 1105, 'req': 542, 'tok': 412, 'cl': 516, 'trips': 7, 'fail': 0, 'injtok': 0}
+helper-init article n=1 {'resp': 1435, 'req': 533, 'tok': 491, 'cl': 621, 'trips': 7, 'fail': 0, 'injtok': 0}
+helper-init thesis n=1 {'resp': 1536, 'req': 638, 'tok': 544, 'cl': 592, 'trips': 8, 'fail': 0, 'injtok': 0}
+dt-slim missing-package n=1 {'resp': 584, 'req': 444, 'tok': 258, 'cl': 316, 'trips': 7, 'fail': 0, 'injtok': 642}
+dt-slim article n=1 {'resp': 944, 'req': 435, 'tok': 345, 'cl': 432, 'trips': 7, 'fail': 0, 'injtok': 642}
+dt-slim thesis n=1 {'resp': 1066, 'req': 526, 'tok': 399, 'cl': 408, 'trips': 8, 'fail': 0, 'injtok': 642}

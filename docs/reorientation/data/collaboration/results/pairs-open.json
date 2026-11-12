@@ -1,0 +1,1701 @@
+{
+ "open:chromium->chromium": {
+  "versions": [
+   "156.0.8078.79",
+   "156.0.8078.79"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 29,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 178,
+  "offer": {
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 647,
+    "deflateBytes": 453,
+    "base64url": 604,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 119,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "7bd4420e-0685-49ed-971a-c84b6715d779.local",
+     "port": 49440,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "DC:B7:C6:90:32:71:C6:66:5A:68:88:CD:1E:31:66:38:B8:76:ED:A3:5C:B9:C6:10:8C:30:BC:AA:8F:52:03:2D"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 648,
+    "deflateBytes": 455,
+    "base64url": 607,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 6,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "db4c6e80-8bcf-4dd4-8933-1e5bf26c159a.local",
+     "port": 53093,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "4C:B0:E6:05:5D:EE:3B:0F:20:6A:FE:2C:E7:C5:DE:58:2D:BB:44:E5:76:21:AD:EE:6D:32:18:F6:E6:AC:38:0C"
+  },
+  "openA": {
+   "open": true,
+   "sinceApplyMs": 14,
+   "waitMs": 1,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 262144,
+   "events": [
+    {
+     "t": 3,
+     "k": "dc-wired"
+    },
+    {
+     "t": 4,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 122,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 149,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 149,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 160,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 166,
+     "k": "dc-open"
+    },
+    {
+     "t": 168,
+     "k": "conn",
+     "v": "connected"
+    }
+   ]
+  },
+  "openB": {
+   "open": true,
+   "sinceApplyMs": 30,
+   "waitMs": 0,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 262144,
+   "events": [
+    {
+     "t": 6,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 7,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 7,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 9,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 9,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 21,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 27,
+     "k": "dc-wired"
+    }
+   ]
+  },
+  "connected": true,
+  "pairA": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  },
+  "pairB": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  },
+  "syncAtoB": {
+   "ms": 41,
+   "rxBytes": 147798,
+   "txBytes": 17,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 29.19
+  },
+  "converged": true,
+  "counts": [
+   101,
+   101
+  ],
+  "rtt": {
+   "median": 4.2,
+   "max": 4.3
+  },
+  "editToPeerApproxMs": 14
+ },
+ "open:chromium->firefox": {
+  "versions": [
+   "156.0.8078.79",
+   "157.0"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 40,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 250,
+  "offer": {
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 647,
+    "deflateBytes": 449,
+    "base64url": 599,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 126,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "17b52516-ef7e-46a6-9f00-fa5266bebdd5.local",
+     "port": 60069,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "6C:3B:1F:3A:BC:D3:6F:02:A7:6A:0D:E8:9B:11:2C:9B:2D:77:57:AC:71:7C:3B:87:15:D6:26:DB:34:F1:40:38"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 759,
+    "jsonBytes": 831,
+    "deflateBytes": 499,
+    "base64url": 666,
+    "qrVersionL": 18,
+    "qrVersionM": 20,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 19,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "5574aad0-6929-498d-9b7e-1c243b24dff0.local",
+     "port": 32771,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "5574aad0-6929-498d-9b7e-1c243b24dff0.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "BC:3A:68:46:17:B0:BF:34:7E:02:4D:27:2A:97:1F:D1:16:9D:22:27:86:B1:1F:5E:0C:67:7B:7B:9C:73:5E:51"
+  },
+  "openA": {
+   "open": true,
+   "sinceApplyMs": 28,
+   "waitMs": 22,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 262144,
+   "events": [
+    {
+     "t": 4,
+     "k": "dc-wired"
+    },
+    {
+     "t": 6,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 130,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 178,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 179,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 198,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 206,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 222,
+     "k": "dc-open"
+    }
+   ]
+  },
+  "openB": {
+   "open": true,
+   "sinceApplyMs": 84,
+   "waitMs": 42,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 262144,
+   "events": [
+    {
+     "t": 27,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 28,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 38,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 39,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 48,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 72,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 74,
+     "k": "dc-wired"
+    }
+   ]
+  },
+  "connected": true,
+  "pairA": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  },
+  "pairB": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "5574aad0-6929-498d-9b7e-1c243b24dff0.local"
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "17b52516-ef7e-46a6-9f00-fa5266bebdd5.local"
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  },
+  "syncAtoB": {
+   "ms": 51,
+   "rxBytes": 147798,
+   "txBytes": 17,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 23.18
+  },
+  "converged": true,
+  "counts": [
+   101,
+   101
+  ],
+  "rtt": {
+   "median": 4.2,
+   "max": 4.4
+  },
+  "editToPeerApproxMs": 18
+ },
+ "open:chromium->webkit": {
+  "versions": [
+   "156.0.8078.79",
+   "27.2"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36",
+   "buildMs": 35,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 40317,
+  "offer": {
+   "size": {
+    "sdpBytes": 587,
+    "jsonBytes": 648,
+    "deflateBytes": 453,
+    "base64url": 604,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 132,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "ee21cc74-ce74-427a-972d-e82731d458b6.local",
+     "port": 36333,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "68:E6:4B:BB:F3:1E:17:49:29:86:DF:DE:67:CA:B7:E8:D9:A0:B3:59:60:49:F1:71:D8:76:0A:CF:37:3A:0E:E9"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 585,
+    "jsonBytes": 647,
+    "deflateBytes": 453,
+    "base64url": 604,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 105,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "b42adff8-8643-4ed0-a85f-cf36e260a4ad.local",
+     "port": 39932,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "C5:C8:6E:6F:BA:39:5E:58:15:B6:4F:9C:A0:1B:0B:13:2A:EA:13:31:E3:5E:8D:D3:86:5B:D2:28:04:C1:0E:89"
+  },
+  "openA": {
+   "open": false,
+   "ms": 40001,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 140,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "openB": {
+   "open": false,
+   "ms": 40006,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 129,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "connected": false,
+  "eventsA": {
+   "conn": "new",
+   "ice": "new",
+   "dc": "connecting",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 140,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "eventsB": {
+   "conn": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 129,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  }
+ },
+ "open:firefox->chromium": {
+  "versions": [
+   "157.0",
+   "156.0.8078.79"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 22,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 236,
+  "offer": {
+   "size": {
+    "sdpBytes": 716,
+    "jsonBytes": 783,
+    "deflateBytes": 487,
+    "base64url": 650,
+    "qrVersionL": 18,
+    "qrVersionM": 20,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 12,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "e60c642b-76c1-4ad7-a0ea-42dc74de0efd.local",
+     "port": 45451,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "e60c642b-76c1-4ad7-a0ea-42dc74de0efd.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "39:D9:04:1A:5E:62:DD:14:32:E8:8E:B2:8A:C0:B5:0F:20:17:3D:E9:8E:94:E1:61:A9:DA:7B:44:D5:DF:F3:42"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 563,
+    "jsonBytes": 623,
+    "deflateBytes": 433,
+    "base64url": 578,
+    "qrVersionL": 16,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 130,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "a76fcb8f-2b08-4197-81cb-781ea85e2da1.local",
+     "port": 52661,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "52:E2:7B:24:C3:83:33:F2:B8:24:FE:C7:C9:AE:2E:2A:A6:5D:93:14:70:B5:83:AA:2B:72:93:37:E0:8B:9E:20"
+  },
+  "openA": {
+   "open": true,
+   "sinceApplyMs": 31,
+   "waitMs": 25,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 262144,
+   "events": [
+    {
+     "t": 8,
+     "k": "dc-wired"
+    },
+    {
+     "t": 19,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 20,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 187,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 187,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 189,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 211,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 213,
+     "k": "dc-open"
+    }
+   ]
+  },
+  "openB": {
+   "open": true,
+   "sinceApplyMs": 195,
+   "waitMs": 41,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 262144,
+   "events": [
+    {
+     "t": 7,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 134,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 156,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 157,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 157,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 162,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 182,
+     "k": "dc-wired"
+    }
+   ]
+  },
+  "connected": true,
+  "pairA": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "e60c642b-76c1-4ad7-a0ea-42dc74de0efd.local"
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "a76fcb8f-2b08-4197-81cb-781ea85e2da1.local"
+   },
+   "rttMs": null,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AEAD_AES_128_GCM"
+  },
+  "pairB": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AEAD_AES_128_GCM"
+  },
+  "syncAtoB": {
+   "ms": 53,
+   "rxBytes": 147798,
+   "txBytes": 17,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 22.27
+  },
+  "converged": true,
+  "counts": [
+   101,
+   101
+  ],
+  "rtt": {
+   "median": 4,
+   "max": 6
+  },
+  "editToPeerApproxMs": 16
+ },
+ "open:firefox->firefox": {
+  "versions": [
+   "157.0",
+   "157.0"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 29,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 111,
+  "offer": {
+   "size": {
+    "sdpBytes": 715,
+    "jsonBytes": 782,
+    "deflateBytes": 486,
+    "base64url": 648,
+    "qrVersionL": 18,
+    "qrVersionM": 20,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 11,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "54d6fe32-a759-4354-bce6-8a3135da25b5.local",
+     "port": 35832,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "54d6fe32-a759-4354-bce6-8a3135da25b5.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "00:C3:2E:0E:2F:BA:E5:2C:9D:04:96:8B:A8:46:51:67:3B:6D:90:D9:57:B0:E3:80:30:88:E0:01:5B:60:48:29"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 715,
+    "jsonBytes": 783,
+    "deflateBytes": 483,
+    "base64url": 644,
+    "qrVersionL": 17,
+    "qrVersionM": 20,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 9,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "3e0f9225-f4bd-4ff3-87df-e9c34668ec89.local",
+     "port": 57314,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "3e0f9225-f4bd-4ff3-87df-e9c34668ec89.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "F4:0D:4D:57:4D:90:53:8A:93:DC:9A:1B:03:98:F6:5A:D0:DE:72:A5:47:ED:F7:CE:59:41:99:22:7C:29:26:0F"
+  },
+  "openA": {
+   "open": true,
+   "sinceApplyMs": 36,
+   "waitMs": 27,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 1073741823,
+   "events": [
+    {
+     "t": 8,
+     "k": "dc-wired"
+    },
+    {
+     "t": 19,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 19,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 58,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 58,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 59,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 86,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 88,
+     "k": "dc-open"
+    }
+   ]
+  },
+  "openB": {
+   "open": true,
+   "sinceApplyMs": 66,
+   "waitMs": 39,
+   "state": "connected",
+   "ice": "connected",
+   "maxMessage": 1073741823,
+   "events": [
+    {
+     "t": 15,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 15,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 31,
+     "k": "ice",
+     "v": "checking"
+    },
+    {
+     "t": 31,
+     "k": "conn",
+     "v": "connecting"
+    },
+    {
+     "t": 31,
+     "k": "ice",
+     "v": "connected"
+    },
+    {
+     "t": 50,
+     "k": "conn",
+     "v": "connected"
+    },
+    {
+     "t": 59,
+     "k": "dc-wired"
+    }
+   ]
+  },
+  "connected": true,
+  "pairA": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "54d6fe32-a759-4354-bce6-8a3135da25b5.local"
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "3e0f9225-f4bd-4ff3-87df-e9c34668ec89.local"
+   },
+   "rttMs": null,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AEAD_AES_128_GCM"
+  },
+  "pairB": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "3e0f9225-f4bd-4ff3-87df-e9c34668ec89.local"
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": "(redacted)"
+   },
+   "rttMs": null,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AEAD_AES_128_GCM"
+  },
+  "syncAtoB": {
+   "ms": 35,
+   "rxBytes": 147798,
+   "txBytes": 17,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 33.78
+  },
+  "converged": true,
+  "counts": [
+   101,
+   101
+  ],
+  "rtt": {
+   "median": 4,
+   "max": 5
+  },
+  "editToPeerApproxMs": 17
+ },
+ "open:firefox->webkit": {
+  "versions": [
+   "157.0",
+   "27.2"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (X11; Linux x86_64; rv:157.0) Gecko/20100101 Firefox/157.0",
+   "buildMs": 26,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 40182,
+  "offer": {
+   "size": {
+    "sdpBytes": 715,
+    "jsonBytes": 782,
+    "deflateBytes": 483,
+    "base64url": 644,
+    "qrVersionL": 17,
+    "qrVersionM": 20,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 12,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "252f5d0a-8095-41cc-94c8-023f3673a2df.local",
+     "port": 58035,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "252f5d0a-8095-41cc-94c8-023f3673a2df.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "FC:12:3C:70:F4:F4:FB:90:74:2A:F8:D7:33:14:45:3A:4D:FE:70:8C:D6:15:93:3A:B8:E9:B2:A9:84:39:F8:7E"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 564,
+    "jsonBytes": 624,
+    "deflateBytes": 435,
+    "base64url": 580,
+    "qrVersionL": 16,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 104,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "aad4001c-cae4-4d7d-a316-6bbb0e967e8d.local",
+     "port": 39530,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "13:D5:02:1F:CB:57:29:00:82:57:30:82:36:6B:22:2F:DB:CB:1F:D6:23:48:DF:D4:85:0E:2D:F9:89:20:D3:6C"
+  },
+  "openA": {
+   "open": false,
+   "ms": 40001,
+   "state": "failed",
+   "ice": "failed",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 18,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 19,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 5166,
+     "k": "ice",
+     "v": "failed"
+    },
+    {
+     "t": 5166,
+     "k": "conn",
+     "v": "failed"
+    },
+    {
+     "t": 5168,
+     "k": "dc-close"
+    }
+   ]
+  },
+  "openB": {
+   "open": false,
+   "ms": 40006,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 8,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 123,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "connected": false,
+  "eventsA": {
+   "conn": "failed",
+   "ice": "failed",
+   "dc": "closed",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 18,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 19,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 5166,
+     "k": "ice",
+     "v": "failed"
+    },
+    {
+     "t": 5166,
+     "k": "conn",
+     "v": "failed"
+    },
+    {
+     "t": 5168,
+     "k": "dc-close"
+    }
+   ]
+  },
+  "eventsB": {
+   "conn": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 8,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 123,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  }
+ },
+ "open:webkit->chromium": {
+  "versions": [
+   "27.2",
+   "156.0.8078.79"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
+   "buildMs": 30,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 40314,
+  "offer": {
+   "size": {
+    "sdpBytes": 587,
+    "jsonBytes": 648,
+    "deflateBytes": 453,
+    "base64url": 604,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 104,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "dca32d0b-1046-4fcd-9763-cb1cc760be6e.local",
+     "port": 58360,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "D1:AC:49:4A:7F:06:B4:89:59:78:A0:01:B1:DF:28:15:4C:9A:CA:33:C6:37:ED:66:8A:09:ED:E2:18:BA:89:41"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 585,
+    "jsonBytes": 647,
+    "deflateBytes": 454,
+    "base64url": 606,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 133,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "f494f3b9-6c95-4e3f-8dcb-3e41adb9d9ce.local",
+     "port": 46490,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "C1:6B:7A:0A:E7:B4:EE:1E:4E:87:44:8E:C7:81:B6:07:9F:11:EE:19:6F:75:10:5D:2E:9D:36:79:FF:B9:DA:6E"
+  },
+  "openA": {
+   "open": false,
+   "ms": 40006,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 8,
+     "k": "dc-wired"
+    },
+    {
+     "t": 9,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 124,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "openB": {
+   "open": false,
+   "ms": 40001,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 140,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "connected": false,
+  "eventsA": {
+   "conn": "new",
+   "ice": "new",
+   "dc": "connecting",
+   "events": [
+    {
+     "t": 8,
+     "k": "dc-wired"
+    },
+    {
+     "t": 9,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 124,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "eventsB": {
+   "conn": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 140,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  }
+ },
+ "open:webkit->firefox": {
+  "versions": [
+   "27.2",
+   "157.0"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
+   "buildMs": 31,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 40583,
+  "offer": {
+   "size": {
+    "sdpBytes": 587,
+    "jsonBytes": 648,
+    "deflateBytes": 450,
+    "base64url": 600,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 104,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "ea24b0b2-c6d7-45da-8261-633736e93631.local",
+     "port": 48785,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "F7:E6:07:FF:F7:29:23:76:57:6D:77:92:AD:6C:AB:E8:BE:98:41:EA:29:EA:E6:E0:F1:B8:F5:56:E9:AE:89:F2"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 759,
+    "jsonBytes": 831,
+    "deflateBytes": 501,
+    "base64url": 668,
+    "qrVersionL": 18,
+    "qrVersionM": 21,
+    "qrBinaryVersionL": 15,
+    "minimalBytes": 96,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 10,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "474aabc5-3af2-4df5-9e05-22da1119f294.local",
+     "port": 36280,
+     "type": "host",
+     "mdns": true
+    },
+    {
+     "proto": "tcp",
+     "addr": "474aabc5-3af2-4df5-9e05-22da1119f294.local",
+     "port": 9,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "29:BB:3B:4D:B8:39:B4:04:6D:45:3A:2F:78:72:D2:92:76:AA:21:9A:BF:BB:18:B3:6C:9B:EC:3C:B1:FA:A7:B8"
+  },
+  "openA": {
+   "open": false,
+   "ms": 40006,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 8,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 121,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "openB": {
+   "open": false,
+   "ms": 40000,
+   "state": "failed",
+   "ice": "failed",
+   "events": [
+    {
+     "t": 25,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 25,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 5026,
+     "k": "ice",
+     "v": "failed"
+    },
+    {
+     "t": 5026,
+     "k": "conn",
+     "v": "failed"
+    }
+   ]
+  },
+  "connected": false,
+  "eventsA": {
+   "conn": "new",
+   "ice": "new",
+   "dc": "connecting",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 8,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 121,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "eventsB": {
+   "conn": "failed",
+   "ice": "failed",
+   "events": [
+    {
+     "t": 25,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 25,
+     "k": "gather",
+     "v": "complete"
+    },
+    {
+     "t": 5026,
+     "k": "ice",
+     "v": "failed"
+    },
+    {
+     "t": 5026,
+     "k": "conn",
+     "v": "failed"
+    }
+   ]
+  }
+ },
+ "open:webkit->webkit": {
+  "versions": [
+   "27.2",
+   "27.2"
+  ],
+  "setupA": {
+   "ua": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/27.2 Safari/605.1.15",
+   "buildMs": 26,
+   "updateBytes": 147698,
+   "files": 101,
+   "schema": 5,
+   "refs": 0
+  },
+  "manualMs": 40286,
+  "offer": {
+   "size": {
+    "sdpBytes": 587,
+    "jsonBytes": 648,
+    "deflateBytes": 451,
+    "base64url": 602,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 103,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "db7a4cf6-dd4a-4608-8005-e4ddff772092.local",
+     "port": 49289,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "EF:86:7E:83:1A:56:71:CC:7B:CF:1C:0D:47:7D:54:BF:1F:4D:35:AF:B9:FE:6A:23:C5:40:27:21:62:D5:15:60"
+  },
+  "answer": {
+   "size": {
+    "sdpBytes": 586,
+    "jsonBytes": 648,
+    "deflateBytes": 449,
+    "base64url": 599,
+    "qrVersionL": 17,
+    "qrVersionM": 19,
+    "qrBinaryVersionL": 14,
+    "minimalBytes": 84,
+    "minimalDerivedIceBytes": 54,
+    "minimalB32Chars": 87,
+    "qrMinimalVersionL": 4,
+    "qrMinimalVersionM": 4
+   },
+   "gatherMs": 105,
+   "gatherWhy": "complete",
+   "candidates": [
+    {
+     "proto": "udp",
+     "addr": "c5e900b5-dec5-41a2-a92d-d1ec698574db.local",
+     "port": 39371,
+     "type": "host",
+     "mdns": true
+    }
+   ],
+   "fp": "DA:DC:06:FA:2B:A5:93:B5:34:BB:B1:0A:83:38:35:A9:1F:7F:1F:AB:26:DB:A7:D3:52:0C:73:C9:34:BA:3E:06"
+  },
+  "openA": {
+   "open": false,
+   "ms": 40006,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 8,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 122,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "openB": {
+   "open": false,
+   "ms": 40006,
+   "state": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 126,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "connected": false,
+  "eventsA": {
+   "conn": "new",
+   "ice": "new",
+   "dc": "connecting",
+   "events": [
+    {
+     "t": 7,
+     "k": "dc-wired"
+    },
+    {
+     "t": 8,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 122,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  },
+  "eventsB": {
+   "conn": "new",
+   "ice": "new",
+   "events": [
+    {
+     "t": 11,
+     "k": "gather",
+     "v": "gathering"
+    },
+    {
+     "t": 126,
+     "k": "gather",
+     "v": "complete"
+    }
+   ]
+  }
+ }
+}

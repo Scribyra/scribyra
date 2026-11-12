@@ -1,0 +1,7 @@
+.tex-link-banner{position:fixed;inset:0 0 auto;z-index:5;display:flex;align-items:center;gap:16px;padding:10px 18px;background:var(--accent-soft);border-bottom:1px solid var(--border);font-size:12px;color:var(--text)}
+.tex-link-banner p{flex:1;margin:0;line-height:1.5}
+body[data-tex-link] .editor-header{top:var(--tex-link-height,80px)}
+body[data-tex-link] .workspace{margin-top:calc(60px + var(--tex-link-height,80px));height:calc(100dvh - 60px - var(--tex-link-height,80px))}
+body[data-tex-link] .dashboard-sidebar{top:var(--tex-link-height,80px)}
+body[data-tex-link] .dashboard-main{padding-top:var(--tex-link-height,80px)}
+@media(max-width:600px){.tex-link-banner{flex-wrap:wrap;gap:8px}.tex-link-banner p{flex-basis:100%}}

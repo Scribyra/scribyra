@@ -1,0 +1,152 @@
+{
+ "chromium-chromium": {
+  "connected": true,
+  "offerBytes": 83,
+  "answerBytes": 83,
+  "qrL": [
+   5,
+   5
+  ],
+  "qrM": [
+   5,
+   5
+  ],
+  "b64chars": [
+   111,
+   111
+  ],
+  "sample": "AcDzxK7d_4OrQrrNnV9IAEM3KrvmEDFTQXJFsXnKgIoGBHhub2kYYjVVZ2dLUFdBbWpIdnJtS01ZeFFRK1grAQA8nn6GHXpAEaUDJ3_MoVXDxUA",
+  "sync": {
+   "ms": 51,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 23.09
+  },
+  "converged": true,
+  "fpOk": true
+ },
+ "firefox-firefox": {
+  "connected": true,
+  "offerBytes": 95,
+  "answerBytes": 95,
+  "qrL": [
+   5,
+   5
+  ],
+  "qrM": [
+   6,
+   6
+  ],
+  "b64chars": [
+   127,
+   127
+  ],
+  "sample": "Ad__CIhozq2XHHYssBk5IrFpkH80QS7oaNGp2ILZNfplCGFmMTE2MTU2IDViZDY5YTAyZTJiZmYyNGIxMzFkNTFmYjFiM2NlYzFkAQCgDK96XPpOp57xjqdNL4UJiw0",
+  "sync": {
+   "ms": 51,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 23.18
+  },
+  "converged": true,
+  "fpOk": true
+ },
+ "chromium-firefox": {
+  "connected": true,
+  "offerBytes": 83,
+  "answerBytes": 95,
+  "qrL": [
+   5,
+   5
+  ],
+  "qrM": [
+   5,
+   6
+  ],
+  "b64chars": [
+   111,
+   127
+  ],
+  "sample": "AaZwblLvKaFC_NNZRHteLxJxH6e-T-slPPJy6pfTMt3cBFBuUTgYVVdsREF2akJaUlhpZW1rOUZrTjA0NVJIAQAwmptPIQBCoIskBK3f6vAbrgU",
+  "sync": {
+   "ms": 52,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 22.74
+  },
+  "converged": true,
+  "fpOk": true
+ },
+ "firefox-chromium": {
+  "connected": true,
+  "offerBytes": 95,
+  "answerBytes": 83,
+  "qrL": [
+   5,
+   5
+  ],
+  "qrM": [
+   6,
+   5
+  ],
+  "b64chars": [
+   127,
+   111
+  ],
+  "sample": "Ab8_dsmQChYTdSXkglRQZBSVtsk56uoE-JorWIRuwUJfCGViODNiZmQ5IGE3NDg1ZGNiNDA5YjhhNDZmNjIzZDRjY2QzOWUwOWE0AQD8ZUI_4qZGbo1YnXRNmlm82Fc",
+  "sync": {
+   "ms": 37,
+   "rxBytes": 147798,
+   "txBytes": 11,
+   "updateBytes": 147698,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 31.96
+  },
+  "converged": true,
+  "fpOk": true
+ },
+ "chromium-chromium+gum": {
+  "connected": true,
+  "offerBytes": 71,
+  "answerBytes": 71,
+  "qrL": [
+   4,
+   4
+  ],
+  "qrM": [
+   5,
+   5
+  ],
+  "b64chars": [
+   95,
+   95
+  ],
+  "sample": "ATjvU-ctZvyY1qiQW_QQpxyAh0W-DrWl4lNREc7iAayhBGxwS3YYSXV5RTF5VEVNUzNIdmJkQ2JhUGdSaFl5AQEKTQAKgAI",
+  "sync": {
+   "ms": 39,
+   "rxBytes": 147797,
+   "txBytes": 11,
+   "updateBytes": 147697,
+   "blobBytes": 0,
+   "verifyMs": 0,
+   "files": 101,
+   "mbps": 30.71
+  },
+  "converged": true,
+  "fpOk": true
+ }
+}

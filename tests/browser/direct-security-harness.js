@@ -1,0 +1,13 @@
+import init from '../../web/pkg/scribyra_app.js';
+import {initializeCollaborationSchema} from '../../web/collaboration-schema.js';
+await init({module_or_path:'/security-harness.wasm'});initializeCollaborationSchema();
+export * as Y from 'yjs';
+export * from '../../web/model.js';
+export * from '../../web/replication.js';
+export * from '../../web/direct-provenance.js';
+export * from '../../web/direct-identity.js';
+export {directShare} from '../../web/direct-share.js';
+export {directSession} from '../../web/direct-session.js';
+export {connectService} from '../../web/service-client.js';
+export {cloneProject} from '../../web/assets.js';
+export {projection} from '../../web/review-commands.js';

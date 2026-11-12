@@ -1,0 +1,135 @@
+diff --git a/web/agent-api.js b/web/agent-api.js
+new file mode 100644
+index 0000000..130a002
+--- /dev/null
++++ b/web/agent-api.js
+@@ -0,0 +1,95 @@
++// THROWAWAY R1 PROTOTYPE, not a released contract. A page-level convenience
++// adapter over the same command host, compile path and diagnostics as the UI.
++// It is not a security boundary: any script in this origin already has this power.
++import {projectCommands} from './commands.js';
++export class AgentOrigin {}
++export const LIMITS=Object.freeze({diagnosticsPage:50,fieldChars:400,detailChars:1000,readLines:200,readChars:16384,patchEdits:20,patchChars:65536,waitMs:600000});
++const failure=(code,message)=>Object.assign(new Error(message),{code});
++const clip=(text,max)=>{const s=String(text??'');if(s.length<=max)return s;const cut=/[\uD800-\uDBFF]/.test(s[max-1])?max-1:max;return s.slice(0,cut)+'…';};
++const bounded=(value,fallback,max,name)=>{if(value===undefined)return fallback;if(!Number.isInteger(value)||value<0||value>max)throw failure('invalid_request',`${name} must be an integer from 0 to ${max}.`);return value;};
++const DESCRIPTION=Object.freeze({apiVersion:1,status:'prototype',limits:LIMITS,methods:{
++ getStatus:'{} → name, fileCount, activeFile, mainFile, busy, runId, saved, build',
++ compile:'{projectId?,waitMs?} → build; status "running" if waitMs elapses, then poll getStatus',
++ cancelCompile:'{runId} → {cancelled}; only a build this API started',
++ getDiagnostics:'{severity?,offset?,limit?,detail?} → {total,items,nextOffset,jobId,sourceRevision,stale}',
++ readSource:'{fileId|path,startLine?,endLine?} or {fileId|path,line,context?} → text, startOffset, totalLines',
++ revealSource:'{fileId|path,line} → moves the visible editor selection',
++ patchSource:'{expectedRevision,requestId?,edits:[{fileId|path,find,replace}|{fileId,start,end,before,after}]} → receipt',
++},errors:'Failures resolve {ok:false,error:{code,message}}. Treat unknown codes as failure.'});
++export function agentApi({session,compile,isBusy,reveal,notify,beginMutation=()=>{},endMutation=()=>{}}){
++ let host,hostDoc,run=null,runs=0;
++ function current(){
++  const s=session();if(!s)throw failure('project_closed','No project is open in this tab.');
++  if(hostDoc!==s.doc){host?.close();hostDoc=s.doc;host=projectCommands({doc:s.doc,projectId:s.projectId,capabilities:['read','write'],isActive:()=>session()?.doc===s.doc,origin:new AgentOrigin()});}
++  return{...s,host};
++ }
++ const header=()=>{const s=session();return{version:1,projectId:s?.projectId??null,revision:s&&hostDoc===s.doc?host.revision():null};};
++ const wrap=fn=>async(args={})=>{
++  try{if(args===null||typeof args!=='object'||Array.isArray(args))throw failure('invalid_request','Arguments must be an object.');if(args.projectId!==undefined&&args.projectId!==session()?.projectId)throw failure('permission_denied','This tab has a different project open.');const value=await fn(args);return{...header(),ok:true,value};}
++  catch(error){return{...header(),ok:false,error:{code:error.code||'operation_failed',message:clip(error.message||error,LIMITS.fieldChars)}};}
++ };
++ const read=(c,command,expected)=>c.host.run(command,expected);
++ function resolve(c,{fileId,path}){
++  const file=read(c,{op:'project.inspect'}).files.find(f=>fileId?f.id===fileId:f.path===path);
++  if(!file||file.folder)throw failure('not_found','File not found in this project.');
++  if(file.binary)throw failure('invalid_request','This is a binary file.');return file;
++ }
++ function buildSummary(c,result=c.lastCompile){
++  if(!result||result.projectId!==c.projectId)return null;
++  const issues=c.issues(),count=level=>issues.filter(i=>i.severity===level).length;
++  return{status:result.errorType==='AbortError'?'cancelled':result.success?'ok':'fail',jobId:result.jobId,sourceRevision:result.sourceRevision,stale:result.sourceRevision!==c.host.revision(),pages:result.success?c.pages():0,errors:count('error'),warnings:count('warning'),durationMs:result.durationMs===undefined?null:Math.round(result.durationMs)};
++ }
++ return Object.freeze({
++  describe:()=>DESCRIPTION,
++  getStatus:wrap(()=>{
++   const c=current(),inspected=read(c,{op:'project.inspect'}),byId=id=>{const f=inspected.files.find(n=>n.id===id);return f?{id:f.id,path:f.path}:null;};
++   return{name:clip(inspected.metadata.name,160),fileCount:inspected.files.filter(f=>!f.folder).length,activeFile:byId(c.activeId()),mainFile:byId(inspected.metadata.mainFile),busy:isBusy(),runId:run?.id??null,saved:c.saved(),build:buildSummary(c)};
++  }),
++  compile:wrap(async({waitMs})=>{
++   const c=current();
++   const wait=bounded(waitMs,LIMITS.waitMs,LIMITS.waitMs,'waitMs');
++   if(run||isBusy())throw failure('browser_busy','A build is already running. Poll getStatus.');
++   const controller=new AbortController(),id=String(++runs),doc=c.doc;let timer;
++   const promise=compile(controller.signal).catch(error=>({thrown:error})).finally(()=>{if(run?.id===id)run=null;});
++   run={id,controller,promise};
++   const outcome=await Promise.race([promise,new Promise(done=>{timer=setTimeout(()=>done('running'),wait);})]);clearTimeout(timer);
++   if(outcome==='running')return{status:'running',runId:id};
++   if(outcome?.thrown)throw outcome.thrown;
++   if(session()?.doc!==doc)throw failure('project_closed','The project closed before the build completed.');
++   return buildSummary(current(),outcome||undefined);
++  }),
++  cancelCompile:wrap(({runId})=>{if(!run||run.id!==runId)return{cancelled:false};run.controller.abort();return{cancelled:true};}),
++  getDiagnostics:wrap(({severity,offset,limit,detail})=>{
++   const c=current(),build=buildSummary(c);if(severity!==undefined&&!['error','warning','info'].includes(severity))throw failure('invalid_request','Unknown severity.');
++   const logLine=Number(String(c.log()).match(/^l\.(\d+)/m)?.[1])||undefined,start=bounded(offset,0,1e6,'offset'),size=bounded(limit,10,LIMITS.diagnosticsPage,'limit'),issues=c.issues().filter(i=>!severity||i.severity===severity);
++   return{total:issues.length,offset:start,nextOffset:start+size<issues.length?start+size:null,jobId:build?.jobId??null,sourceRevision:build?.sourceRevision??null,stale:build?.stale??null,items:issues.slice(start,start+size).map(i=>({severity:i.severity,code:clip(i.code,80),summary:clip(i.summary,LIMITS.fieldChars),...(i.file?{file:clip(i.file,LIMITS.fieldChars)}:{}),...(i.line?{line:i.line}:{}),...(!i.line&&i.severity==='error'&&logLine?{logLine}:{}),...(detail?{detail:clip(i.detail,LIMITS.detailChars),action:clip(i.action,LIMITS.fieldChars)}:{})}))};
++  }),
++  readSource:wrap(({fileId,path,startLine,endLine,line,context,expectedRevision})=>{
++   const c=current(),file=resolve(c,{fileId,path}),text=read(c,{op:'file.read',id:file.id},expectedRevision).content,lines=text.split('\n'),total=lines.length;
++   const span=bounded(context,5,LIMITS.readLines>>1,'context'),from=Math.max(1,line?bounded(line,1,total,'line')-span:bounded(startLine,1,total,'startLine')||1);
++   let to=Math.min(total,line?line+span:bounded(endLine,Math.min(total,from+49),total,'endLine'));if(to<from)throw failure('invalid_request','endLine precedes startLine.');
++   let truncated=to-from+1>LIMITS.readLines;if(truncated)to=from+LIMITS.readLines-1;
++   let offset=0;for(let at=1;at<from;at++)offset+=lines[at-1].length+1;
++   let body=lines.slice(from-1,to).join('\n');if(body.length>LIMITS.readChars){body=clip(body,LIMITS.readChars).slice(0,-1);truncated=true;}
++   return{fileId:file.id,path:file.path,startLine:from,endLine:to,totalLines:total,startOffset:offset,truncated,text:body};
++  }),
++  revealSource:wrap(({fileId,path,line})=>{const c=current(),file=resolve(c,{fileId,path});reveal(file.id,bounded(line,1,1e7,'line'));return{fileId:file.id,path:file.path,line};}),
++  patchSource:wrap(({expectedRevision,requestId,edits})=>{
++   const c=current();if(typeof expectedRevision!=='string')throw failure('revision_required','patchSource requires expectedRevision from a recent response.');
++   if(!Array.isArray(edits)||!edits.length||edits.length>LIMITS.patchEdits)throw failure('invalid_request',`Send 1 to ${LIMITS.patchEdits} edits.`);
++   if(JSON.stringify(edits).length>LIMITS.patchChars)throw failure('invalid_request','Patch is too large.');
++   const prepared=edits.map(edit=>{
++    if(edit.find===undefined)return edit;
++    if(typeof edit.find!=='string'||!edit.find)throw failure('invalid_request','find must be nonempty text.');
++    const file=resolve(c,edit),text=read(c,{op:'file.read',id:file.id},expectedRevision).content,at=text.indexOf(edit.find);
++    if(at<0)throw failure('not_found','The find text does not occur in this file.');
++    if(text.indexOf(edit.find,at+1)>=0)throw failure('ambiguous_match','The find text occurs more than once. Extend it or use offsets.');
++    return{fileId:file.id,start:at,end:at+edit.find.length,before:edit.find,after:String(edit.replace??'')};
++   });
++   const id=requestId||crypto.randomUUID();let receipt;beginMutation();try{receipt=c.host.execute({version:1,requestId:id,projectId:c.projectId,expectedRevision,command:{op:'text.patch',edits:prepared}});}finally{endMutation();}
++   if(!receipt.ok)throw failure(receipt.error.code,receipt.error.message);
++   notify(`A browser tool changed ${prepared.length} source ${prepared.length===1?'location':'locations'} in this project. Undo reverts it.`);
++   return{requestId:id,count:receipt.value.count,revision:receipt.revision};
++  }),
++ });
++}
+diff --git a/web/main.js b/web/main.js
+index bd8d0f5..63500be 100644
+--- a/web/main.js
++++ b/web/main.js
+@@ -4,6 +4,7 @@ import {providersDialog} from './providers-dialog.js';
+ import {companionHost,CompanionOrigin} from './companion-host.js';
+ import {connectCompanion} from './companion-connection.js';
+ import {companionDialog} from './companion-dialog.js';
++import {agentApi,AgentOrigin} from './agent-api.js';
+ import {environmentDialog} from './environment-dialog.js';
+ import {trackComposition,compositionInProgress,composingEvent,restoreDialogFocus} from './input.js';
+ trackComposition(document);
+@@ -234,7 +235,7 @@ function mountEditor() {
+   }
+   lastSource=file.id;
+   const text = doc.getText(`text:${file.id}`);
+-  let undo = undoManagers.get(file.id); if (!undo) { undo = new Y.UndoManager(text,{trackedOrigins:new Set([null,CompanionOrigin])}); undoManagers.set(file.id, undo); }
++  let undo = undoManagers.get(file.id); if (!undo) { undo = new Y.UndoManager(text,{trackedOrigins:new Set([null,CompanionOrigin,AgentOrigin])}); undoManagers.set(file.id, undo); }
+   const saved=selections.get(file.id),anchor=saved&&Y.createAbsolutePositionFromRelativePosition(saved.anchor,doc),head=saved&&Y.createAbsolutePositionFromRelativePosition(saved.head,doc);
+   const selection=anchor?.type===text&&head?.type===text?{anchor:anchor.index,head:head.index}:undefined;
+   editor = new EditorView({ parent: host, state: EditorState.create({ doc: text.toString(), selection, extensions: [
+@@ -552,6 +553,12 @@ async function action(name, value = '') {
+   } catch (e) { displayError(e); }
+ }
+ window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects(); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
++if(localStorage.getItem('scribyra:agent-api')==='1')window.scribyra.v1=agentApi({
++  session:()=>doc&&projectId&&!leavingProject?{doc,projectId,lastCompile:window.scribyra.lastCompile,issues:()=>state.buildIssues,log:()=>state.log,pages:()=>state.pdfPages,activeId:()=>state.active,saved:()=>state.saveStatus==='Saved locally'}:null,
++  compile:signal=>runCompile({signal}),isBusy:()=>state.busy,notify:notice,
++  reveal:(id,line)=>{activateFile(id);if(editor&&line<=editor.state.doc.lines){const range=editor.state.doc.line(line);editor.dispatch({selection:{anchor:range.from,head:range.to},scrollIntoView:true});}},
++  beginMutation:()=>{for(const manager of undoManagers.values())manager.stopCapturing();},endMutation:()=>{for(const manager of undoManagers.values())manager.stopCapturing();},
++});
+ window.addEventListener('keydown', e => {
+   if(e.defaultPrevented||document.querySelector('dialog[open]')||e.getModifierState('AltGraph')||composingEvent(e)||editor?.composing&&editor.dom.contains(e.target))return;
+   if(state.current&&!document.querySelector('dialog[open]')){

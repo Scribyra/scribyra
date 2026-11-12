@@ -1,0 +1,567 @@
+{
+  "uid": "scribyra-test-runs",
+  "title": "Scribyra test runs",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": false,
+  "tags": [
+    "scribyra",
+    "private",
+    "telemetry"
+  ],
+  "timezone": "browser",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "refresh": "30s",
+  "annotations": {
+    "list": []
+  },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Reading test evidence",
+      "type": "text",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 4
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "mode": "markdown",
+        "content": "Actual suite process outcomes, separate from application usage. Source defaults to local tests; CI context is reported metadata, and a live GitLab job is required to establish CI execution. Synthetic validation executes deliberate pass/fail assertions. Counts are available only when a framework summary was observed. No data is not a passing test. Case totals include skipped/cancelled/todo; flaky is a subset of passed. Build processes have no case counts. Run ID joins the safe JSON/JUnit artifact, log and trace; raw test names, paths and failures are excluded. Counters are cumulative since the collector stream began; rates need at least two observations. Do not sum flaky into case totals."
+      }
+    },
+    {
+      "id": 2,
+      "title": "Observed runs",
+      "type": "stat",
+      "description": "Latest observed cumulative counter in the selected time range, since its collector stream began; this is not an exact count of runs started in the range. Missing samples are unknown.",
+      "gridPos": {
+        "x": 0,
+        "y": 4,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(last_over_time(scribyra_run_total{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\"}[$__range]))",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 3,
+      "title": "Failed suite processes",
+      "type": "stat",
+      "description": "Latest observed cumulative counter in the selected time range, since its collector stream began; this is not an exact count of runs started in the range. Missing samples are unknown.",
+      "gridPos": {
+        "x": 6,
+        "y": 4,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(last_over_time(scribyra_run_total{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\",scribyra_outcome=\"failure\"}[$__range]))",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 4,
+      "title": "Failed cases",
+      "type": "stat",
+      "description": "Latest observed cumulative counter in the selected time range, since its collector stream began; this is not an exact count of runs started in the range. Missing samples are unknown.",
+      "gridPos": {
+        "x": 12,
+        "y": 4,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(last_over_time(scribyra_run_cases_total{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\",scribyra_case_outcome=\"failed\"}[$__range]))",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 5,
+      "title": "Flaky passing cases",
+      "type": "stat",
+      "description": "Latest observed cumulative counter in the selected time range, since its collector stream began; this is not an exact count of runs started in the range. Missing samples are unknown.",
+      "gridPos": {
+        "x": 18,
+        "y": 4,
+        "w": 6,
+        "h": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum(last_over_time(scribyra_run_cases_total{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\",scribyra_case_outcome=\"flaky\"}[$__range]))",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": false,
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "auto"
+      }
+    },
+    {
+      "id": 6,
+      "title": "Suite process outcomes",
+      "type": "timeseries",
+      "description": "Cumulative recorded runs by suite/browser/outcome. A case summary may be absent.",
+      "gridPos": {
+        "x": 0,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_suite,scribyra_browser,scribyra_outcome) (scribyra_run_total{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\"})",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 7,
+      "title": "Observed case outcomes",
+      "type": "timeseries",
+      "description": "Passed/failed/skipped/cancelled/todo and flaky subset; case counts do not exist for builds.",
+      "gridPos": {
+        "x": 12,
+        "y": 9,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_suite,scribyra_case_outcome) (scribyra_run_cases_total{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\"})",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_case_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 8,
+      "title": "Suite duration p95",
+      "type": "timeseries",
+      "description": "Requires repeated observations; sparse runs can have no rate. Compare the same suite and browser.",
+      "gridPos": {
+        "x": 0,
+        "y": 17,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.95, sum by (le,scribyra_suite,scribyra_browser) (rate(scribyra_run_duration_milliseconds_bucket{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\"}[30m])))",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 9,
+      "title": "Observed duration mean",
+      "type": "timeseries",
+      "description": "Cumulative mean over retained collector streams; compare like suites/browser profiles.",
+      "gridPos": {
+        "x": 12,
+        "y": 17,
+        "w": 12,
+        "h": 8
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "scribyra-prom"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (scribyra_suite,scribyra_browser) (scribyra_run_duration_milliseconds_sum{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\"}) / sum by (scribyra_suite,scribyra_browser) (scribyra_run_duration_milliseconds_count{scribyra_source=~\"${source:regex}\",scribyra_suite=~\"${suite:regex}\",scribyra_browser=~\"${browser:regex}\"})",
+          "legendFormat": "{{scribyra_suite}} {{scribyra_browser}} {{scribyra_outcome}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      }
+    },
+    {
+      "id": 10,
+      "title": "Safe run summaries and artifact IDs",
+      "type": "logs",
+      "description": "runId identifies .telemetry/<runId>.json and .xml. CI context contains numeric project/pipeline/job IDs; no arbitrary artifact URL is accepted.",
+      "gridPos": {
+        "x": 0,
+        "y": 25,
+        "w": 24,
+        "h": 10
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "scribyra-loki"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "{service_name=\"scribyra\"} | scribyra_source=~\"${source:regex}\" | scribyra_suite=~\"${suite:regex}\" | scribyra_browser=~\"${browser:regex}\" | json | runId!=\"\"",
+          "queryType": "range",
+          "maxLines": 100
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showTime": true,
+        "sortOrder": "Descending",
+        "wrapLogMessage": true
+      }
+    },
+    {
+      "id": 11,
+      "title": "Correlated suite traces",
+      "type": "table",
+      "description": "",
+      "gridPos": {
+        "x": 0,
+        "y": 35,
+        "w": 24,
+        "h": 8
+      },
+      "datasource": {
+        "type": "tempo",
+        "uid": "scribyra-tempo"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "queryType": "traceql",
+          "query": "{ resource.service.name = \"scribyra\" && span.scribyra.operation = \"test_run\" && span.scribyra.source =~ \"${source:regex}\" && span.scribyra.suite =~ \"${suite:regex}\" && span.scribyra.browser =~ \"${browser:regex}\" }",
+          "limit": 20
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "source",
+        "label": "Source",
+        "type": "custom",
+        "query": "local_test,ci,synthetic",
+        "current": {
+          "text": "local_test",
+          "value": "local_test"
+        },
+        "options": [
+          {
+            "text": "local_test",
+            "value": "local_test",
+            "selected": true
+          },
+          {
+            "text": "ci",
+            "value": "ci",
+            "selected": false
+          },
+          {
+            "text": "synthetic",
+            "value": "synthetic",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "hide": 0
+      },
+      {
+        "name": "suite",
+        "label": "Suite",
+        "type": "custom",
+        "query": "rust,javascript,browser,build,fault_validation",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "rust",
+            "value": "rust",
+            "selected": false
+          },
+          {
+            "text": "javascript",
+            "value": "javascript",
+            "selected": false
+          },
+          {
+            "text": "browser",
+            "value": "browser",
+            "selected": false
+          },
+          {
+            "text": "build",
+            "value": "build",
+            "selected": false
+          },
+          {
+            "text": "fault_validation",
+            "value": "fault_validation",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "hide": 0
+      },
+      {
+        "name": "browser",
+        "label": "Browser",
+        "type": "custom",
+        "query": "none,chromium,firefox,webkit",
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "options": [
+          {
+            "text": "All",
+            "value": "$__all",
+            "selected": true
+          },
+          {
+            "text": "none",
+            "value": "none",
+            "selected": false
+          },
+          {
+            "text": "chromium",
+            "value": "chromium",
+            "selected": false
+          },
+          {
+            "text": "firefox",
+            "value": "firefox",
+            "selected": false
+          },
+          {
+            "text": "webkit",
+            "value": "webkit",
+            "selected": false
+          }
+        ],
+        "multi": false,
+        "includeAll": true,
+        "allValue": ".*",
+        "hide": 0
+      }
+    ]
+  },
+  "links": [
+    {
+      "title": "Operations overview",
+      "url": "/d/scribyra-operations",
+      "type": "link",
+      "keepTime": true,
+      "includeVars": false
+    },
+    {
+      "title": "Collection health",
+      "url": "/d/scribyra-delivery",
+      "type": "link",
+      "keepTime": true,
+      "includeVars": false
+    }
+  ]
+}

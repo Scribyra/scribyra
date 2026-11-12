@@ -1,0 +1,2099 @@
+{
+ "nomcast:ch-ch": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "4344a899-ad75-4bda-aba9-7ab2cfe7682f.local",
+    "port": 53786,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "0d610bba-045d-4a54-a3ac-69c574aa778b.local",
+    "port": 35038,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 647,
+   "deflateBytes": 457,
+   "base64url": 610,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 455,
+   "base64url": 607,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "new",
+  "iceA": "new",
+  "stateB": "new",
+  "iceB": "new",
+  "eventsA": [
+   {
+    "t": 9,
+    "k": "dc-wired"
+   },
+   {
+    "t": 12,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 131,
+    "k": "gather",
+    "v": "complete"
+   }
+  ]
+ },
+ "nomcast:ff-ff": {
+  "policy": "nomcast",
+  "ea": "firefox",
+  "eb": "firefox",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "37d5cd0b-a236-4d55-8cbb-eb94fdeaf95e.local",
+    "port": 34291,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "37d5cd0b-a236-4d55-8cbb-eb94fdeaf95e.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "e95bbb20-af8a-4fcf-b8ff-fb40b7d8b583.local",
+    "port": 37898,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "e95bbb20-af8a-4fcf-b8ff-fb40b7d8b583.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 716,
+   "jsonBytes": 783,
+   "deflateBytes": 489,
+   "base64url": 652,
+   "qrVersionL": 18,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 715,
+   "jsonBytes": 783,
+   "deflateBytes": 482,
+   "base64url": 643,
+   "qrVersionL": 17,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "failed",
+  "iceA": "failed",
+  "stateB": "failed",
+  "iceB": "failed",
+  "eventsA": [
+   {
+    "t": 8,
+    "k": "dc-wired"
+   },
+   {
+    "t": 18,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 18,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 5070,
+    "k": "ice",
+    "v": "failed"
+   },
+   {
+    "t": 5070,
+    "k": "conn",
+    "v": "failed"
+   },
+   {
+    "t": 5071,
+    "k": "dc-close"
+   }
+  ]
+ },
+ "nomcast:ch-ff": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "firefox",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "12f95a48-ddb6-4980-b95c-1314bbba2d92.local",
+    "port": 39268,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "78a72bf0-901e-4fbc-b09e-94560a5c5ff1.local",
+    "port": 56280,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "78a72bf0-901e-4fbc-b09e-94560a5c5ff1.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 454,
+   "base64url": 606,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 759,
+   "jsonBytes": 831,
+   "deflateBytes": 504,
+   "base64url": 672,
+   "qrVersionL": 18,
+   "qrVersionM": 21,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "new",
+  "iceA": "new",
+  "stateB": "failed",
+  "iceB": "failed",
+  "eventsA": [
+   {
+    "t": 4,
+    "k": "dc-wired"
+   },
+   {
+    "t": 5,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 125,
+    "k": "gather",
+    "v": "complete"
+   }
+  ]
+ },
+ "nomcast+gumBoth:ch-ch": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": true,
+  "gumB": true,
+  "typed": false,
+  "gumResultA": {
+   "ok": true,
+   "tracks": 1
+  },
+  "gumResultB": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 39872,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.11",
+    "port": 49813,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 662,
+   "jsonBytes": 725,
+   "deflateBytes": 460,
+   "base64url": 614,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "answerSize": {
+   "sdpBytes": 557,
+   "jsonBytes": 619,
+   "deflateBytes": 426,
+   "base64url": 568,
+   "qrVersionL": 16,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "connected": true,
+  "sinceApply": 14,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 10,
+    "k": "dc-wired"
+   },
+   {
+    "t": 15,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 132,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 164,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 164,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 184,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 187,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 195,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.10"
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.11"
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "nomcast+gumA:ch-ch": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": true,
+  "gumB": false,
+  "typed": false,
+  "gumResultA": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 33371,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "e9311869-918a-4018-ac54-883a41845705.local",
+    "port": 48525,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 660,
+   "jsonBytes": 723,
+   "deflateBytes": 460,
+   "base64url": 614,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 449,
+   "base64url": 599,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": true,
+  "sinceApply": 14,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 7,
+    "k": "dc-wired"
+   },
+   {
+    "t": 10,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 137,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 169,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 169,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 193,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 196,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 202,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.10"
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "nomcast+gumB:ch-ch": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": true,
+  "typed": false,
+  "gumResultB": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "ec7ea960-a304-45ce-8ef6-2c13caf770ae.local",
+    "port": 36859,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.11",
+    "port": 53976,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.11",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 451,
+   "base64url": 602,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 660,
+   "jsonBytes": 724,
+   "deflateBytes": 459,
+   "base64url": 612,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "connected": true,
+  "sinceApply": 19,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 5,
+    "k": "dc-wired"
+   },
+   {
+    "t": 7,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 124,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 299,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 299,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 301,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 310,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 316,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.11"
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "nomcast+gumBoth:ff-ff": {
+  "policy": "nomcast",
+  "ea": "firefox",
+  "eb": "firefox",
+  "gumA": true,
+  "gumB": true,
+  "typed": false,
+  "gumResultA": {
+   "ok": true,
+   "tracks": 1
+  },
+  "gumResultB": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "702ab4c5-088c-49f1-8be8-6e4aea985e4a.local",
+    "port": 35224,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "702ab4c5-088c-49f1-8be8-6e4aea985e4a.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "2973b81a-0800-4158-8cd2-318edb3ee973.local",
+    "port": 51502,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "2973b81a-0800-4158-8cd2-318edb3ee973.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 716,
+   "jsonBytes": 783,
+   "deflateBytes": 485,
+   "base64url": 647,
+   "qrVersionL": 18,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 715,
+   "jsonBytes": 783,
+   "deflateBytes": 484,
+   "base64url": 646,
+   "qrVersionL": 18,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "failed",
+  "iceA": "failed",
+  "stateB": "failed",
+  "iceB": "failed",
+  "eventsA": [
+   {
+    "t": 11,
+    "k": "dc-wired"
+   },
+   {
+    "t": 15,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 15,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 5070,
+    "k": "ice",
+    "v": "failed"
+   },
+   {
+    "t": 5070,
+    "k": "conn",
+    "v": "failed"
+   },
+   {
+    "t": 5070,
+    "k": "dc-close"
+   }
+  ]
+ },
+ "nomcast+gumA:ch-ff": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "firefox",
+  "gumA": true,
+  "gumB": false,
+  "typed": false,
+  "gumResultA": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 59116,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "919d6977-e3f9-403e-b779-b46dfb99bcc7.local",
+    "port": 55786,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "919d6977-e3f9-403e-b779-b46dfb99bcc7.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 662,
+   "jsonBytes": 725,
+   "deflateBytes": 461,
+   "base64url": 615,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "answerSize": {
+   "sdpBytes": 759,
+   "jsonBytes": 831,
+   "deflateBytes": 502,
+   "base64url": 670,
+   "qrVersionL": 18,
+   "qrVersionM": 21,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": true,
+  "sinceApply": 27,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 5,
+    "k": "dc-wired"
+   },
+   {
+    "t": 8,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 124,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 164,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 164,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 183,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 190,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 207,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.10"
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "nomcast+typed:ch-ch": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": false,
+  "typed": true,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "95b9821e-5905-431a-93ac-6c628ddabef7.local",
+    "port": 41418,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "6266e32d-ac09-4e34-9433-8a97e0a8143b.local",
+    "port": 44689,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 451,
+   "base64url": 602,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 455,
+   "base64url": 607,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "typedAdd": true,
+  "connected": true,
+  "sinceApply": 25,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 4,
+    "k": "dc-wired"
+   },
+   {
+    "t": 8,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 135,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 316,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 316,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 318,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 324,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 334,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.11"
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "nomcast+typed:ff-ff": {
+  "policy": "nomcast",
+  "ea": "firefox",
+  "eb": "firefox",
+  "gumA": false,
+  "gumB": false,
+  "typed": true,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "a1e988b2-92de-43cb-a5d1-da1b0f0ba6d0.local",
+    "port": 46705,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "a1e988b2-92de-43cb-a5d1-da1b0f0ba6d0.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "a5faee43-6bb0-4e37-8797-eff0d6cf2784.local",
+    "port": 41841,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "a5faee43-6bb0-4e37-8797-eff0d6cf2784.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 716,
+   "jsonBytes": 783,
+   "deflateBytes": 487,
+   "base64url": 650,
+   "qrVersionL": 18,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 715,
+   "jsonBytes": 783,
+   "deflateBytes": 484,
+   "base64url": 646,
+   "qrVersionL": 18,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "typedAdd": true,
+  "connected": true,
+  "sinceApply": 36,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 4,
+    "k": "dc-wired"
+   },
+   {
+    "t": 17,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 18,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 68,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 68,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 70,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 95,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 98,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "a1e988b2-92de-43cb-a5d1-da1b0f0ba6d0.local"
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.11"
+   },
+   "rttMs": null,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AEAD_AES_128_GCM"
+  }
+ },
+ "nomcast+typed:ch-ff": {
+  "policy": "nomcast",
+  "ea": "chromium",
+  "eb": "firefox",
+  "gumA": false,
+  "gumB": false,
+  "typed": true,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "b443ad20-1bfd-4294-8b60-53a25349a492.local",
+    "port": 32872,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "1ce7dc62-03ea-4e3a-9c63-4ef91ec733be.local",
+    "port": 59881,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "1ce7dc62-03ea-4e3a-9c63-4ef91ec733be.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 452,
+   "base64url": 603,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 759,
+   "jsonBytes": 831,
+   "deflateBytes": 501,
+   "base64url": 668,
+   "qrVersionL": 18,
+   "qrVersionM": 21,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "typedAdd": true,
+  "connected": true,
+  "sinceApply": 36,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 7,
+    "k": "dc-wired"
+   },
+   {
+    "t": 10,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 133,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 366,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 366,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 367,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 377,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 397,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.11"
+   },
+   "rttMs": 1,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "isolated:ch-ch": {
+  "policy": "isolated",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "c022921b-6467-4346-ae66-5889de3c8249.local",
+    "port": 41106,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "b39d2fd0-a720-4be4-803f-1af697a3dbad.local",
+    "port": 49921,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 450,
+   "base64url": 600,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 449,
+   "base64url": 599,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "new",
+  "iceA": "new",
+  "stateB": "new",
+  "iceB": "new",
+  "eventsA": [
+   {
+    "t": 8,
+    "k": "dc-wired"
+   },
+   {
+    "t": 12,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 132,
+    "k": "gather",
+    "v": "complete"
+   }
+  ]
+ },
+ "isolated:ff-ff": {
+  "policy": "isolated",
+  "ea": "firefox",
+  "eb": "firefox",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "b2d9244e-a6a3-41af-bf5b-6fd68249ec4d.local",
+    "port": 60368,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "b2d9244e-a6a3-41af-bf5b-6fd68249ec4d.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "d9437996-6575-4467-8c8e-fd5127e4e3aa.local",
+    "port": 37531,
+    "type": "host",
+    "mdns": true
+   },
+   {
+    "proto": "tcp",
+    "addr": "d9437996-6575-4467-8c8e-fd5127e4e3aa.local",
+    "port": 9,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 716,
+   "jsonBytes": 783,
+   "deflateBytes": 486,
+   "base64url": 648,
+   "qrVersionL": 18,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 715,
+   "jsonBytes": 783,
+   "deflateBytes": 480,
+   "base64url": 640,
+   "qrVersionL": 17,
+   "qrVersionM": 20,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 96,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "failed",
+  "iceA": "failed",
+  "stateB": "failed",
+  "iceB": "failed",
+  "eventsA": [
+   {
+    "t": 5,
+    "k": "dc-wired"
+   },
+   {
+    "t": 17,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 17,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 5067,
+    "k": "ice",
+    "v": "failed"
+   },
+   {
+    "t": 5067,
+    "k": "conn",
+    "v": "failed"
+   },
+   {
+    "t": 5067,
+    "k": "dc-close"
+   }
+  ]
+ },
+ "isolated+gumBoth:ch-ch": {
+  "policy": "isolated",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": true,
+  "gumB": true,
+  "typed": false,
+  "gumResultA": {
+   "ok": true,
+   "tracks": 1
+  },
+  "gumResultB": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 43886,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.11",
+    "port": 36325,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.11",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 661,
+   "jsonBytes": 724,
+   "deflateBytes": 461,
+   "base64url": 615,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "answerSize": {
+   "sdpBytes": 660,
+   "jsonBytes": 724,
+   "deflateBytes": 461,
+   "base64url": 615,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "connected": false,
+  "stateA": "failed",
+  "iceA": "disconnected",
+  "stateB": "failed",
+  "iceB": "disconnected",
+  "eventsA": [
+   {
+    "t": 4,
+    "k": "dc-wired"
+   },
+   {
+    "t": 7,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 121,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 281,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 281,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 15340,
+    "k": "ice",
+    "v": "disconnected"
+   },
+   {
+    "t": 15340,
+    "k": "conn",
+    "v": "failed"
+   }
+  ]
+ },
+ "webkit:ch(gum)->wk": {
+  "policy": "open",
+  "ea": "chromium",
+  "eb": "webkit",
+  "gumA": true,
+  "gumB": false,
+  "typed": false,
+  "gumResultA": {
+   "ok": true,
+   "tracks": 1
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "10.77.0.10",
+    "port": 57513,
+    "type": "host",
+    "mdns": false
+   },
+   {
+    "proto": "tcp",
+    "addr": "10.77.0.10",
+    "port": 9,
+    "type": "host",
+    "mdns": false
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "e78eac65-f5dd-442a-a802-d945679fc34e.local",
+    "port": 46824,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 662,
+   "jsonBytes": 725,
+   "deflateBytes": 463,
+   "base64url": 618,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 15,
+   "minimalBytes": 72,
+   "minimalDerivedIceBytes": 42,
+   "minimalB32Chars": 68,
+   "qrMinimalVersionL": 3,
+   "qrMinimalVersionM": 3
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 449,
+   "base64url": 599,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": true,
+  "sinceApply": 9,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 8,
+    "k": "dc-wired"
+   },
+   {
+    "t": 11,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 132,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 164,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 165,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 187,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 189,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 193,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": "10.77.0.10"
+   },
+   "remote": {
+    "type": "prflx",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "webkit:typed wk->wk": {
+  "policy": "open",
+  "ea": "webkit",
+  "eb": "webkit",
+  "gumA": false,
+  "gumB": false,
+  "typed": true,
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "aba98242-f069-4adf-a274-46aaba904891.local",
+    "port": 59459,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "5b1901a8-9f39-4352-a94d-4e80d11e3f7e.local",
+    "port": 42159,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 450,
+   "base64url": 600,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 453,
+   "base64url": 604,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "typedAdd": true,
+  "connected": true,
+  "sinceApply": 22,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 4,
+    "k": "dc-wired"
+   },
+   {
+    "t": 5,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 120,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 277,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 277,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 279,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 283,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 292,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": null
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": null
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "lna:public-default": {
+  "policy": "open",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "fetchProbeToPeer": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 8
+  },
+  "fetchProbeLoopback": {
+   "ok": true,
+   "type": "basic",
+   "ms": 4
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "088f4732-1b44-407c-8aa1-a73538aa9f29.local",
+    "port": 37672,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "d30e5922-7009-4c4a-99fe-b0fe7b202e7c.local",
+    "port": 48583,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 587,
+   "jsonBytes": 648,
+   "deflateBytes": 455,
+   "base64url": 607,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 450,
+   "base64url": 600,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": true,
+  "sinceApply": 16,
+  "stateA": "connected",
+  "iceA": "connected",
+  "stateB": "connected",
+  "iceB": "connected",
+  "eventsA": [
+   {
+    "t": 6,
+    "k": "dc-wired"
+   },
+   {
+    "t": 9,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 136,
+    "k": "gather",
+    "v": "complete"
+   },
+   {
+    "t": 170,
+    "k": "ice",
+    "v": "checking"
+   },
+   {
+    "t": 170,
+    "k": "conn",
+    "v": "connecting"
+   },
+   {
+    "t": 191,
+    "k": "ice",
+    "v": "connected"
+   },
+   {
+    "t": 194,
+    "k": "conn",
+    "v": "connected"
+   },
+   {
+    "t": 203,
+    "k": "dc-open"
+   }
+  ],
+  "pair": {
+   "local": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "remote": {
+    "type": "host",
+    "proto": "udp",
+    "address": ""
+   },
+   "rttMs": 2,
+   "dtls": "TLS_AES_128_GCM_SHA256",
+   "tls": "FEFC",
+   "srtp": "SRTP_AES128_CM_HMAC_SHA1_80"
+  }
+ },
+ "lna:public-webrtc-feature": {
+  "policy": "open",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "fetchProbeToPeer": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 8
+  },
+  "fetchProbeLoopback": {
+   "ok": true,
+   "type": "basic",
+   "ms": 4
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "332c4511-dd3e-4269-9425-1ad78a15e2be.local",
+    "port": 44165,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "230dc529-e889-4398-8925-c927e48d9aa2.local",
+    "port": 52528,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 647,
+   "deflateBytes": 450,
+   "base64url": 600,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 450,
+   "base64url": 600,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "new",
+  "iceA": "new",
+  "stateB": "new",
+  "iceB": "new",
+  "eventsA": [
+   {
+    "t": 7,
+    "k": "dc-wired"
+   },
+   {
+    "t": 9,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 134,
+    "k": "gather",
+    "v": "complete"
+   }
+  ]
+ },
+ "lna:public-webrtc-notloopbackonly": {
+  "policy": "open",
+  "ea": "chromium",
+  "eb": "chromium",
+  "gumA": false,
+  "gumB": false,
+  "typed": false,
+  "fetchProbeToPeer": {
+   "ok": false,
+   "err": "TypeError: Failed to fetch",
+   "ms": 11
+  },
+  "fetchProbeLoopback": {
+   "ok": true,
+   "type": "basic",
+   "ms": 2
+  },
+  "offerCands": [
+   {
+    "proto": "udp",
+    "addr": "983bd4e3-376d-427e-8d93-8a05b6781118.local",
+    "port": 44519,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "answerCands": [
+   {
+    "proto": "udp",
+    "addr": "55ea8c77-1ffd-484b-9d2a-b6f34d3d3389.local",
+    "port": 50183,
+    "type": "host",
+    "mdns": true
+   }
+  ],
+  "offerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 647,
+   "deflateBytes": 455,
+   "base64url": 607,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "answerSize": {
+   "sdpBytes": 586,
+   "jsonBytes": 648,
+   "deflateBytes": 451,
+   "base64url": 602,
+   "qrVersionL": 17,
+   "qrVersionM": 19,
+   "qrBinaryVersionL": 14,
+   "minimalBytes": 84,
+   "minimalDerivedIceBytes": 54,
+   "minimalB32Chars": 87,
+   "qrMinimalVersionL": 4,
+   "qrMinimalVersionM": 4
+  },
+  "connected": false,
+  "stateA": "new",
+  "iceA": "new",
+  "stateB": "new",
+  "iceB": "new",
+  "eventsA": [
+   {
+    "t": 4,
+    "k": "dc-wired"
+   },
+   {
+    "t": 6,
+    "k": "gather",
+    "v": "gathering"
+   },
+   {
+    "t": 134,
+    "k": "gather",
+    "v": "complete"
+   }
+  ]
+ }
+}

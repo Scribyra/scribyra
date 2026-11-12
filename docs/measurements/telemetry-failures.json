@@ -1,0 +1,174 @@
+{
+  "version": 1,
+  "source": "local_test",
+  "browsers": {
+    "chromium": {
+      "version": 1,
+      "browser": "chromium",
+      "verifiedAt": "2026-11-05T16:35:12.033Z",
+      "receipts": [
+        {
+          "operation": "download",
+          "outcome": "failure",
+          "traceId": "ca08a8ef072f9f774bf948006732ed6d",
+          "spanId": "2d52a935b34b4dd6",
+          "eventDigest": "d1d42e256308d0e3003966b513ec99c7833821083feccb7941c4337cbd33a685"
+        },
+        {
+          "operation": "compile",
+          "outcome": "failure",
+          "traceId": "ca08a8ef072f9f774bf948006732ed6d",
+          "spanId": "9745eb783a596e70",
+          "eventDigest": "dcf9ee18d7379ee69bf082cf02973671926c5b42058b3734c1d628475fb90c1b"
+        },
+        {
+          "operation": "compile",
+          "outcome": "failure",
+          "traceId": "8c2b26cd4d22feb7e6ae82e4925505fc",
+          "spanId": "baa175708cbc1f74",
+          "eventDigest": "c149fd66e93229c23b90f6a15d5c729de463e2c8571dce2718cfea428017e011"
+        },
+        {
+          "operation": "storage_commit",
+          "outcome": "failure",
+          "traceId": "ec0ea0b523adda6040f1567157392eb0",
+          "spanId": "e7e0b5b21fe965bb",
+          "eventDigest": "f2fe6507615dc4caf8fe48accbe1c3887b020549a74388f779a0c3bae27746c4"
+        },
+        {
+          "operation": "recovery",
+          "outcome": "failure",
+          "traceId": "c198593a21a428d56093f2704e51fa9b",
+          "spanId": "88b4d9c4b7dc7413",
+          "eventDigest": "5cb8955d19c3d2e1651a723433d1dac6bc4b8b62fcd09da9ab1b4dd2182c5640"
+        },
+        {
+          "operation": "mcp",
+          "outcome": "cancelled",
+          "traceId": "f4386b2f3c654f28a8974b91de2726c2",
+          "spanId": "d59334e363b21e09",
+          "eventDigest": "595cb39cbfec39268e49fdf3419561966c3a23f112201f2cfac7f333a69973c7"
+        },
+        {
+          "operation": "mcp",
+          "outcome": "failure",
+          "traceId": "39d0aa980ab644fdb576bc88e848d62d",
+          "spanId": "8767e7c0376e9c4e",
+          "eventDigest": "730ea0d122f305b328ce474822c3e6cb16bd75ea930314dcf21e70ec45e45686"
+        }
+      ]
+    },
+    "firefox": {
+      "version": 1,
+      "browser": "firefox",
+      "verifiedAt": "2026-11-05T16:39:36.101Z",
+      "receipts": [
+        {
+          "operation": "download",
+          "outcome": "failure",
+          "traceId": "47edfcc34dc6684813adda6dccfbbce2",
+          "spanId": "4e056e0f1f1a36bc",
+          "eventDigest": "cd7e348cac09137cc67225f9184be1ffff6af839feedd30d6ff4696bfd1eed0f"
+        },
+        {
+          "operation": "compile",
+          "outcome": "failure",
+          "traceId": "47edfcc34dc6684813adda6dccfbbce2",
+          "spanId": "86de71325af334b4",
+          "eventDigest": "859a9c54a62b1936c8f1922d7d3dd9f128d148f92d984174d6621bc02db1aace"
+        },
+        {
+          "operation": "compile",
+          "outcome": "failure",
+          "traceId": "8ad5a0c2d8005102dd8a05062e4dba91",
+          "spanId": "59f86980b1beafbe",
+          "eventDigest": "91339b360d1b8a34e3b3e14582c06a8bb0e89b282e6f9b2c93932cefff607d15"
+        },
+        {
+          "operation": "storage_commit",
+          "outcome": "failure",
+          "traceId": "c9e2182ad1e294d5fa5c4a04e116a151",
+          "spanId": "37d7c6c604127163",
+          "eventDigest": "186e7b4a910a00df93bfec3a4e87089408a6ea27c179e6f90bb4914bcb031754"
+        },
+        {
+          "operation": "recovery",
+          "outcome": "failure",
+          "traceId": "7094f59d1c9576fe3c4b72fd1433331b",
+          "spanId": "913c07f442d501d1",
+          "eventDigest": "63f3a0095652ac5a576eaa2ef9ac1c9c3476c5a1ca3c542866fef889fbd1c11d"
+        },
+        {
+          "operation": "mcp",
+          "outcome": "cancelled",
+          "traceId": "45eced45b3b44d20901323429787ae56",
+          "spanId": "1991655aeb70d3f1",
+          "eventDigest": "7a1741aac505ce70e2699711432cfa147bffed365a9b8fb39935b9c6974c8bda"
+        },
+        {
+          "operation": "mcp",
+          "outcome": "failure",
+          "traceId": "a2ee3cb8e2174976a9fef89db2c54a64",
+          "spanId": "fe0584d1f3e6e603",
+          "eventDigest": "2e83b7a5e7865645fbd20e93ffc9e2f350e665fc6943108dd5a736b285d1caf1"
+        }
+      ]
+    },
+    "webkit": {
+      "version": 1,
+      "browser": "webkit",
+      "verifiedAt": "2026-11-05T16:44:42.757Z",
+      "receipts": [
+        {
+          "operation": "download",
+          "outcome": "failure",
+          "traceId": "f5480e58a06c932a129c82658eb7d02e",
+          "spanId": "f2caf56fa263ef0e",
+          "eventDigest": "93409a357f2ec096d7736c0a04536b5e0a3e8fa796b723d928d9b5bfc6029b09"
+        },
+        {
+          "operation": "compile",
+          "outcome": "failure",
+          "traceId": "f5480e58a06c932a129c82658eb7d02e",
+          "spanId": "5cfadc19a37f03b7",
+          "eventDigest": "9a04d65629b083a15672a2eca7f34a383d6cdf108015dd45039ce784660a587e"
+        },
+        {
+          "operation": "compile",
+          "outcome": "failure",
+          "traceId": "e244816d83e4cd2105e86fc26b47714f",
+          "spanId": "6d4c6446ba75ddca",
+          "eventDigest": "62fcef9bf52cc7f38f14fc2cf974d4d17225fd2c272aa4eb1c6ebcb27512e645"
+        },
+        {
+          "operation": "storage_commit",
+          "outcome": "failure",
+          "traceId": "80a0a2449f9e06c2c9daebf9d2f174e6",
+          "spanId": "e9b88a8fc97ece01",
+          "eventDigest": "f3d0cec819e8321e0e8a2fa0599f424d2a033a1d85b877b52ba598301870ac23"
+        },
+        {
+          "operation": "recovery",
+          "outcome": "failure",
+          "traceId": "59496c480e6e250c74159f3790e32d6b",
+          "spanId": "691e510f862948e7",
+          "eventDigest": "d1f00470c29a218d224c227832c9d6d6a5c6fa85b99f1429df7721b03cfc98c5"
+        },
+        {
+          "operation": "mcp",
+          "outcome": "cancelled",
+          "traceId": "0af5d7fbefcb434d80734b2ce70f38ad",
+          "spanId": "fffc40357b3f794d",
+          "eventDigest": "7bfc2903e77eb8c286725e829363bb5311880bc4320db97603ba34263b3544fd"
+        },
+        {
+          "operation": "mcp",
+          "outcome": "failure",
+          "traceId": "27b0f528e1ab438ba571fce67c5c227b",
+          "spanId": "ace5639c45876e96",
+          "eventDigest": "548bc74a12f102679efeb87ff151a9e90f634b4e1522db7e70600b95660203d8"
+        }
+      ]
+    }
+  }
+}

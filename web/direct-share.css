@@ -1,0 +1,16 @@
+/* The frame, shadow and theme come from .ui-popup; this is only what Share adds. */
+.ui-popup.direct-share{width:min(420px,calc(100vw - 16px));max-width:min(420px,calc(100vw - 16px));padding:12px;gap:0}
+.direct-heading{display:flex;align-items:center;gap:8px;margin-bottom:10px}.direct-heading .ui-prompt-title{flex:1}
+.direct-badge{font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);border:1px solid var(--border);border-radius:5px;padding:2px 5px}
+.direct-enable{display:flex;align-items:center;gap:8px;font-weight:550}.direct-enable input{accent-color:var(--accent);width:15px;height:15px;margin:0}
+.direct-disclosure{font-size:11.5px;line-height:1.45;color:var(--muted);margin:10px 0}
+.direct-fields{display:grid;gap:8px}.direct-fields label,.direct-link{display:grid;gap:4px}
+.direct-help{font-size:11px;color:var(--muted);line-height:1.45}.direct-actions{display:flex;gap:6px;margin:10px 0}.direct-actions .button{flex:1}
+.direct-link{margin-top:6px}.direct-status{white-space:pre-line;border-top:1px solid var(--border);margin:4px 0 0;padding-top:10px;line-height:1.45;color:var(--muted)}
+.direct-peer{display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border)}.direct-peer>div{flex:1;display:grid;gap:3px}
+.direct-avatar{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;flex-shrink:0;border-radius:50%;background:var(--bg);border:1px solid var(--border);color:var(--text);font-weight:600;font-size:12px}
+.direct-code{font-size:14px;letter-spacing:.05em}.direct-request{border:1px solid var(--border);padding:8px;border-radius:6px;margin-top:8px}.direct-request p{margin:0 0 6px}.direct-request .button{margin-right:5px}
+#direct-participants{display:flex;gap:3px}
+.direct-share button:focus-visible,.direct-share input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.direct-share [hidden]{display:none}
+#direct-share-toggle[hidden]{display:none}

@@ -1,0 +1,28 @@
+thesis ch-ch none {"s":{"ms":42,"rxBytes":147798,"txBytes":11,"updateBytes":147698,"blobBytes":0,"verifyMs":0,"files":101,"mbps":28.42},"c":true,"rtt":{"median":4.2,"max":4.3},"u":147698}
+saved big-partial
+thesis ch-ff none {"s":{"ms":51,"rxBytes":147798,"txBytes":11,"updateBytes":147698,"blobBytes":0,"verifyMs":0,"files":101,"mbps":23.18},"c":true,"rtt":{"median":4.1,"max":4.3},"u":147698}
+saved big-partial
+thesis ff-ch none {"s":{"ms":51,"rxBytes":147798,"txBytes":11,"updateBytes":147698,"blobBytes":0,"verifyMs":0,"files":101,"mbps":23.41},"c":true,"rtt":{"median":4,"max":5},"u":147698}
+saved big-partial
+thesis ch-ch wifi {"s":{"ms":140,"rxBytes":147798,"txBytes":11,"updateBytes":147698,"blobBytes":0,"verifyMs":0,"files":101,"mbps":8.44},"c":true,"rtt":{"median":16.3,"max":16.4},"u":147698}
+saved big-partial
+thesis ch-ch wifi e2e {"s":{"ms":117,"rxBytes":147826,"txBytes":39,"updateBytes":147698,"blobBytes":0,"verifyMs":0,"files":101,"mbps":10.07},"c":true,"rtt":{"median":12.4,"max":16.3},"u":147698}
+saved big-partial
+60MiB ch-ch none {"s":{"ms":11996,"rxBytes":63101191,"txBytes":85,"updateBytes":148056,"blobBytes":62914560,"verifyMs":1120,"files":102,"mbps":42.08},"c":true,"rtt":{"median":4.1,"max":4.2},"u":148056}
+saved big-partial
+60MiB ch-ch none e2e {"s":{"ms":3716,"rxBytes":63101247,"txBytes":141,"updateBytes":148056,"blobBytes":62914560,"verifyMs":888,"files":102,"mbps":135.85},"c":true,"rtt":{"median":4.1,"max":4.3},"u":148056}
+saved big-partial
+60MiB ch-ff none {"s":{"ms":4024,"rxBytes":63101191,"txBytes":85,"updateBytes":148056,"blobBytes":62914560,"verifyMs":861,"files":102,"mbps":125.45},"c":true,"rtt":{"median":4.3,"max":23.9},"u":148056}
+saved big-partial
+60MiB ff-ch none {"s":{"ms":4011,"rxBytes":63101191,"txBytes":85,"updateBytes":148056,"blobBytes":62914560,"verifyMs":940,"files":102,"mbps":125.87},"c":true,"rtt":{"median":4,"max":6},"u":148056}
+saved big-partial
+60MiB ff-ff none {"s":{"ms":4742,"rxBytes":63101191,"txBytes":85,"updateBytes":148056,"blobBytes":62914560,"verifyMs":837,"files":102,"mbps":106.45},"c":true,"rtt":{"median":4,"max":5},"u":148056}
+saved big-partial
+60MiB ch-ch 64KiB chunks {"s":{"ms":6604,"rxBytes":63072321,"txBytes":85,"updateBytes":148056,"blobBytes":62914560,"verifyMs":958,"files":102,"mbps":76.4},"c":true,"rtt":{"median":4.1,"max":8.7},"u":148056}
+saved big-partial
+60MiB ch-ch wifi {"s":{"ms":42399,"rxBytes":63101191,"txBytes":85,"updateBytes":148056,"blobBytes":62914560,"verifyMs":939,"files":102,"mbps":11.91},"c":true,"rtt":{"median":12.2,"max":16.2},"u":148056}
+saved big-partial
+60MiB ch-ch wifi e2e {"s":{"ms":41817,"rxBytes":63101247,"txBytes":141,"updateBytes":148056,"blobBytes":62914560,"verifyMs":951,"files":102,"mbps":12.07},"c":true,"rtt":{"median":12.3,"max":18.3},"u":148056}
+saved big-partial
+saved big
+big-done

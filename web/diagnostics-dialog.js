@@ -1,0 +1,45 @@
+import {restoreDialogFocus} from './input.js';
+import {problemMail} from './report-dialog.js';
+
+export function diagnosticsDialog({telemetry,remote,consent,download}) {
+ const dialog=document.createElement('dialog');dialog.className='modal diagnostics-dialog';dialog.setAttribute('aria-label','Local diagnostics');restoreDialogFocus(dialog);
+ const heading=document.createElement('h2');heading.textContent='Local diagnostics';
+ const help=document.createElement('p');help.textContent='Record a bounded timeline on this tab to investigate failures offline. Collection starts when enabled. Paper text, names, raw logs and credentials are excluded. Local events stay in memory until this tab closes or you clear them. Telemetry choices and optional per-tab connections have separate controls below.';
+ const attach=document.createElement('p');attach.textContent='To attach this to a problem report: turn on Collect local diagnostics and Allow reviewed diagnostic export below, repeat what went wrong, then choose Export preview. You get scribyra-diagnostics.json, which holds the version, operation names, outcomes, error categories, timings and random trace identifiers shown below. Exporting sends nothing: the file goes nowhere unless you attach it.';
+ const controls=document.createElement('div'),status=document.createElement('p'),build=document.createElement('p');status.setAttribute('role','status');
+ const timeline=document.createElement('table');timeline.setAttribute('aria-label','Local event timeline');
+ const head=timeline.createTHead().insertRow();for(const title of ['Time (ms)','Runtime','Operation','Outcome','Duration (ms)','Trace']){const th=document.createElement('th');th.scope='col';th.textContent=title;head.append(th);}
+ const rows=timeline.createTBody(),scroll=document.createElement('div');scroll.style.cssText='max-height:30vh;overflow:auto';scroll.append(timeline);
+ const preview=document.createElement('pre');preview.tabIndex=0;preview.setAttribute('aria-label','Diagnostic export preview');preview.style.cssText='max-height:40vh;overflow:auto;white-space:pre-wrap';
+ const actions=document.createElement('div');actions.className='modal-actions';
+ const settings=telemetry.settings();
+ function toggle(label,key){const wrapper=document.createElement('label'),input=document.createElement('input');input.type='checkbox';input.checked=settings[key];input.onchange=()=>{settings[key]=input.checked;telemetry.configure(settings);refresh();};wrapper.append(input,document.createTextNode(label));controls.append(wrapper);return input;}
+ toggle('Collect local diagnostics','collect');toggle('Allow reviewed diagnostic export','allowExport');
+ const consentSettings=consent?.settings();if(consentSettings)controls.append(consentSettings.element);
+ let remoteStatus,connectButton,remoteFormError='';let remoteTimer;
+ function updateRemote(){if(!remoteStatus)return;const state=remote.status();remoteStatus.textContent=remoteFormError||`${state.enabled?'Sending enabled for this tab':'Remote collection off (explicit tab connection)'} · ${state.sent} sent · ${state.pending} pending · ${state.dropped} dropped · ${state.sampled} sampled out${state.error?` · ${state.error==='permission'?'Destination rejected the connection':state.error==='invalid'?'Destination rejected this configuration':'Destination unavailable'}`:''}`;connectButton.disabled=!telemetry.settings().collect;}
+ if(remote){
+  const fieldset=document.createElement('fieldset'),legend=document.createElement('legend');legend.textContent='Remote collection (optional)';fieldset.append(legend);
+  const info=document.createElement('p');info.textContent='Use a telemetry host you trust. The connection and token last for this tab only. Sampling affects remote records; the local timeline stays complete within its buffer limit.';fieldset.append(info);
+  function input(label,type){const wrapper=document.createElement('label'),node=document.createElement('input');wrapper.style.display='block';node.type=type;node.className='input';node.setAttribute('aria-label',label);wrapper.append(document.createTextNode(label),node);fieldset.append(wrapper);return node;}
+  const configuration=remote.configuration(),endpoint=input('Telemetry endpoint','url'),token=input('Ingest token','password');endpoint.value=configuration.endpoint;endpoint.placeholder='https://your-host.example/v1/events';token.autocomplete='off';token.spellcheck=false;
+  const wrapper=document.createElement('label'),sampling=document.createElement('select');sampling.setAttribute('aria-label','Remote sampling');for(const[label,value]of [['All traces','1'],['10% of traces','0.1'],['1% of traces','0.01']]){const option=document.createElement('option');option.textContent=label;option.value=value;sampling.append(option);}sampling.value=String(configuration.sampleRate);wrapper.append(document.createTextNode('Remote sampling'),sampling);fieldset.append(wrapper);
+  connectButton=document.createElement('button');connectButton.type='button';connectButton.className='button secondary';connectButton.textContent='Connect telemetry host';
+  endpoint.oninput=token.oninput=sampling.onchange=()=>{remoteFormError='';updateRemote();};
+  const sourceLabel=document.createElement('label'),source=document.createElement('select');source.setAttribute('aria-label','Activity source');for(const[label,value]of [['Application activity','application'],['Local automated tests','local_test'],['GitLab CI tests','ci'],['Synthetic validation','synthetic']]){const option=document.createElement('option');option.textContent=label;option.value=value;source.append(option);}source.value=configuration.source||'application';sourceLabel.append(document.createTextNode('Activity source'),source);fieldset.append(sourceLabel);source.onchange=()=>{remoteFormError='';updateRemote();};
+  connectButton.onclick=()=>{try{remote.configure({enabled:true,endpoint:endpoint.value,token:token.value,sampleRate:Number(sampling.value),source:source.value});token.value='';remoteFormError='';updateRemote();}catch(error){remoteFormError=error.message;updateRemote();}};
+  const disconnect=document.createElement('button');disconnect.type='button';disconnect.className='button secondary';disconnect.textContent='Disconnect telemetry host';disconnect.onclick=()=>{remote.configure({enabled:false});token.value='';remoteFormError='';updateRemote();};
+  remoteStatus=document.createElement('p');remoteStatus.setAttribute('aria-live','polite');fieldset.append(connectButton,disconnect,remoteStatus);controls.append(fieldset);remoteTimer=setInterval(updateRemote,1000);updateRemote();
+ }
+
+ function refresh(){updateRemote();const snapshot=telemetry.snapshot(),workerDrops=(snapshot?.events||[]).filter(e=>e.operation==='telemetry_drop'&&e.outcome==='success').reduce((sum,e)=>Math.min(Number.MAX_SAFE_INTEGER,sum+(e.metrics.find(m=>m.name==='count')?.value||0)),0);preview.textContent=JSON.stringify(snapshot??{},null,2);build.textContent=snapshot?.identity?`Scribyra ${snapshot.identity.version} · ${snapshot.identity.revision?.slice(0,12)||'revision unavailable'}${snapshot.identity.dirty?' · local changes':''}`:'';rows.replaceChildren();for(const event of snapshot?.events||[]){const row=rows.insertRow(),duration=event.metrics.find(m=>m.name==='duration_ms')?.value;for(const value of [event.elapsedMs.toFixed(1),event.runtime,event.operation,event.error?`${event.outcome} (${event.error})`:event.outcome,duration?.toFixed(1)??'—',event.traceId.slice(0,8)]){row.insertCell().textContent=value;}row.lastChild.title=event.traceId;}status.textContent=snapshot?`${snapshot.events.length} events; ${snapshot.bufferedBytes} buffered bytes; ${snapshot.dropped} evicted; ${snapshot.rejected} rejected; ${workerDrops} worker drops in retained reports. ${remote?.status().enabled?'Explicit tab connection enabled.':'Explicit tab connection off.'}`:'Diagnostics unavailable.';exportButton.disabled=!telemetry.settings().allowExport;}
+ function button(label,work){const b=document.createElement('button');b.type='button';b.className='button secondary';b.textContent=label;b.onclick=work;actions.append(b);return b;}
+ button('Refresh timeline',refresh);
+ button('Clear diagnostics',()=>{telemetry.clear();refresh();});
+ // Export precisely the reviewed snapshot, not events arriving after review.
+ const exportButton=button('Export preview',()=>{try{telemetry.export();download(new TextEncoder().encode(preview.textContent),'scribyra-diagnostics.json','application/json');status.replaceChildren('Saved scribyra-diagnostics.json. Attach it to your email to ',Object.assign(document.createElement('a'),{href:problemMail(),textContent:'contact@scribyra.com'}),'.');}catch{status.textContent='Diagnostic export is disabled or unavailable.';}});
+ const finish=()=>{clearInterval(remoteTimer);consentSettings?.close();dialog.close();dialog.remove();};button('Close',finish);
+ dialog.addEventListener('cancel',e=>{e.preventDefault();finish();});
+ dialog.append(heading,help,attach,build,controls,status,scroll,preview,actions);document.body.append(dialog);refresh();dialog.showModal();
+ return {close:finish};
+}

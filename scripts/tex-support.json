@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "snapshot": "2026-11-03",
+  "repository": "https://ctan.math.illinois.edu/systems/texlive/tlnet",
+  "packages": {
+    "babel-french": {
+      "revision": 80913,
+      "size": 17996,
+      "sha512": "c87cc6c58f939d0b5a4c91c49e1a3e00040ebc10f28fed2530e52081b83a8d031bab764f2572691102b2f27193d0ff635f6871a9883180abb8746f44f1aa7f79",
+      "license": "lppl1.3c",
+      "sourceArchive": {
+        "size": 61336,
+        "sha512": "9be0911535345332e690db68a8474f56bfd0203cd49ab7bd2d20464800c3356f32d9c007710264267aa2bdd76831d911793a215d523fe1f135b5d95d15ac4555"
+      },
+      "languages": [
+        "french",
+        "francais",
+        "frenchb"
+      ]
+    },
+    "babel-german": {
+      "revision": 78737,
+      "size": 6820,
+      "sha512": "8c8bd80b2942d6117a159528b6034fa1df41848a68c8145b5006e960e348c457f603340d538ed57fa76b97050dd3ed3442a9c816522f0905d746772a2643fe1c",
+      "license": "lppl1.3",
+      "sourceArchive": {
+        "size": 30204,
+        "sha512": "262bd616eef279591b3cd6587924fb56b3c94ac0e12b051b6b1240f5a902d6183cf2f58f7faf655dbdcb56276b3b202954dbfd6b705f4c39d0e4f6598de5432b"
+      },
+      "languages": [
+        "german",
+        "germanb",
+        "ngerman",
+        "ngermanb",
+        "austrian",
+        "naustrian"
+      ]
+    },
+    "babel-greek": {
+      "revision": 78101,
+      "size": 6988,
+      "sha512": "c30761113caabce53316cebc4d8db52abc6dc12eac8699402dce1d1095c558f0b3e66c57b5feb2bd0a320c415c80405c12b815d99f55cdc20ef130d07424aab6",
+      "license": "lppl1.3",
+      "sourceArchive": {
+        "size": 25304,
+        "sha512": "a5acea8f4a5bcda6c60a28f35ee1afc1862b44aea36f29254a39c21fb5785730248f1bea161735b81963c3c79459ea7d00a5ad4b8284267e319f4c3eea539a69"
+      },
+      "requires": [
+        "greek-fontenc"
+      ],
+      "languages": [
+        "greek",
+        "polutonikogreek"
+      ]
+    },
+    "babel-russian": {
+      "revision": 57376,
+      "size": 6352,
+      "sha512": "5acec3460294e71e6def384a7863a849e8a5d431dde49c77a4a7803af5373b56fcd376f6e73b237dd230728ab5b536f903b6a1bb19fc478dd5e742293a6e6ca8",
+      "license": "lppl1.3c",
+      "sourceArchive": {
+        "size": 26068,
+        "sha512": "71ca4e9bef2fe88c8dc41def4facd4c33145692cc0ac2cf05eb1d455ea83bd93b3cd29907772a5ce84168986db0fde8f5748622a4dc9b6857682c4c0aaf04f34"
+      },
+      "languages": [
+        "russian",
+        "russianb"
+      ]
+    },
+    "carlisle": {
+      "revision": 79618,
+      "size": 8692,
+      "sha512": "d3ae69795c55ddfc5c5e61da322fcb9f33ab54315a32bc8c774a84301a7f78fabb2192d2774039e648843169b3403e322aba6b34a14e0e77a5117e9880ed332a",
+      "license": "lppl1",
+      "sourceArchive": {
+        "size": 2972,
+        "sha512": "d7d83883f9c31ec719e334b35f44b0999f2a0a413cf9c4f0ec0cd36879cafeca9bdc8f1be3b3c06da4530b80f274593fdc21236bd395adcd121402cbf65f4d29"
+      }
+    },
+    "dehyph": {
+      "revision": 48599,
+      "size": 46556,
+      "sha512": "2dc4ee5b4389549c032f3a4d87740ab3c5e296a1ef109a6b673656a82ca4c317ca774f39f61417568b8ccbeac787c4058184fc893d53799bbf0b042ba5aca9a2",
+      "license": "lppl1"
+    },
+    "greek-fontenc": {
+      "revision": 77682,
+      "size": 33388,
+      "sha512": "000f35ab32421138b65de373c892c6727f8747d10f3bc9c33f66b53e28667cd82814917103e600b3bd5bb94f70e978ce84fa1cb982095ae54a40c53f9d0a9f65",
+      "license": "lppl1.3 bsd2"
+    },
+    "hyph-utf8": {
+      "revision": 79618,
+      "size": 16008,
+      "sha512": "8474e12b06d1f0c4cf10932d0d85510de8953b82196eba930fcffbfb28e259a5591186260b3aa85c40185445d73babb7e9d553c21a0bd8cfd99c3eeecc1af927",
+      "license": "mit",
+      "sourceArchive": {
+        "size": 36044,
+        "sha512": "9eb97662bbed75da83f79ffa078d51d9e7a79f82d734bb4bed88a55ae4e77d288134f12057f71fc8e7887d7d03312265186cc63dfe47018d1d696ea9ed9d059b"
+      }
+    },
+    "hyphen-base": {
+      "revision": 78076,
+      "size": 22644,
+      "sha512": "dc110200707c395dd61dcf30ed32b8eb4dd648fbb98eaa897e473ff683fe79af05464028a4b0a4685c9c17ebf61f19c592825f2a778d512ad68e1a57925a033f",
+      "license": "unspecified"
+    },
+    "hyphen-french": {
+      "revision": 78069,
+      "size": 11432,
+      "sha512": "ccd1440846f328df01958c1daaf8d23d8db4468efd9567845baf466bedda4d9864b4ccc7d0c788e2870f37824282dfe710a850b53c91effa06d3e99c0ac9d5b1",
+      "license": "unspecified"
+    },
+    "hyphen-german": {
+      "revision": 78069,
+      "size": 229712,
+      "sha512": "4ea080a5dea03ca67706c64b35d627a9b8e8966fd33fad1c71dfac189b60de34b52d4af1ad81b5a66106d76ef1ca9742f3b87eaa10fec6a74e7e61aca879eb01",
+      "license": "unspecified"
+    },
+    "hyphen-greek": {
+      "revision": 78069,
+      "size": 13296,
+      "sha512": "284b572141afbf06496e0ff27b2b2a25f7ad13bdf2f3d187bf4b1daa83366c52f82e44ca53460c7bf61a033fed44829c635ad42e3a48df13220ac6f198061f21",
+      "license": "other-free"
+    },
+    "hyphen-russian": {
+      "revision": 78069,
+      "size": 34300,
+      "sha512": "e117b8f6d33bc8dcb0af3c77c55c4ea9c8ec3918c2eaf1be7cf1f81f89d5ad9757ddb000c7f4900e5dad71d548395aeda2e410396a69a695505c9e14c0029e5c",
+      "license": "unspecified"
+    },
+    "ruhyphen": {
+      "revision": 79618,
+      "size": 56708,
+      "sha512": "505f21709bfa977584649f0caab88002f0e1d3744fc5c0d1d1f92884b75ee44d9bb60d62b4d68a70b4f3c9c2095cb0ef23a913daa0e9d0194c36af96cede5d7b",
+      "license": "lppl1.2",
+      "sourceArchive": {
+        "size": 13656,
+        "sha512": "92dc98740b33ef156e9a3f5747b51195f20cc9727f8931da20da0c6171aae7bdfa8f8044c4c6a220bbe594c902005e332530c9477c7e7a2d31c51b8df04c0e5a"
+      }
+    }
+  },
+  "compilerArchiveSha256": "4f63731fe4ec9238d877846074ab424350add6f6e956944def389e6752d2c78b"
+}

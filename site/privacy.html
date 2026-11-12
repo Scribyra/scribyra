@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="What stays on your device when you use Scribyra, what leaves it, and how to delete your data.">
+  <meta name="theme-color" content="#7160d9">
+  <title>Privacy — Scribyra</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header wrap">
+    <a class="brand" href="./" aria-label="Scribyra home"><span class="brand-mark">s</span>scribyra</a>
+  </header>
+  <main id="main" class="wrap doc">
+    <div class="eyebrow"><span class="line"></span> PRIVACY</div>
+    <h1>What stays, and what leaves</h1>
+    <p class="lead">Scribyra is a web page that does its work in your browser. There is no account and no server of ours that holds your projects. This page lists what your browser sends, and to whom.</p>
+
+    <h2 id="who">Who runs Scribyra</h2>
+    <p>URUNDEAD LABS S.R.L. operates Scribyra. It is the data controller for the optional telemetry and for emails you send to <a href="mailto:contact@scribyra.com">contact@scribyra.com</a>. Registered office: Strada Pitar Moș nr. 27, etaj 5, ap. 17, Sector 1, 010452 București, Romania. Reg. Com. J2026034271001, EUID ROONRC.J2026034271001, CUI 54762154.</p>
+
+    <h2 id="stays">What stays on your device</h2>
+    <ul>
+      <li>Your projects: source files, images, comments, reviews and history. They are kept in your browser’s storage for this site. Compiling happens in your browser and doesn’t upload them.</li>
+      <li>Your settings, such as theme and editor preferences.</li>
+      <li>The compiler and TeX packages, once downloaded, so that you can work offline.</li>
+    </ul>
+    <p>There is no account. We can’t see your projects, and we can’t recover them for you. Exporting a ZIP or a backup file is the way to keep your own copy.</p>
+
+    <h2 id="leaves">What leaves your device</h2>
+    <ul>
+      <li><strong>Page and compiler downloads.</strong> Your browser fetches the app, the compiler and the bundled TeX packages from the static site. Those requests reveal which packages a document needed, not what the document says.</li>
+      <li><strong>Hosting logs.</strong> The site is hosted on GitLab Pages, so GitLab handles these requests and may log them, including your IP address. See <a href="https://about.gitlab.com/privacy/">GitLab’s privacy statement</a>.</li>
+      <li><strong>Other TeX packages.</strong> If a document needs a package that isn’t bundled with the site, your browser downloads it directly from <a href="https://tlnet.yihui.org/">tlnet.yihui.org</a>, a TeX Live mirror maintained by Yihui Xie. That mirror sees your IP address and the package name. No project content, cookies or referrer are sent, and the download is checked against a known checksum.</li>
+      <li><strong>Telemetry, only if you choose it.</strong> The official app asks once whether to send performance, error or usage records to Grafana Cloud, a third-party service in its EU region. Every category starts off, and dismissing the question sends nothing. Change your choice anytime in Diagnostics, from the projects sidebar or from More tools in a project. <a href="telemetry.html">What telemetry contains</a>.</li>
+    </ul>
+    <p>Nothing else leaves on its own. There are no analytics scripts, remotely loaded fonts or third-party trackers.</p>
+
+    <h2 id="choose">Things only you can start</h2>
+    <p>These send data only after you set them up, and only to the place you named:</p>
+    <ul>
+      <li>An MCP provider or a diagnostics host whose address you enter in the app.</li>
+      <li>An AI agent you run with your own browser tool. It can read and change the open project, and what it does with that depends on the agent you use.</li>
+      <li><strong>Experimental direct sessions</strong>, which are off until you turn them on in Share and start or join a session. Your browser then contacts only the connection service whose address you enter. That service passes the browsers’ setup messages, encrypted with the invite’s key so it can’t read them, and sees your IP address, timing, message sizes and who is in a room. Your project then goes directly to the people you invite, over an encrypted browser-to-browser connection; they see your network address and receive the whole project, including deleted files and history. No STUN or TURN server, and no service of ours, is used.</li>
+      <li>Links you open, including links inside a PDF, and email you send us.</li>
+    </ul>
+
+    <h2 id="delete">How to delete your data</h2>
+    <ul>
+      <li><strong>One project:</strong> on the projects page, open its menu and choose Delete. Its history goes with it.</li>
+      <li><strong>Downloaded compiler and packages:</strong> in a project, choose More tools, then TeX environment, then Clear compiler cache or Clear TeX package cache.</li>
+      <li><strong>Everything:</strong> clear this site’s data in your browser settings. This removes every project on this device and can’t be undone, so export anything you want to keep first.</li>
+      <li><strong>Files you exported or emailed:</strong> these are yours and aren’t affected. To have an email removed, write to <a href="mailto:contact@scribyra.com">contact@scribyra.com</a>.</li>
+    </ul>
+    <p>We can’t delete logs kept by GitLab or by the package mirror.</p>
+
+    <h2 id="rights">Your rights</h2>
+    <p>Under the GDPR you can ask for a copy of the personal data we hold about you, or ask us to delete it. Write to <a href="mailto:contact@scribyra.com">contact@scribyra.com</a>.</p>
+    <p>You can also complain to the Romanian data protection authority, ANSPDCP, at <a href="https://www.dataprotection.ro/">dataprotection.ro</a>.</p>
+
+    <h2 id="report">Reporting a problem</h2>
+    <p>Write to <a href="mailto:contact@scribyra.com?subject=Scribyra%20problem%20report">contact@scribyra.com</a> from your own email. Nothing is sent automatically. A diagnostics file, from More tools then Diagnostics, helps and contains no paper text. Attaching a project is voluntary, and only you can decide to do it.</p>
+
+    <p class="updated">Scribyra’s source and licences: <a href="licenses.html">Licences and notices</a>.</p>
+  </main>
+  <footer class="footer wrap"><a class="brand" href="./"><span class="brand-mark">s</span>scribyra</a><span>A little more possibility.</span><div><a href="mailto:contact@scribyra.com">Contact</a><a href="privacy.html">Privacy</a><a href="licenses.html">Licences</a><a href="https://gitlab.com/urundead-labs/scribyra">Source ↗</a></div><p class="legal"><span>© 2026 URUNDEAD LABS S.R.L.</span> · <span>Reg. Com. J2026034271001</span> · <span>CUI 54762154</span> · <span>VAT RO55538423</span> · <span>Strada Pitar Moș 27, et. 5, ap. 17,</span> <span>010452 București, Romania</span></p></footer>
+</body>
+</html>

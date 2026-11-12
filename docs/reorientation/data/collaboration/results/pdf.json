@@ -1,0 +1,98 @@
+{
+ "chromium": {
+  "first": {
+   "success": true,
+   "bytes": 72727,
+   "log": "",
+   "ms": 12570
+  },
+  "second": {
+   "success": true,
+   "bytes": 72727,
+   "log": "",
+   "ms": 6403
+  },
+  "sha": [
+   "a39a177bcf6b3da6",
+   "a7ad9d7e0177b97b"
+  ],
+  "identical": false,
+  "identicalIgnoringDateAndId": true,
+  "size": [
+   72727,
+   72727
+  ]
+ },
+ "firefox": {
+  "first": {
+   "success": true,
+   "bytes": 72727,
+   "log": "",
+   "ms": 16958
+  },
+  "second": {
+   "success": true,
+   "bytes": 72727,
+   "log": "",
+   "ms": 6689
+  },
+  "sha": [
+   "4e17f8aaddf03e45",
+   "d79f569f4f9361e6"
+  ],
+  "identical": false,
+  "identicalIgnoringDateAndId": true,
+  "size": [
+   72727,
+   72727
+  ]
+ },
+ "webkit": {
+  "first": {
+   "success": true,
+   "bytes": 72727,
+   "log": "",
+   "ms": 14248
+  },
+  "second": {
+   "success": true,
+   "bytes": 72727,
+   "log": "",
+   "ms": 6778
+  },
+  "sha": [
+   "043c5072fc3b1dc8",
+   "f405575143f9f190"
+  ],
+  "identical": false,
+  "identicalIgnoringDateAndId": true,
+  "size": [
+   72727,
+   72727
+  ]
+ },
+ "chromium=firefox": {
+  "identical": false,
+  "ignoringDateAndId": true,
+  "sizes": [
+   72727,
+   72727
+  ]
+ },
+ "chromium=webkit": {
+  "identical": false,
+  "ignoringDateAndId": true,
+  "sizes": [
+   72727,
+   72727
+  ]
+ },
+ "firefox=webkit": {
+  "identical": false,
+  "ignoringDateAndId": true,
+  "sizes": [
+   72727,
+   72727
+  ]
+ }
+}

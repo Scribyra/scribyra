@@ -1,0 +1,661 @@
+$ luahblatex -synctex=1 --no-shell-escape --interaction=nonstopmode --halt-on-error --fmt /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt --nosocket main.tex -kpathsea-debug 32
+EXITCODE: 0
+
+TEXMFLOG:
+T /texlive/texmf-dist/ls-R
+T /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt
+T /texlive/texmf-dist/tex/latex/tex-ini-files/lualatexquotejobname.lua
+T /texlive/texmf-dist/tex/latex/base/ltluatex.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-main.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-init.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic-merged.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-compat.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended-merged.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-log.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-basics-gen.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-parsers.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-configuration.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-status.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-fallback.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-multiscript.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-scripts.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/ScriptExtensions.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/Scripts.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-loaders.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-database.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-unicode.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/WordBreakProperty.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/SpecialCasing.txt
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-case.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-parse.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/CaseFolding.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-realpath.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-colors.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-resolvers.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-features.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-normalize.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-arabic.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-define.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-cff2.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-t2-writer.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-ttf.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-plug.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-letterspace.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-embolden.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-notdef.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-suppress.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-szss.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-auxiliary.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-tounicode.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-case.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-bcp47.lua
+T /texlive/texmf-dist/tex/latex/l3kernel/expl3.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-stage-tables.lua
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-blacklist.cnf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-glyphlist.lua
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.lua
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-bold.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-bold.otf
+T /texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-bold.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+==
+MISSFONTLOG:
+
+==
+LOG:
+
+==
+STDOUT:
+This is LuaHBTeX, Version 1.24.0 (TeX Live 2026_texlyre_busytexwasm) 
+(./main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+ (/texlive/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(/texlive/texmf-dist/tex/latex/base/size10.clo
+luaotfload | db : Reload initiated (formats: otf,ttf,ttc); reason: File not found: "lmroman10-regular".))
+(/texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def)
+No file main.aux.
+
+LaTeX Warning: Reference `sec:live' on page 1 undefined on input line 6.
+
+
+LaTeX Warning: Reference `sec:end' on page 1 undefined on input line 6.
+
+Scribyra tick 1
+Scribyra tick 2
+Scribyra tick 3
+Scribyra tick 4
+Scribyra tick 5
+Scribyra tick 6
+Scribyra tick 7
+Scribyra tick 8
+Scribyra tick 9
+Scribyra tick 10
+Scribyra tick 11
+Scribyra tick 12
+Scribyra tick 13
+Scribyra tick 14
+Scribyra tick 15
+Scribyra tick 16
+Scribyra tick 17
+Scribyra tick 18
+Scribyra tick 19
+Scribyra tick 20
+Scribyra tick 21
+Scribyra tick 22
+Scribyra tick 23
+Scribyra tick 24
+Scribyra tick 25
+Scribyra tick 26
+Scribyra tick 27
+Scribyra tick 28
+Scribyra tick 29
+Scribyra tick 30
+Scribyra tick 31
+Scribyra tick 32
+Scribyra tick 33
+Scribyra tick 34
+Scribyra tick 35
+Scribyra tick 36
+Scribyra tick 37
+Scribyra tick 38
+Scribyra tick 39
+Scribyra tick 40
+
+Overfull \hbox (92.87056pt too wide) in paragraph at lines 6--13
+\TU/lmr/m/n/10 See Sec-tion [] on page [].                                     
+                                            
+[1{/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map}]
+(./main.aux)
+
+LaTeX Warning: There were undefined references.
+
+
+LaTeX Warning: Label(s) may have changed. Rerun to get cross-references right.
+
+)
+(see the transcript file for additional information)
+ 411 words of node memory still in use:
+   3 hlist, 1 vlist, 1 rule, 2 glue, 3 kern, 1 glyph, 4 attribute, 49 glue_spec
+, 4 attribute_list, 1 write nodes
+   avail lists: 2:62,3:36,4:1,5:23,6:8,7:322,9:30,11:2
+</texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-bold.otf></texlive/texm
+f-dist/fonts/opentype/public/lm/lmroman10-regular.otf></texlive/texmf-dist/font
+s/opentype/public/lm/lmroman12-bold.otf>
+Output written on main.pdf (1 page, 7858 bytes).
+SyncTeX written on main.synctex.gz.
+Transcript written on main.log.
+==
+STDERR:
+program exited (with status: 0), but keepRuntimeAlive() is set (counter=0) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)
+======
+
+$ luahblatex -synctex=1 --no-shell-escape --interaction=nonstopmode --halt-on-error --fmt /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt --nosocket main.tex -kpathsea-debug 32
+EXITCODE: 0
+
+TEXMFLOG:
+T /texlive/texmf-dist/ls-R
+T /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt
+T /texlive/texmf-dist/tex/latex/tex-ini-files/lualatexquotejobname.lua
+T /texlive/texmf-dist/tex/latex/base/ltluatex.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-main.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-init.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic-merged.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-compat.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended-merged.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-log.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-basics-gen.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-parsers.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-configuration.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-status.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-fallback.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-multiscript.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-scripts.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/ScriptExtensions.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/Scripts.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-loaders.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-database.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-unicode.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/WordBreakProperty.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/SpecialCasing.txt
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-case.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-parse.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/CaseFolding.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-realpath.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-colors.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-resolvers.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-features.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-normalize.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-arabic.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-define.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-cff2.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-t2-writer.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-ttf.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-plug.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-letterspace.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-embolden.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-notdef.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-suppress.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-szss.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-auxiliary.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-tounicode.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-case.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-bcp47.lua
+T /texlive/texmf-dist/tex/latex/l3kernel/expl3.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-stage-tables.lua
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.lua
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+T /texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+==
+MISSFONTLOG:
+
+==
+LOG:
+
+==
+STDOUT:
+This is LuaHBTeX, Version 1.24.0 (TeX Live 2026_texlyre_busytexwasm) 
+(./main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+ (/texlive/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(/texlive/texmf-dist/tex/latex/base/size10.clo))
+(/texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def) (./main.aux)
+Scribyra tick 1
+Scribyra tick 2
+Scribyra tick 3
+Scribyra tick 4
+Scribyra tick 5
+Scribyra tick 6
+Scribyra tick 7
+Scribyra tick 8
+Scribyra tick 9
+Scribyra tick 10
+Scribyra tick 11
+Scribyra tick 12
+Scribyra tick 13
+Scribyra tick 14
+Scribyra tick 15
+Scribyra tick 16
+Scribyra tick 17
+Scribyra tick 18
+Scribyra tick 19
+Scribyra tick 20
+Scribyra tick 21
+Scribyra tick 22
+Scribyra tick 23
+Scribyra tick 24
+Scribyra tick 25
+Scribyra tick 26
+Scribyra tick 27
+Scribyra tick 28
+Scribyra tick 29
+Scribyra tick 30
+Scribyra tick 31
+Scribyra tick 32
+Scribyra tick 33
+Scribyra tick 34
+Scribyra tick 35
+Scribyra tick 36
+Scribyra tick 37
+Scribyra tick 38
+Scribyra tick 39
+Scribyra tick 40
+
+Overfull \hbox (81.15059pt too wide) in paragraph at lines 6--13
+\TU/lmr/m/n/10 See Sec-tion 1[] on page 1[].                                   
+                                              
+[1{/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map}]
+(./main.aux))
+(see the transcript file for additional information)
+ 411 words of node memory still in use:
+   3 hlist, 1 vlist, 1 rule, 2 glue, 3 kern, 1 glyph, 4 attribute, 49 glue_spec
+, 4 attribute_list, 1 write nodes
+   avail lists: 2:58,3:36,4:1,5:23,6:8,7:318,9:30,11:2
+</texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf></texlive/t
+exmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf>
+Output written on main.pdf (1 page, 6513 bytes).
+SyncTeX written on main.synctex.gz.
+Transcript written on main.log.
+==
+STDERR:
+program exited (with status: 0), but keepRuntimeAlive() is set (counter=0) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)
+======
+
+$ luahblatex -synctex=1 --no-shell-escape --interaction=nonstopmode --halt-on-error --output-format=pdf --fmt /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt --nosocket main.tex -kpathsea-debug 32
+EXITCODE: 0
+
+TEXMFLOG:
+T /texlive/texmf-dist/ls-R
+T /texlive/texmf-dist/texmf-var/web2c/luahbtex/luahblatex.fmt
+T /texlive/texmf-dist/tex/latex/tex-ini-files/lualatexquotejobname.lua
+T /texlive/texmf-dist/tex/latex/base/ltluatex.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-main.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-init.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-basic-merged.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-compat.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended.lua
+T /texlive/texmf-dist/tex/luatex/lualibs/lualibs-extended-merged.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-log.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-basics-gen.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-parsers.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-configuration.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-status.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-fallback.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-multiscript.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-scripts.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/ScriptExtensions.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/Scripts.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-loaders.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-database.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-unicode.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/WordBreakProperty.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/SpecialCasing.txt
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-case.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-parse.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/CaseFolding.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-realpath.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-colors.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-resolvers.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-features.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-normalize.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-arabic.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-define.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-cff2.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-t2-writer.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-var-ttf.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-harf-plug.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-letterspace.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-embolden.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-notdef.lua
+T /texlive/texmf-dist/tex/generic/unicode-data/UnicodeData.txt
+T /texlive/texmf-dist/tex/generic/unicode-data/PropList.txt
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-suppress.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-szss.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-auxiliary.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-tounicode.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-case.lua
+T /texlive/texmf-dist/tex/luatex/luaotfload/luaotfload-bcp47.lua
+T /texlive/texmf-dist/tex/latex/l3kernel/expl3.lua
+T /texlive/texmf-dist/tex/luatex/lua-uni-algos/lua-uni-stage-tables.lua
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/article.cls
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/tex/latex/base/size10.clo
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+T /texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.lua
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+T /texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf
+T /texlive/texmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf
+==
+MISSFONTLOG:
+
+==
+LOG:
+This is LuaHBTeX, Version 1.24.0 (TeX Live 2026_texlyre_busytexwasm)  (format=luahblatex 2026.8.14)  DATE
+**main.tex -kpathsea-debug 32
+(./main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+Lua module: luaotfload 2024-12-03 v3.29 Lua based OpenType font support
+Lua module: lualibs 2023-07-13 v2.76 ConTeXt Lua standard libraries.
+Lua module: lualibs-extended 2023-07-13 v2.76 ConTeXt Lua libraries -- extended 
+collection.
+luaotfload | conf : Root cache directory is "/tmp/luatex-cache/generic/names".
+luaotfload | init : Loading fontloader "fontloader-2023-12-28.lua" from kpse-res
+olved path "/texlive/texmf-dist/tex/luatex/luaotfload/fontloader-2023-12-28.lua"
+.
+Lua-only attribute luaotfload@noligature = 1
+luaotfload | init : Context OpenType loader version 3.134
+Inserting `luaotfload.node_processor' in `pre_linebreak_filter'.
+Inserting `luaotfload.node_processor' in `hpack_filter'.
+Inserting `luaotfload.glyph_stream' in `glyph_stream_provider'.
+Inserting `luaotfload.define_font' in `define_font'.
+Lua-only attribute luaotfload_color_attribute = 2
+luaotfload | conf : Root cache directory is "/tmp/luatex-cache/generic/names".
+Inserting `luaotfload.harf.strip_prefix' in `find_opentype_file'.
+Inserting `luaotfload.harf.strip_prefix' in `find_truetype_file'.
+Removing  `luaotfload.glyph_stream' from `glyph_stream_provider'.
+Inserting `luaotfload.harf.glyphstream' in `glyph_stream_provider'.
+Inserting `luaotfload.harf.finalize_vlist' in `post_linebreak_filter'.
+Inserting `luaotfload.harf.finalize_hlist' in `hpack_filter'.
+Inserting `luaotfload.cleanup_files' in `wrapup_run'.
+Inserting `luaotfload.harf.finalize_unicode' in `finish_pdffile'.
+Inserting `luaotfload.glyphinfo' in `glyph_info'.
+Lua-only attribute luaotfload.letterspace_done = 3
+Inserting `luaotfload.aux.set_sscale_dimens' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.set_font_index' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.patch_cambria_domh' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.fixup_fontdata' in `luaotfload.patch_font_unsafe'.
+Inserting `luaotfload.aux.set_capheight' in `luaotfload.patch_font'.
+Inserting `luaotfload.aux.set_xheight' in `luaotfload.patch_font'.
+Inserting `luaotfload.rewrite_fontname' in `luaotfload.patch_font'.
+Inserting `tracingstacklevels' in `input_level_string'. (/texlive/texmf-dist/te
+x/latex/base/article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(/texlive/texmf-dist/tex/latex/base/size10.clo
+File: size10.clo 2025/01/22 v1.4n Standard LaTeX file (size option)
+luaotfload | db : Font names database loaded from /tmp/luatex-cache/generic/name
+s/luaotfload-names.luc.gz)
+\c@part=\count273
+\c@section=\count274
+\c@subsection=\count275
+\c@subsubsection=\count276
+\c@paragraph=\count277
+\c@subparagraph=\count278
+\c@figure=\count279
+\c@table=\count280
+\abovecaptionskip=\skip49
+\belowcaptionskip=\skip50
+\bibindent=\dimen147
+)
+\tick=\count281
+
+(/texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def
+File: l3backend-luatex.def 2025-10-09 L3 backend support: PDF output (LuaTeX)
+\l__color_backend_stack_int=\count282
+Inserting `l3color' in `luaotfload.parse_color'.) (./main.aux)
+\openout1 = main.aux
+
+LaTeX Font Info:    Checking defaults for OML/cmm/m/it on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for OMS/cmsy/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for OT1/cmr/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for T1/cmr/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for TS1/cmr/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for TU/lmr/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for OMX/cmex/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+LaTeX Font Info:    Checking defaults for U/cmr/m/n on input line 4.
+LaTeX Font Info:    ... okay on input line 4.
+
+Scribyra tick 1
+Scribyra tick 2
+Scribyra tick 3
+Scribyra tick 4
+Scribyra tick 5
+Scribyra tick 6
+Scribyra tick 7
+Scribyra tick 8
+Scribyra tick 9
+Scribyra tick 10
+Scribyra tick 11
+Scribyra tick 12
+Scribyra tick 13
+Scribyra tick 14
+Scribyra tick 15
+Scribyra tick 16
+Scribyra tick 17
+Scribyra tick 18
+Scribyra tick 19
+Scribyra tick 20
+Scribyra tick 21
+Scribyra tick 22
+Scribyra tick 23
+Scribyra tick 24
+Scribyra tick 25
+Scribyra tick 26
+Scribyra tick 27
+Scribyra tick 28
+Scribyra tick 29
+Scribyra tick 30
+Scribyra tick 31
+Scribyra tick 32
+Scribyra tick 33
+Scribyra tick 34
+Scribyra tick 35
+Scribyra tick 36
+Scribyra tick 37
+Scribyra tick 38
+Scribyra tick 39
+Scribyra tick 40
+
+Overfull \hbox (81.15059pt too wide) in paragraph at lines 6--13
+\TU/lmr/m/n/10 See Sec-tion 1[] on page 1[].                                   
+                                              
+ []
+
+[1
+
+{/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map}]
+(./main.aux)
+ ***********
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+ ***********
+)
+
+Here is how much of LuaTeX's memory you used:
+ 444 strings out of 476075
+ 100000,460012 words of node,token memory allocated
+ 411 words of node memory still in use:
+   3 hlist, 1 vlist, 1 rule, 2 glue, 3 kern, 1 glyph, 4 attribute, 49 glue_spec,
+ 4 attribute_list, 1 write nodes
+   avail lists: 2:58,3:36,4:1,5:23,6:8,7:318,9:30,11:2
+ 22976 multiletter control sequences out of 65536+600000
+ 17 fonts using 695087 bytes
+ 35i,5n,37p,147b,144s stack positions out of 10000i,1000n,20000p,200000b,200000s
+</texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf></texlive/te
+xmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf>
+Output written on main.pdf (1 page, 6513 bytes).
+
+PDF statistics: 22 PDF objects out of 1000 (max. 8388607)
+ 12 compressed objects within 1 object stream
+ 0 named destinations out of 1000 (max. 1048576)
+ 1 words of extra memory for PDF output out of 10000 (max. 100000000)
+==
+STDOUT:
+This is LuaHBTeX, Version 1.24.0 (TeX Live 2026_texlyre_busytexwasm) 
+(./main.tex
+LaTeX2e <2025-11-01>
+L3 programming layer <2026-01-19>
+ (/texlive/texmf-dist/tex/latex/base/article.cls
+Document Class: article 2025/01/22 v1.4n Standard LaTeX document class
+(/texlive/texmf-dist/tex/latex/base/size10.clo))
+(/texlive/texmf-dist/tex/latex/l3backend/l3backend-luatex.def) (./main.aux)
+Scribyra tick 1
+Scribyra tick 2
+Scribyra tick 3
+Scribyra tick 4
+Scribyra tick 5
+Scribyra tick 6
+Scribyra tick 7
+Scribyra tick 8
+Scribyra tick 9
+Scribyra tick 10
+Scribyra tick 11
+Scribyra tick 12
+Scribyra tick 13
+Scribyra tick 14
+Scribyra tick 15
+Scribyra tick 16
+Scribyra tick 17
+Scribyra tick 18
+Scribyra tick 19
+Scribyra tick 20
+Scribyra tick 21
+Scribyra tick 22
+Scribyra tick 23
+Scribyra tick 24
+Scribyra tick 25
+Scribyra tick 26
+Scribyra tick 27
+Scribyra tick 28
+Scribyra tick 29
+Scribyra tick 30
+Scribyra tick 31
+Scribyra tick 32
+Scribyra tick 33
+Scribyra tick 34
+Scribyra tick 35
+Scribyra tick 36
+Scribyra tick 37
+Scribyra tick 38
+Scribyra tick 39
+Scribyra tick 40
+
+Overfull \hbox (81.15059pt too wide) in paragraph at lines 6--13
+\TU/lmr/m/n/10 See Sec-tion 1[] on page 1[].                                   
+                                              
+[1{/texlive/texmf-dist/texmf-var/fonts/map/pdftex/updmap/pdftex.map}]
+(./main.aux))
+(see the transcript file for additional information)
+ 411 words of node memory still in use:
+   3 hlist, 1 vlist, 1 rule, 2 glue, 3 kern, 1 glyph, 4 attribute, 49 glue_spec
+, 4 attribute_list, 1 write nodes
+   avail lists: 2:58,3:36,4:1,5:23,6:8,7:318,9:30,11:2
+</texlive/texmf-dist/fonts/opentype/public/lm/lmroman10-regular.otf></texlive/t
+exmf-dist/fonts/opentype/public/lm/lmroman12-bold.otf>
+Output written on main.pdf (1 page, 6513 bytes).
+SyncTeX written on main.synctex.gz.
+Transcript written on main.log.
+==
+STDERR:
+program exited (with status: 0), but keepRuntimeAlive() is set (counter=0) due to an async operation, so halting execution but not exiting the runtime or preventing further async execution (you can use emscripten_force_exit, if you want to force a true shutdown)
+======

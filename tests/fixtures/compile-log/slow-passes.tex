@@ -1,0 +1,15 @@
+\documentclass{article}
+% Slow, multi-pass fixture for the live compilation log tests.
+\newcount\tick
+\begin{document}
+\section{Live log}\label{sec:live}
+See Section~\ref{sec:live} on page~\pageref{sec:end}.
+\tick=0
+\loop
+  \advance\tick by 1
+  \immediate\write16{Scribyra tick \the\tick}
+  \directlua{local s=0 for i=1,1500000 do s=s+i end}
+\ifnum\tick<40 \repeat
+\section{End}\label{sec:end}
+Done.
+\end{document}

@@ -1,0 +1,1559 @@
+[
+ {
+  "delay": 0,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": false,
+  "bulk": null,
+  "candA": [
+   "udp host mdns 56153"
+  ],
+  "candB": [
+   "udp host mdns 41950"
+  ],
+  "eventsA": [
+   [
+    3692,
+    "ice",
+    "checking"
+   ],
+   [
+    3692,
+    "conn",
+    "connecting"
+   ],
+   [
+    18751,
+    "ice",
+    "disconnected"
+   ],
+   [
+    18751,
+    "conn",
+    "failed"
+   ]
+  ],
+  "eventsB": [],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 0,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 5386,
+   "mbps": 31.1
+  },
+  "connectedMs": 76,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   8,
+   8,
+   8,
+   10,
+   10
+  ],
+  "candA": [
+   "udp host mdns 55830"
+  ],
+  "candB": [
+   "udp host mdns 38798"
+  ],
+  "eventsA": [
+   [
+    4570,
+    "conn",
+    "connecting"
+   ],
+   [
+    4631,
+    "conn",
+    "connected"
+   ],
+   [
+    4638,
+    "channel",
+    "open"
+   ],
+   [
+    12152,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    2340,
+    "conn",
+    "connecting"
+   ],
+   [
+    4457,
+    "ice",
+    "connected"
+   ],
+   [
+    4467,
+    "conn",
+    "connected"
+   ],
+   [
+    4480,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 8,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 9226,
+   "mbps": 18.2
+  },
+  "connectedMs": 59,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   39,
+   40,
+   40,
+   40,
+   40
+  ],
+  "candA": [
+   "udp host mdns 54903"
+  ],
+  "candB": [
+   "udp host mdns 57342"
+  ],
+  "eventsA": [
+   [
+    10982,
+    "ice",
+    "connected"
+   ],
+   [
+    11014,
+    "conn",
+    "connected"
+   ],
+   [
+    11031,
+    "channel",
+    "open"
+   ],
+   [
+    22199,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1719,
+    "conn",
+    "connecting"
+   ],
+   [
+    10790,
+    "ice",
+    "connected"
+   ],
+   [
+    10814,
+    "conn",
+    "connected"
+   ],
+   [
+    10848,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 8,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 12818,
+   "mbps": 13.1
+  },
+  "connectedMs": 25,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   7,
+   7,
+   7,
+   7,
+   7
+  ],
+  "candA": [
+   "udp host mdns 50365"
+  ],
+  "candB": [
+   "udp host mdns 47319"
+  ],
+  "eventsA": [
+   [
+    10676,
+    "conn",
+    "connecting"
+   ],
+   [
+    10680,
+    "conn",
+    "connected"
+   ],
+   [
+    10689,
+    "channel",
+    "open"
+   ],
+   [
+    23249,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1612,
+    "conn",
+    "connecting"
+   ],
+   [
+    10481,
+    "ice",
+    "connected"
+   ],
+   [
+    10488,
+    "conn",
+    "connected"
+   ],
+   [
+    10502,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 10,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 3815,
+   "mbps": 44
+  },
+  "connectedMs": 49,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   8,
+   8,
+   8,
+   8,
+   8
+  ],
+  "candA": [
+   "udp host mdns 39466"
+  ],
+  "candB": [
+   "udp host mdns 32936"
+  ],
+  "eventsA": [
+   [
+    13219,
+    "ice",
+    "connected"
+   ],
+   [
+    13245,
+    "conn",
+    "connected"
+   ],
+   [
+    13261,
+    "channel",
+    "open"
+   ],
+   [
+    18830,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1964,
+    "conn",
+    "connecting"
+   ],
+   [
+    12832,
+    "ice",
+    "connected"
+   ],
+   [
+    12840,
+    "conn",
+    "connected"
+   ],
+   [
+    12865,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 10,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 10243,
+   "mbps": 16.4
+  },
+  "connectedMs": 197,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   9,
+   26,
+   26,
+   26,
+   26
+  ],
+  "candA": [
+   "udp host mdns 42951"
+  ],
+  "candB": [
+   "udp host mdns 59346"
+  ],
+  "eventsA": [
+   [
+    13231,
+    "ice",
+    "connected"
+   ],
+   [
+    13391,
+    "conn",
+    "connected"
+   ],
+   [
+    13418,
+    "channel",
+    "open"
+   ],
+   [
+    25458,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1626,
+    "conn",
+    "connecting"
+   ],
+   [
+    13074,
+    "ice",
+    "connected"
+   ],
+   [
+    13211,
+    "conn",
+    "connected"
+   ],
+   [
+    13245,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 12,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 9224,
+   "mbps": 18.2
+  },
+  "connectedMs": 63,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   6,
+   6,
+   6,
+   6,
+   6
+  ],
+  "candA": [
+   "udp host mdns 47543"
+  ],
+  "candB": [
+   "udp host mdns 39265"
+  ],
+  "eventsA": [
+   [
+    14650,
+    "conn",
+    "connecting"
+   ],
+   [
+    14694,
+    "conn",
+    "connected"
+   ],
+   [
+    14703,
+    "channel",
+    "open"
+   ],
+   [
+    24758,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1607,
+    "conn",
+    "connecting"
+   ],
+   [
+    14478,
+    "ice",
+    "connected"
+   ],
+   [
+    14485,
+    "conn",
+    "connected"
+   ],
+   [
+    14500,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 12,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 5928,
+   "mbps": 28.3
+  },
+  "connectedMs": 51,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   16,
+   16,
+   16,
+   16,
+   16
+  ],
+  "candA": [
+   "udp host mdns 45773"
+  ],
+  "candB": [
+   "udp host mdns 57151"
+  ],
+  "eventsA": [
+   [
+    15297,
+    "ice",
+    "connected"
+   ],
+   [
+    15334,
+    "conn",
+    "connected"
+   ],
+   [
+    15341,
+    "channel",
+    "open"
+   ],
+   [
+    22850,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    2081,
+    "conn",
+    "connecting"
+   ],
+   [
+    15018,
+    "ice",
+    "connected"
+   ],
+   [
+    15041,
+    "conn",
+    "connected"
+   ],
+   [
+    15054,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 14,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 4078,
+   "mbps": 41.1
+  },
+  "connectedMs": 56,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   8,
+   8,
+   8,
+   10,
+   10
+  ],
+  "candA": [
+   "udp host mdns 46761"
+  ],
+  "candB": [
+   "udp host mdns 38966"
+  ],
+  "eventsA": [
+   [
+    16611,
+    "conn",
+    "connecting"
+   ],
+   [
+    16651,
+    "conn",
+    "connected"
+   ],
+   [
+    16659,
+    "channel",
+    "open"
+   ],
+   [
+    22434,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1596,
+    "conn",
+    "connecting"
+   ],
+   [
+    16460,
+    "ice",
+    "connected"
+   ],
+   [
+    16469,
+    "conn",
+    "connected"
+   ],
+   [
+    16482,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 14,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 16907,
+   "mbps": 9.9
+  },
+  "connectedMs": 34,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   18,
+   18,
+   18,
+   19,
+   19
+  ],
+  "candA": [
+   "udp host mdns 47498"
+  ],
+  "candB": [
+   "udp host mdns 60307"
+  ],
+  "eventsA": [
+   [
+    16924,
+    "conn",
+    "connecting"
+   ],
+   [
+    16939,
+    "conn",
+    "connected"
+   ],
+   [
+    16948,
+    "channel",
+    "open"
+   ],
+   [
+    36223,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    1764,
+    "conn",
+    "connecting"
+   ],
+   [
+    16757,
+    "ice",
+    "connected"
+   ],
+   [
+    16767,
+    "conn",
+    "connected"
+   ],
+   [
+    16787,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 15,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 7326,
+   "mbps": 22.9
+  },
+  "connectedMs": 221,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   12,
+   12,
+   12,
+   13,
+   13
+  ],
+  "candA": [
+   "udp host mdns 50849"
+  ],
+  "candB": [
+   "udp host mdns 53557"
+  ],
+  "eventsA": [
+   [
+    18086,
+    "conn",
+    "connecting"
+   ],
+   [
+    18285,
+    "conn",
+    "connected"
+   ],
+   [
+    18293,
+    "channel",
+    "open"
+   ],
+   [
+    27653,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    17876,
+    "conn",
+    "connecting"
+   ],
+   [
+    18064,
+    "ice",
+    "connected"
+   ],
+   [
+    18077,
+    "conn",
+    "connected"
+   ],
+   [
+    18096,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 15,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 6530,
+   "mbps": 25.7
+  },
+  "connectedMs": 80,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   8,
+   9,
+   9,
+   9,
+   9
+  ],
+  "candA": [
+   "udp host mdns 46219"
+  ],
+  "candB": [
+   "udp host mdns 55116"
+  ],
+  "eventsA": [
+   [
+    17635,
+    "conn",
+    "connecting"
+   ],
+   [
+    17699,
+    "conn",
+    "connected"
+   ],
+   [
+    17707,
+    "channel",
+    "open"
+   ],
+   [
+    25308,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    17412,
+    "conn",
+    "connecting"
+   ],
+   [
+    17468,
+    "ice",
+    "connected"
+   ],
+   [
+    17477,
+    "conn",
+    "connected"
+   ],
+   [
+    17492,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 16,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 9072,
+   "mbps": 18.5
+  },
+  "connectedMs": 71,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   30,
+   30,
+   30,
+   30,
+   30
+  ],
+  "candA": [
+   "udp host mdns 42970"
+  ],
+  "candB": [
+   "udp host mdns 44542"
+  ],
+  "eventsA": [
+   [
+    21545,
+    "ice",
+    "connected"
+   ],
+   [
+    21600,
+    "conn",
+    "connected"
+   ],
+   [
+    21609,
+    "channel",
+    "open"
+   ],
+   [
+    32414,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    21201,
+    "conn",
+    "connecting"
+   ],
+   [
+    21251,
+    "ice",
+    "connected"
+   ],
+   [
+    21256,
+    "conn",
+    "connected"
+   ],
+   [
+    21269,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 16,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 6088,
+   "mbps": 27.6
+  },
+  "connectedMs": 29,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   9,
+   11,
+   11,
+   11,
+   14
+  ],
+  "candA": [
+   "udp host mdns 39117"
+  ],
+  "candB": [
+   "udp host mdns 58782"
+  ],
+  "eventsA": [
+   [
+    18672,
+    "conn",
+    "connecting"
+   ],
+   [
+    18686,
+    "conn",
+    "connected"
+   ],
+   [
+    18691,
+    "channel",
+    "open"
+   ],
+   [
+    26771,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    18465,
+    "conn",
+    "connecting"
+   ],
+   [
+    18472,
+    "ice",
+    "connected"
+   ],
+   [
+    18479,
+    "conn",
+    "connected"
+   ],
+   [
+    18494,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 18,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": false,
+  "bulk": null,
+  "candA": [
+   "udp host mdns 37754"
+  ],
+  "candB": [
+   "udp host mdns 50088"
+  ],
+  "eventsA": [
+   [
+    20548,
+    "ice",
+    "checking"
+   ],
+   [
+    20548,
+    "conn",
+    "connecting"
+   ],
+   [
+    35597,
+    "ice",
+    "disconnected"
+   ],
+   [
+    35598,
+    "conn",
+    "failed"
+   ]
+  ],
+  "eventsB": [
+   [
+    21325,
+    "ice",
+    "checking"
+   ],
+   [
+    21325,
+    "conn",
+    "connecting"
+   ],
+   [
+    36395,
+    "ice",
+    "disconnected"
+   ],
+   [
+    36395,
+    "conn",
+    "failed"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 18,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 9455,
+   "mbps": 17.7
+  },
+  "connectedMs": 90,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   18,
+   19,
+   19,
+   19,
+   19
+  ],
+  "candA": [
+   "udp host mdns 51438"
+  ],
+  "candB": [
+   "udp host mdns 44774"
+  ],
+  "eventsA": [
+   [
+    21989,
+    "ice",
+    "connected"
+   ],
+   [
+    22048,
+    "conn",
+    "connected"
+   ],
+   [
+    22064,
+    "channel",
+    "open"
+   ],
+   [
+    32911,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    21758,
+    "conn",
+    "connecting"
+   ],
+   [
+    21817,
+    "ice",
+    "connected"
+   ],
+   [
+    21825,
+    "conn",
+    "connected"
+   ],
+   [
+    21848,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 20,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": false,
+  "bulk": null,
+  "candA": [
+   "udp host mdns 48497"
+  ],
+  "candB": [
+   "udp host mdns 44436"
+  ],
+  "eventsA": [
+   [
+    22697,
+    "ice",
+    "checking"
+   ],
+   [
+    22697,
+    "conn",
+    "connecting"
+   ],
+   [
+    37754,
+    "ice",
+    "disconnected"
+   ],
+   [
+    37755,
+    "conn",
+    "failed"
+   ]
+  ],
+  "eventsB": [
+   [
+    23256,
+    "ice",
+    "checking"
+   ],
+   [
+    23256,
+    "conn",
+    "connecting"
+   ],
+   [
+    38366,
+    "ice",
+    "disconnected"
+   ],
+   [
+    38366,
+    "conn",
+    "failed"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 20,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 9484,
+   "mbps": 17.7
+  },
+  "connectedMs": 31,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   5,
+   6,
+   6,
+   6,
+   7
+  ],
+  "candA": [
+   "udp host mdns 60248"
+  ],
+  "candB": [
+   "udp host mdns 45952"
+  ],
+  "eventsA": [
+   [
+    22846,
+    "conn",
+    "connecting"
+   ],
+   [
+    22863,
+    "conn",
+    "connected"
+   ],
+   [
+    22872,
+    "channel",
+    "open"
+   ],
+   [
+    33908,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    22638,
+    "conn",
+    "connecting"
+   ],
+   [
+    22651,
+    "ice",
+    "connected"
+   ],
+   [
+    22656,
+    "conn",
+    "connected"
+   ],
+   [
+    22669,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 25,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": true,
+  "bulk": {
+   "bytes": 20971520,
+   "ms": 5739,
+   "mbps": 29.2
+  },
+  "connectedMs": 121,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   7,
+   7,
+   7,
+   7,
+   7
+  ],
+  "candA": [
+   "udp host mdns 56928"
+  ],
+  "candB": [
+   "udp host mdns 49327"
+  ],
+  "eventsA": [
+   [
+    28748,
+    "ice",
+    "connected"
+   ],
+   [
+    28812,
+    "conn",
+    "connected"
+   ],
+   [
+    28824,
+    "channel",
+    "open"
+   ],
+   [
+    36729,
+    "bulk",
+    "sent"
+   ]
+  ],
+  "eventsB": [
+   [
+    27538,
+    "conn",
+    "connecting"
+   ],
+   [
+    27597,
+    "ice",
+    "connected"
+   ],
+   [
+    27603,
+    "conn",
+    "connected"
+   ],
+   [
+    27620,
+    "channel",
+    "open"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 25,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": true,
+  "bulk": null,
+  "connectedMs": 279,
+  "path": {
+   "local": "host",
+   "remote": "host",
+   "protocol": "udp"
+  },
+  "dtls": "FEFC TLS_AES_128_GCM_SHA256",
+  "rtt": [
+   10,
+   10,
+   10,
+   12,
+   12
+  ],
+  "candA": [
+   "udp host mdns 47735"
+  ],
+  "candB": [
+   "udp host mdns 51457"
+  ],
+  "eventsA": [
+   [
+    28069,
+    "channel",
+    "open"
+   ],
+   [
+    39084,
+    "ice",
+    "disconnected"
+   ],
+   [
+    39084,
+    "conn",
+    "disconnected"
+   ],
+   [
+    48959,
+    "conn",
+    "failed"
+   ]
+  ],
+  "eventsB": [
+   [
+    27896,
+    "channel",
+    "open"
+   ],
+   [
+    37839,
+    "ice",
+    "disconnected"
+   ],
+   [
+    37839,
+    "conn",
+    "disconnected"
+   ],
+   [
+    47840,
+    "conn",
+    "failed"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 60,
+  "A": "machine-a",
+  "B": "machine-b",
+  "open": false,
+  "bulk": null,
+  "candA": [
+   "udp host mdns 44673"
+  ],
+  "candB": [
+   "udp host mdns 55878"
+  ],
+  "eventsA": [
+   [
+    63593,
+    "ice",
+    "checking"
+   ],
+   [
+    63593,
+    "conn",
+    "connecting"
+   ],
+   [
+    78650,
+    "ice",
+    "disconnected"
+   ],
+   [
+    78650,
+    "conn",
+    "failed"
+   ]
+  ],
+  "eventsB": [
+   [
+    2143,
+    "ice",
+    "checking"
+   ],
+   [
+    2143,
+    "conn",
+    "connecting"
+   ],
+   [
+    17205,
+    "ice",
+    "disconnected"
+   ],
+   [
+    17205,
+    "conn",
+    "failed"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ },
+ {
+  "delay": 60,
+  "A": "machine-b",
+  "B": "machine-a",
+  "open": false,
+  "bulk": null,
+  "candA": [
+   "udp host mdns 39154"
+  ],
+  "candB": [
+   "udp host mdns 44765"
+  ],
+  "eventsA": [
+   [
+    63419,
+    "ice",
+    "checking"
+   ],
+   [
+    63419,
+    "conn",
+    "connecting"
+   ],
+   [
+    78470,
+    "ice",
+    "disconnected"
+   ],
+   [
+    78470,
+    "conn",
+    "failed"
+   ]
+  ],
+  "eventsB": [
+   [
+    2034,
+    "ice",
+    "checking"
+   ],
+   [
+    2034,
+    "conn",
+    "connecting"
+   ],
+   [
+    17094,
+    "ice",
+    "disconnected"
+   ],
+   [
+    17095,
+    "conn",
+    "failed"
+   ]
+  ],
+  "ua": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/156.0.0.0 Safari/537.36"
+ }
+]

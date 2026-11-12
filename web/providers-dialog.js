@@ -1,0 +1,57 @@
+import {restoreDialogFocus} from './input.js';
+import {httpProvider,localProvider} from './providers.js';
+// Provider credentials and outputs stay in this device session, outside project
+// state. Source is copied into arguments only by the explicit attachment action.
+// Local stdio providers go through the discontinued Rust companion and are
+// offered only when its test-only switch is on (localProviders).
+export function providersDialog({connections,localProviders=false,getCompanion,activeSource,signal}){
+ return new Promise(resolve=>{
+  let closed=false,busy=false,operation,selected=null,review=null,lastOperation=null;const dialog=document.createElement('dialog');dialog.className='modal providers-dialog';dialog.setAttribute('aria-label','MCP providers');restoreDialogFocus(dialog);
+  const title=document.createElement('h2');title.textContent='Connect MCP providers';const help=document.createElement('p');help.textContent='Connect tools, reference sources and prompts to this open project. Providers receive only the arguments you review and send. Connections and tokens stay in memory and end when this project closes.';
+  const status=document.createElement('p');status.setAttribute('role','status');status.setAttribute('aria-live','polite');
+  const setup=document.createElement('fieldset'),legend=document.createElement('legend');legend.textContent='New connection';setup.append(legend);
+  const label=(text,node,parent=setup)=>{const row=document.createElement('label');row.textContent=text;node.setAttribute('aria-label',text);row.append(node);parent.append(row);return node;};
+  const input=(name,type='text',value='')=>{const node=document.createElement('input');node.type=type;node.className='input';node.value=value;return label(name,node);};
+  const mode=document.createElement('select');for(const[value,text]of [['http','HTTP provider'],['stdio','Local provider via companion']]){const option=document.createElement('option');option.value=value;option.textContent=text;mode.append(option);}label('Connection type',mode);if(!localProviders){mode.querySelector('option[value=stdio]').remove();mode.parentElement.hidden=true;}
+  const url=input('MCP endpoint','url','https://'),token=input('Bearer token (optional)','password');token.autocomplete='off';token.spellcheck=false;
+  const local=document.createElement('select');label('Configured local provider',local);local.parentElement.hidden=true;
+  const localHelp=document.createElement('p');localHelp.textContent='Local providers are commands you configure when starting the Rust companion. They run with your account’s permissions.';localHelp.hidden=true;setup.append(localHelp);
+  const permissions=document.createElement('fieldset'),permissionsLegend=document.createElement('legend');permissionsLegend.textContent='Permissions for new connection';permissions.append(permissionsLegend);const checks={};
+  for(const[name,text]of [['resources','Browse and read resources'],['prompts','Browse and retrieve prompts'],['tools','Browse and call tools after review']]){const node=document.createElement('input');node.type='checkbox';checks[name]=node;label(text,node,permissions);}checks.resources.checked=true;
+  const actions=document.createElement('div');actions.className='modal-actions';const button=(text,handler,parent=actions)=>{const node=document.createElement('button');node.type='button';node.className='button secondary';node.textContent=text;node.onclick=handler;parent.append(node);return node;};
+  const list=document.createElement('select');label('Connected provider',list,dialog);
+  const details=document.createElement('pre');details.className='provider-details';const grants=()=>Object.fromEntries(Object.entries(checks).map(([key,node])=>[key,node.checked]));
+  async function work(task){if(busy)return;busy=true;operation=new AbortController();review=null;reviewPanel.hidden=true;refresh();try{await task(operation.signal);}catch(error){if(!closed)status.textContent=operation?.signal.aborted||error.name==='AbortError'?'Cancellation requested. The provider may already have completed an external action.':error.message||String(error);}finally{busy=false;operation=null;if(!closed)refresh();}}
+  function current(){return connections.get(list.value);}
+  function refresh(){if(closed)return;const chosen=list.value;list.replaceChildren();for(const[id,connection]of connections){if(!connection.active){connections.delete(id);continue;}const option=document.createElement('option');option.value=id;option.textContent=connection.name;list.append(option);}if([...list.options].some(o=>o.value===chosen))list.value=chosen;selected=current();list.disabled=busy||!list.options.length;
+   details.textContent=selected?JSON.stringify({transport:selected.transport,permissions:selected.permissions,server:selected.info?.serverInfo||selected.info?.server_info,capabilities:selected.info?.capabilities},null,2):'No provider connected.';
+   connect.disabled=busy;disconnect.disabled=busy||!selected;cancel.disabled=!busy;for(const node of [mode,url,token,local,...Object.values(checks)])node.disabled=busy;
+   for(const[node,permission]of [[tools,'tools'],[resources,'resources'],[templates,'resources'],[prompts,'prompts']])node.disabled=busy||!selected?.permissions[permission];
+   read.disabled=busy||!selected?.permissions.resources;getPrompt.disabled=busy||!selected?.permissions.prompts;reviewCall.disabled=busy||!selected?.permissions.tools;attach.disabled=busy||!selected?.permissions.tools;next.disabled=busy||!selected||!next.dataset.cursor;
+  }
+  mode.onchange=()=>{const stdio=mode.value==='stdio';url.parentElement.hidden=token.parentElement.hidden=stdio;local.parentElement.hidden=localHelp.hidden=!stdio;if(stdio&&localProviders)void work(async requestSignal=>{const companion=getCompanion();if(!companion?.active)throw new Error('Pair the Rust companion from the Companion button first.');const result=await companion.providerRequest('/providers',{signal:requestSignal});local.replaceChildren();for(const provider of result.providers){const option=document.createElement('option');option.value=provider.id;option.textContent=`${provider.name} (${provider.command})`;local.append(option);}status.textContent=result.providers.length?'Choose a configured local provider.':'No local providers configured. Start the companion with --providers providers.json.';});};
+  const connect=button('Connect provider',()=>void work(async requestSignal=>{if(connections.size>=4)throw new Error('Disconnect a provider before adding another connection (four per project).');status.textContent='Connecting to provider…';const options={permissions:grants(),signal:requestSignal};let connection;if(mode.value==='http')connection=await httpProvider({...options,url:url.value.trim(),token:token.value});else connection=await localProvider({...options,companion:getCompanion(),providerId:local.value});if(closed||requestSignal.aborted){await connection.close();return;}connections.set(crypto.randomUUID(),connection);token.value='';status.textContent='Provider connected. Choose an operation below.';}));
+  const disconnect=button('Disconnect provider',()=>void work(async()=>{await selected?.close();status.textContent='Provider disconnected.';}));
+  const cancel=button('Cancel request',()=>operation?.abort());button('Close',finish);
+  const operations=document.createElement('div');operations.className='provider-operations';
+  const output=document.createElement('pre');output.className='provider-result';output.setAttribute('role','region');output.setAttribute('aria-label','Provider response');output.tabIndex=0;
+  function show(value){output.textContent=JSON.stringify(value,null,2);next.dataset.cursor=value.nextCursor||'';status.textContent='Response received. Provider content is displayed as data.';}
+  async function run(op,requestSignal){lastOperation=op;show(await selected.request(op,{signal:requestSignal}));}
+  const tools=button('List tools',()=>void work(s=>run({method:'tools/list'},s)),operations);
+  const resources=button('List resources',()=>void work(s=>run({method:'resources/list'},s)),operations);
+  const templates=button('List resource templates',()=>void work(s=>run({method:'resources/templates/list'},s)),operations);
+  const prompts=button('List prompts',()=>void work(s=>run({method:'prompts/list'},s)),operations);
+  const next=button('Next page',()=>void work(s=>run({...lastOperation,cursor:next.dataset.cursor},s)),operations);
+  const resource=document.createElement('input');resource.className='input';label('Resource URI',resource,operations);const read=button('Read resource',()=>void work(s=>run({method:'resources/read',uri:resource.value},s)),operations);
+  const name=document.createElement('input');name.className='input';label('Tool or prompt name',name,operations);const args=document.createElement('textarea');args.className='input';args.rows=5;args.value='{}';label('Arguments (JSON object)',args,operations);
+  function argumentsObject(){const value=JSON.parse(args.value);if(!value||Array.isArray(value)||typeof value!=='object')throw new Error('Arguments must be a JSON object.');return value;}
+  const getPrompt=button('Retrieve prompt',()=>void work(s=>run({method:'prompts/get',name:name.value,arguments:argumentsObject()},s)),operations);
+  const attach=button('Attach active source as “source” argument',()=>{try{const source=activeSource();if(!source)throw new Error('Open a text source file first.');args.value=JSON.stringify({...argumentsObject(),source:source.content},null,2);review=null;reviewPanel.hidden=true;status.textContent=`Attached ${source.path} locally. Review arguments before sending.`;}catch(error){status.textContent=error.message;}},operations);
+  const reviewPanel=document.createElement('section');reviewPanel.className='provider-review';reviewPanel.hidden=true;reviewPanel.setAttribute('aria-label','Review provider request');const reviewText=document.createElement('pre');reviewText.tabIndex=0;reviewPanel.append(reviewText);
+  const reviewCall=button('Review tool call',()=>{try{if(!selected?.active)throw new Error('Connect a provider first.');review={connection:selected,operation:{method:'tools/call',name:name.value,arguments:argumentsObject()}};reviewText.textContent=JSON.stringify({provider:selected.name,...review.operation},null,2);reviewPanel.hidden=false;reviewText.focus();status.textContent='Review the complete arguments. Sending may change external data.';}catch(error){status.textContent=error.message;}},operations);
+  button('Send reviewed request',()=>{const approved=review;if(!approved||approved.connection!==current()||!approved.connection.active)return;void work(s=>run(approved.operation,s));},reviewPanel);button('Cancel review',()=>{review=null;reviewPanel.hidden=true;},reviewPanel);
+  list.onchange=()=>{review=null;reviewPanel.hidden=true;output.textContent='';next.dataset.cursor='';refresh();};for(const node of [name,args])node.addEventListener('input',()=>{review=null;reviewPanel.hidden=true;});
+  function finish(){if(closed)return;closed=true;operation?.abort();token.value='';args.value='';output.textContent='';signal?.removeEventListener('abort',finish);dialog.close();dialog.remove();resolve();}
+  signal?.addEventListener('abort',finish,{once:true});dialog.addEventListener('cancel',event=>{event.preventDefault();finish();});dialog.prepend(title,help,setup,permissions,actions,status);dialog.append(details,operations,reviewPanel,output);document.body.append(dialog);dialog.showModal();refresh();url.focus();
+ });
+}

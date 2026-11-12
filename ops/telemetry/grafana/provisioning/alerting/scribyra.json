@@ -1,0 +1,582 @@
+{
+  "apiVersion": 1,
+  "groups": [
+    {
+      "orgId": 1,
+      "name": "Scribyra telemetry",
+      "folder": "Scribyra",
+      "interval": "30s",
+      "rules": [
+        {
+          "uid": "scribyra-failures",
+          "title": "Scribyra application operation failures",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-loki",
+              "model": {
+                "refId": "A",
+                "expr": "sum(count_over_time({service_name=\"scribyra\"} | scribyra_source=\"application\" | scribyra_outcome=\"failure\"[10m]))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "loki",
+                  "uid": "scribyra-loki"
+                },
+                "queryType": "instant"
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "1m",
+          "annotations": {
+            "summary": "An application-source failure was observed in the last ten minutes; local tests, CI and synthetic assertions are excluded.",
+            "__dashboardUid__": "scribyra-operations",
+            "__panelId__": "2"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "application"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "scribyra-compile-latency",
+          "title": "Scribyra sustained slow compilation",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-prom",
+              "model": {
+                "refId": "A",
+                "expr": "histogram_quantile(0.95, sum by (le) (rate(scribyra_operation_duration_milliseconds_bucket{scribyra_operation=\"compile\",scribyra_source=\"application\"}[30m]))) and on() (sum(increase(scribyra_operation_duration_milliseconds_count{scribyra_operation=\"compile\",scribyra_source=\"application\"}[30m])) >= 5)",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "scribyra-prom"
+                }
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        30000
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "annotations": {
+            "summary": "Observed compile p95 exceeds 30 seconds with at least five completions in 30 minutes.",
+            "__dashboardUid__": "scribyra-operations",
+            "__panelId__": "3"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "application"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "scribyra-ingress-down",
+          "title": "Scribyra ingress unavailable",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-prom",
+              "model": {
+                "refId": "A",
+                "expr": "1 - (min(up{job=\"scribyra-ingress\"}) or vector(0))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "scribyra-prom"
+                }
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "Alerting",
+          "execErrState": "Error",
+          "for": "1m",
+          "annotations": {
+            "summary": "Configured ingress scrape is absent or unreachable.",
+            "__dashboardUid__": "scribyra-delivery",
+            "__panelId__": "1"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "shared_ingress"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "scribyra-delivery-failures",
+          "title": "Scribyra ingress delivery failures",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-prom",
+              "model": {
+                "refId": "A",
+                "expr": "sum(increase(scribyra_ingress_requests_total{result=~\"unavailable|rate\"}[5m]))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "scribyra-prom"
+                }
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "1m",
+          "annotations": {
+            "summary": "Ingress observed unavailable/rate-limited delivery; inspect collector and queue status.",
+            "__dashboardUid__": "scribyra-delivery",
+            "__panelId__": "3"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "shared_ingress"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "scribyra-stale-ingestion",
+          "title": "Scribyra ingestion idle or stale",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-prom",
+              "model": {
+                "refId": "A",
+                "expr": "(time() - max(scribyra_ingress_last_success_timestamp_seconds)) and (max(scribyra_ingress_last_success_timestamp_seconds) > 0)",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "scribyra-prom"
+                }
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        600
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "5m",
+          "annotations": {
+            "summary": "No batch accepted for over ten minutes after earlier traffic. Clients may be intentionally idle or disabled; this is not an application failure.",
+            "__dashboardUid__": "scribyra-delivery",
+            "__panelId__": "2"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "shared_ingress"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "scribyra-export-loss",
+          "title": "Scribyra exporter dropped observations",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-prom",
+              "model": {
+                "refId": "A",
+                "expr": "sum(increase(scribyra_export_dropped_total{scribyra_source=\"application\"}[10m]))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "prometheus",
+                  "uid": "scribyra-prom"
+                }
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "1m",
+          "annotations": {
+            "summary": "Bounded client queues/retries discarded observations; counts describe best-effort delivery.",
+            "__dashboardUid__": "scribyra-delivery",
+            "__panelId__": "4"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "application"
+          },
+          "isPaused": false
+        },
+        {
+          "uid": "scribyra-ci-failures",
+          "title": "Scribyra CI suite failure observed",
+          "condition": "B",
+          "data": [
+            {
+              "refId": "A",
+              "relativeTimeRange": {
+                "from": 1800,
+                "to": 0
+              },
+              "datasourceUid": "scribyra-loki",
+              "model": {
+                "refId": "A",
+                "expr": "sum(count_over_time({service_name=\"scribyra\"} | scribyra_source=\"ci\" | scribyra_outcome=\"failure\" | scribyra_operation=\"test_run\" | scribyra_run_id!=\"\"[1h]))",
+                "instant": true,
+                "range": false,
+                "intervalMs": 15000,
+                "maxDataPoints": 120,
+                "datasource": {
+                  "type": "loki",
+                  "uid": "scribyra-loki"
+                },
+                "queryType": "instant"
+              }
+            },
+            {
+              "refId": "B",
+              "relativeTimeRange": {
+                "from": 0,
+                "to": 0
+              },
+              "datasourceUid": "__expr__",
+              "model": {
+                "refId": "B",
+                "type": "threshold",
+                "expression": "A",
+                "conditions": [
+                  {
+                    "evaluator": {
+                      "type": "gt",
+                      "params": [
+                        0
+                      ]
+                    },
+                    "operator": {
+                      "type": "and"
+                    },
+                    "query": {
+                      "params": [
+                        "B"
+                      ]
+                    },
+                    "reducer": {
+                      "type": "last",
+                      "params": []
+                    },
+                    "type": "query"
+                  }
+                ],
+                "datasource": {
+                  "type": "__expr__",
+                  "uid": "__expr__"
+                }
+              }
+            }
+          ],
+          "noDataState": "OK",
+          "execErrState": "Error",
+          "for": "0s",
+          "annotations": {
+            "summary": "A reported CI suite process failed within the last hour. Inspect its safe run ID and numeric GitLab job context; source metadata alone does not authenticate CI execution.",
+            "__dashboardUid__": "scribyra-test-runs",
+            "__panelId__": "10"
+          },
+          "labels": {
+            "product": "scribyra",
+            "severity": "warning",
+            "activity": "ci"
+          },
+          "isPaused": false
+        }
+      ]
+    }
+  ]
+}

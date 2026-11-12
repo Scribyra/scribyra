@@ -1,0 +1,19 @@
+TeX Live package metadata input
+
+The XZ file contains the unmodified bytes of Master/tlpkg/texlive.tlpdb from
+the dated full TeX Live Git mirror referenced by the TeX Users Group:
+https://www.tug.org/texlive/svn/
+https://ftp.tug.org/pipermail/tex-live/2026-September/052592.html
+
+Repository, commit, Git blob ID and compressed/raw SHA-256 checksums are pinned
+in scripts/tex-dependencies.json. Only the XZ compression was added by Scribyra.
+The native asset builder verifies the input and matches every catalogued
+runtime package revision and runtime filename against the frozen runtime pins.
+Approved archive repackagings use their recorded original runtime revision.
+
+The database retains upstream package descriptions, authors, catalogue license
+fields and other metadata. Package license identifiers are not a license for
+Scribyra or a substitute for the original package notices. TeX Live distribution
+notices remain available in the pinned compiler's LICENSE.TL and LICENSE.CTAN.
+This source input is retained so ordinary builds do not need the historical
+HTTP endpoint or a complete TeX Live checkout.

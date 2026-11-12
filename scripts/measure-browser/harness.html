@@ -1,0 +1,7 @@
+<!doctype html><meta charset="utf-8"><title>Scribyra compiler measurement</title>
+<script type="module">
+import {BusyTexRunner} from '/__measure/runner.js';
+const params=new URLSearchParams(location.search),loader=params.get('loader');
+window.measurementRunner=new BusyTexRunner({busytexBasePath:'/core/busytex',engineMode:'combined',preloadDataPackages:['/core/busytex/'+loader],initRetries:0});
+window.runMeasurement=async()=>{const runner=window.measurementRunner,start=performance.now();await runner.initialize(true);const initializedMs=performance.now()-start;const result=await runner.compile([{path:'main.tex',content:'\\documentclass{article}\\usepackage{amsmath}\\begin{document}A reproducible compiler measurement. $E=mc^2$.\\end{document}'}],'main.tex',false,false,null,true,'info','luahbtex_bibtex8',null,'scribyra:catalog',false,[]);return{success:result.success,pdfBytes:result.pdf?.length,initializedMs,durationMs:performance.now()-start,log:result.success?undefined:result.log};};
+</script>

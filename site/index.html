@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Scribyra is a local-first, open-source LaTeX workspace built with Rust. Write, compile, and keep your work on your own device.">
+  <meta name="theme-color" content="#7160d9">
+  <title>Scribyra — Room for your next great idea</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script src="site.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <div class="preview-note"><span class="status-dot"></span> Public beta <span class="note-divider">/</span> Free, with no account. Tested on Linux; collaboration is experimental.</div>
+  <header class="header wrap">
+    <a class="brand" href="#" aria-label="Scribyra home"><span class="brand-mark">s</span>scribyra</a>
+    <nav aria-label="Main navigation"><a href="#workspace">Workspace</a><a href="#principles">Principles</a><a href="#roadmap">Roadmap</a></nav>
+    <a class="button small secondary" href="https://gitlab.com/urundead-labs/scribyra">View source <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main">
+    <section class="hero wrap">
+      <div class="eyebrow"><span class="line"></span> ROOM TO THINK</div>
+      <h1>Your next great idea.<br><em>A space of its own.</em></h1>
+      <p class="intro">A quieter way to write LaTeX. From the first equation to the final paper, keep your tools close and your work yours.</p>
+      <div class="hero-actions"><a class="button primary" href="app/">Open app <span aria-hidden="true">↗</span></a><a class="text-link" href="#workspace">Take a closer look <span aria-hidden="true">↓</span></a></div>
+      <p class="hero-footnote">Runs in your browser. Compiling never uploads your document. No account needed.</p>
+      <p class="hero-footnote">Tested on Linux in Chromium, Firefox and WebKit. Not yet tested on macOS, Windows or Safari.</p>
+      <div class="math-note note-one" aria-hidden="true">∫ <span>ideas</span> dx</div><div class="math-note note-two" aria-hidden="true">Aa <span>→</span> ∞</div>
+    </section>
+    <section id="workspace" class="workspace wrap" aria-labelledby="workspace-title">
+      <div class="section-kicker"><span class="eyebrow" id="workspace-title">LESS IN THE WAY. MORE ON THE PAGE.</span><span class="build-label"><span class="status-dot"></span> Public beta</span></div>
+      <figure class="app-frame">
+        <div class="frame-top"><span class="window-dots" aria-hidden="true">● ● ●</span><span>scribyra / your workspace</span><span class="frame-local">Saved on your device</span></div>
+        <img src="assets/workspace.png" alt="The Scribyra editor with a LaTeX source document, project files, and its compiled PDF side by side." width="1440" height="1000" fetchpriority="high">
+        <figcaption>The actual workspace, with the sample paper. Editing, compilation, and PDF preview run locally in your browser.</figcaption>
+      </figure>
+      <div class="workspace-notes"><span><b>01</b> Write with familiar LaTeX tools</span><span><b>02</b> See your paper take shape</span><span><b>03</b> Export ordinary source files</span></div>
+    </section>
+    <section class="writing wrap" aria-labelledby="writing-title">
+      <div><div class="eyebrow">FROM DRAFT TO DOCUMENT</div><h2 id="writing-title">A place for the work.<br><em>And everything around it.</em></h2><p>Chapters, figures, references, and the small revisions that make a paper yours. Bring them into one considered workspace.</p><a class="text-link" href="https://gitlab.com/urundead-labs/scribyra/-/blob/main/README.md#what-works">Explore what works today <span aria-hidden="true">↗</span></a></div>
+      <div class="feature-list">
+        <article><span class="feature-symbol" aria-hidden="true">⌘</span><div><h3>Give your project some structure</h3><p>Nested folders, safe moves, recoverable deletion, and image previews. Import an existing ZIP and keep your files together.</p></div></article>
+        <article><span class="feature-symbol serif" aria-hidden="true">∑</span><div><h3>Keep writing. Keep seeing.</h3><p>A source editor alongside your PDF. Browser-based LuaLaTeX and bibliography processing, with downloadable TeX packages.</p></div></article>
+        <article><span class="feature-symbol" aria-hidden="true">✎</span><div><h3>Comment, review, go back</h3><p>Comments stay anchored to your text. Suggested changes stay out of the source until you accept them. Name a version, restore it, or keep a complete backup file.</p></div></article>
+        <article><span class="feature-symbol" aria-hidden="true">↗</span><div><h3>Leave with everything you wrote</h3><p>Export a source ZIP or your finished PDF. Ordinary LaTeX files, ready for the next tool or your own backup.</p></div></article>
+      </div>
+    </section>
+    <section id="principles" class="principles" aria-labelledby="principles-title">
+      <div class="wrap principles-inner"><div><div class="eyebrow">YOUR WORDS STAY YOURS</div><h2 id="principles-title">Good tools should<br><em>give you more freedom.</em></h2></div><div class="principle-copy"><p class="large-copy">Scribyra starts on your device. Your browser stores your project and runs the compiler. After your first compile, the app reopens and compiles offline, with the packages it has already fetched.</p><div class="principle-pair"><article><h3>Self-host it. All of it.</h3><p>The project is licensed under AGPL-3.0. All features are intended to remain free for self-hosting. No paid feature gates.</p></article><article><h3>Hosting is the service.</h3><p>Managed hosting is planned for people who want us to operate it. You would pay for hosted resources and service, with the same feature set.</p></article></div><p id="privacy" class="quiet">In the official app, optional performance, error and usage telemetry goes to Grafana Cloud, a third-party service in the EU region, only for categories you choose. No document contents, names, paths, credentials, error messages or stack frames are sent. No session replay or persistent visitor IDs. Change choices in the app under More tools, then Diagnostics. The collector sees your IP address and normal browser request metadata. <a href="telemetry.html">What Scribyra collects</a>. Self-hosted builds have no destination or prompt unless configured.</p><p class="quiet">Local saves are not an independent backup: clearing your browser’s site data removes them. Export your work regularly. Remote backup and end-to-end encryption are planned, not available. <a href="privacy.html">What stays on your device, and what leaves it</a>.</p></div></div>
+    </section>
+    <section id="roadmap" class="roadmap wrap" aria-labelledby="roadmap-title">
+      <div class="roadmap-heading"><div><div class="eyebrow">BUILT THOUGHTFULLY, STEP BY STEP</div><h2 id="roadmap-title">A solid foundation.<br><em>Room to grow.</em></h2></div><p>What you can use today, and the order we are building toward, with a static browser app at the center.</p></div>
+      <ol class="milestones">
+        <li><span class="milestone-number">01</span><div><span class="pill">AVAILABLE</span><h3>The everyday workspace</h3><p>File tabs, folders, assets, search and replace, outlines, and local LuaLaTeX compilation. The PDF reader supports text selection, search, page navigation, and source/PDF jumps after compilation.</p></div><span class="milestone-decoration" aria-hidden="true">✳</span></li>
+        <li><span class="milestone-number">02</span><div><span class="pill">AVAILABLE</span><h3>TeX, downloaded as you need it</h3><p>LuaLaTeX is the supported compiler. A small baseline, checksum-verified packages fetched when a document needs them, pinned project environments, and portable package bundles for working offline.</p></div></li>
+        <li><span class="milestone-number">03</span><div><span class="pill">AVAILABLE</span><h3>Comments, reviews and history</h3><p>Anchored comments, suggested changes that stay out of your source until accepted, named versions, restore, and complete backup files that you keep. Tabs in one browser profile stay up to date with each other.</p></div></li>
+        <li><span class="milestone-number">04</span><div><span class="pill experimental">EXPERIMENTAL</span><h3>An AI working in your tab</h3><p>An AI agent with its own browser tool can read, edit, compile, and read diagnostics in the project you have open. There is nothing of ours to install, and it runs under your control, not on our servers. You can also connect HTTP MCP providers from the browser, with reviewed tool calls.</p></div></li>
+      </ol>
+      <details class="further"><summary>The longer view <span aria-hidden="true">+</span></summary><ol start="5"><li>Direct sessions on a shared network, experimental and off by default</li><li>Remote and local Git</li><li>Plugins, including Zotero</li><li>Remote backup, sync, and collaboration</li><li>End-to-end encrypted backup and sync</li><li>Managed hosting</li></ol><p>Apart from experimental direct sessions, these are planned, not available. Testing so far has been on Linux with Chromium, Firefox and WebKit. macOS, Windows and Safari are not yet tested.</p></details>
+      <a class="text-link" href="https://gitlab.com/urundead-labs/scribyra/-/blob/main/docs/roadmap.md">Read the full roadmap <span aria-hidden="true">↗</span></a>
+    </section>
+    <section class="closing wrap"><span class="closing-mark" aria-hidden="true">s</span><div class="eyebrow">A LITTLE LESS FRICTION</div><h2>Make room for<br><em>your next great idea.</em></h2><p>Open the latest released workspace in your browser, read the code, or follow what is taking shape.</p><a class="button primary" href="app/">Open app <span aria-hidden="true">↗</span></a><p class="quiet access-note">Found a problem? <a class="inline" href="mailto:contact@scribyra.com?subject=Scribyra%20problem%20report">Email contact@scribyra.com</a>. Nothing is sent automatically, and attaching a project is entirely up to you.</p></section>
+  </main>
+  <footer class="footer wrap"><a class="brand" href="#"><span class="brand-mark">s</span>scribyra</a><span>A little more possibility.</span><div><a href="mailto:contact@scribyra.com">Contact</a><a href="mailto:contact@scribyra.com?subject=Scribyra%20problem%20report">Report a problem</a><a href="privacy.html">Privacy</a><a href="licenses.html">Licences</a><a href="https://gitlab.com/urundead-labs/scribyra/-/blob/main/docs/static-architecture-study.md">Architecture</a><a href="https://gitlab.com/urundead-labs/scribyra">Source ↗</a></div><p class="legal"><span>© 2026 URUNDEAD LABS S.R.L.</span> · <span>Reg. Com. J2026034271001</span> · <span>CUI 54762154</span> · <span>VAT RO55538423</span> · <span>Strada Pitar Moș 27, et. 5, ap. 17,</span> <span>010452 București, Romania</span></p></footer>
+</body>
+</html>

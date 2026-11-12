@@ -1,0 +1,148 @@
+stages:
+  - test
+  - deploy
+  - release
+
+# Branch model (docs/delivery.md):
+#   merge request pipelines  → test (any MR, including feature/* → dev, hotfix/* → main, dev → main)
+#   push to dev              → test, then deploy-staging (published by urundead-labs/scribyra-staging
+#                              to https://dev.scribyra.com/)
+#   push to main             → deploy-web (tests + production GitLab Pages), register-web-release, back-merge
+#   "Run pipeline" on a web-N tag → deploy-web only (rollback to that release)
+# Branch pipelines for other branches do not run; open a merge request instead.
+workflow:
+  auto_cancel:
+    on_new_commit: interruptible
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")'
+    - if: '$CI_COMMIT_BRANCH == "dev" && ($CI_PIPELINE_SOURCE == "push" || $CI_PIPELINE_SOURCE == "web")'
+    - if: '$CI_COMMIT_TAG =~ /^web-[1-9][0-9]*$/ && $CI_PIPELINE_SOURCE == "web"'
+
+# Every job runs on the project runner with Nix (shell executor, tag scribyra-nix),
+# because the group's shared runner minutes ran out. The flake supplies every tool,
+# and browsers. Jobs share one build directory on that host, so every job
+# keeps the expensive local caches when the runner cleans the checkout.
+variables:
+  GIT_CLEAN_FLAGS: -ffdx -e public/core -e target -e node_modules -e .cache
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  npm_config_cache: $CI_PROJECT_DIR/.cache/npm
+
+.nix:
+  tags: [scribyra-nix]
+  interruptible: true
+  before_script:
+    # Deploy and back-merge secrets never reach package install or build scripts.
+    - env -u SCRIBYRA_STAGING_DEPLOY_KEY -u SCRIBYRA_BACKMERGE_TOKEN nix develop -c npm ci --no-audit --no-fund
+    # Only a fresh runner downloads the pinned compiler. Warm cache verification
+    # and generation happen in prebuild without re-fetching the large archive.
+    - if test -s public/core/busytex/busytex.wasm; then nix develop -c node scripts/patch-busytex.mjs; else nix develop -c npm run assets; fi
+    - rm -f .cache/busytex-assets.tar.gz
+
+# The full suite: production build (which also creates the WASM module used by the
+# real Node suite), Rust, JavaScript, and the Pages browser suite in Chromium. Only
+# closed-schema JSON/JUnit summaries become CI artifacts; test output, browser
+# traces and document fixtures are never uploaded.
+.suite:
+  script:
+    - nix develop -c cargo build -p scribyra-telemetry -p scribyra-companion -p scribyra-folders -p scribyra-sync --bins --examples --locked
+    - nix develop -c python3 scripts/ci-telemetry.py build
+    - nix develop -c python3 scripts/ci-telemetry.py rust
+    - nix develop -c python3 scripts/ci-telemetry.py javascript
+    - test -s .pages/index.html && test -s .pages/app/index.html && test -s .pages/app/sw.js && test -s .pages/sw.js && test -s .pages/domain-router.js
+    # One browser in CI; all three engines are verified before pushing.
+    - nix develop -c python3 scripts/ci-telemetry.py browser-pages
+  artifacts:
+    access: maintainer
+    expire_in: 1 day
+    when: always
+    paths:
+      - .telemetry/*.json
+      - .telemetry/*.xml
+    reports:
+      junit: .telemetry/*.xml
+
+test:
+  extends: [.nix, .suite]
+  stage: test
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+
+# Staging: a separate origin, so staging storage never touches production projects.
+# The build carries a dev-<pipeline IID>-<short sha> release, no telemetry collector,
+# noindex and robots disallow, and a visible Staging marker. GitLab Free cannot pass
+# artifacts between projects, so the job pushes the site to the staging project
+# (urundead-labs/scribyra-staging), whose own pages job publishes dev.scribyra.com.
+# Needs the masked, protected SCRIBYRA_STAGING_DEPLOY_KEY (base64 of the private key
+# of a deploy key with write access to that one repository).
+deploy-staging:
+  extends: .nix
+  stage: deploy
+  needs: [test]
+  resource_group: staging-pages
+  script:
+    - env -u SCRIBYRA_STAGING_DEPLOY_KEY -u SCRIBYRA_BACKMERGE_TOKEN nix develop -c npm run build:staging
+    - nix develop -c node scripts/deploy-staging.mjs .cache/staging
+  environment:
+    name: staging
+    url: https://dev.scribyra.com/
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "dev"'
+
+# Production: one coherent pipeline release to GitLab Pages (app.scribyra.com and
+# scribyra.com). Also runs, without registering a release, for a rollback pipeline
+# started by hand on an earlier web-N tag.
+deploy-web:
+  extends: [.nix, .suite]
+  stage: deploy
+  resource_group: private-pages-production
+  variables:
+    # Share of telemetry sessions the official build lets send: 1, 0.5, 0.25, 0.1
+    # or 0.01. A project CI/CD variable of the same name overrides this default;
+    # any other value fails the build. See docs/telemetry-deployment.md.
+    # Production only: the staging build never sends telemetry.
+    SCRIBYRA_TELEMETRY_SESSION_RATE: '1'
+  pages:
+    publish: .pages
+    expire_in: never
+  artifacts:
+    reports:
+      junit: .telemetry/*.xml
+      dotenv: .pages-release.env
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+    - if: '$CI_COMMIT_TAG =~ /^web-[1-9][0-9]*$/'
+  environment:
+    name: production
+    url: $SCRIBYRA_DEPLOYED_APP_URL
+
+# Creates the web-<pipeline IID> release and tag. Release tags come only from here.
+register-web-release:
+  stage: release
+  tags: [scribyra-nix]
+  needs:
+    - job: deploy-web
+      artifacts: false
+  script:
+    - nix develop -c python3 scripts/ci-release.py
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'
+
+# After a hotfix reaches main, open (or reuse) one merge request main → dev. A no-op
+# when dev already has every change on main, as after a release merge. Uses the
+# masked, protected SCRIBYRA_BACKMERGE_TOKEN; without it the job prints the manual
+# command and ends with exit code 42, shown as a warning.
+back-merge:
+  stage: release
+  tags: [scribyra-nix]
+  needs: []
+  variables:
+    GIT_DEPTH: '0'
+  script:
+    - nix develop -c node scripts/back-merge.mjs
+  allow_failure:
+    exit_codes: [42]
+  rules:
+    - if: '$CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH'

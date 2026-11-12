@@ -1,0 +1,80 @@
+// Publishes the prepared staging site (scripts/staging-pages.mjs) by pushing it, as
+// `public/`, to the staging project urundead-labs/scribyra-staging, whose own pages
+// job serves it at https://dev.scribyra.com/. GitLab Free has no cross-project
+// artifact passing, so the site travels by Git: one commit on top of the previous
+// deployment, pushed with an SSH deploy key that can write to that one repository.
+//
+//   node scripts/deploy-staging.mjs .cache/staging [--dry-run]
+//
+// SCRIBYRA_STAGING_DEPLOY_KEY: base64 of the deploy key's private key (single line,
+// so GitLab can mask it). SCRIBYRA_STAGING_REPOSITORY overrides the SSH remote.
+import {mkdir,readdir,rm,copyFile,writeFile,mkdtemp,readFile} from 'node:fs/promises';
+import {execFileSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
+import {join,resolve} from 'node:path';
+import {pathToFileURL,fileURLToPath} from 'node:url';
+
+export const STAGING_REPOSITORY='git@gitlab.com:urundead-labs/scribyra-staging.git',STAGING_BRANCH='main',CHECKOUT='.cache/staging-repo';
+const ROOT=resolve(fileURLToPath(new URL('..',import.meta.url)));
+
+export function commitMessage({release,sha,pipeline}){
+ return[`Staging ${release}`,'',`Built from urundead-labs/scribyra@${sha||'unknown'}${pipeline?` by ${pipeline}`:''}.`].join('\n');
+}
+export function sshCommand(keyFile,knownHosts){
+ return['ssh','-i',keyFile,'-o','IdentitiesOnly=yes','-o','StrictHostKeyChecking=yes','-o',`UserKnownHostsFile=${knownHosts}`,'-o','HostKeyAlgorithms=ssh-ed25519','-o','BatchMode=yes'].join(' ');
+}
+// The private key arrives base64-encoded; reject anything that is not an OpenSSH key.
+export function decodeKey(value){
+ const key=Buffer.from(String(value||'').trim(),'base64').toString('utf8');
+ if(!/^-----BEGIN OPENSSH PRIVATE KEY-----\n[\s\S]+\n-----END OPENSSH PRIVATE KEY-----\n?$/.test(key))throw Error('SCRIBYRA_STAGING_DEPLOY_KEY must be the base64 of an OpenSSH private key');
+ return key.endsWith('\n')?key:key+'\n';
+}
+async function copyTree(source,destination){
+ await mkdir(destination,{recursive:true});
+ for(const entry of await readdir(source,{withFileTypes:true})){
+  const from=join(source,entry.name),to=join(destination,entry.name);
+  if(entry.isDirectory())await copyTree(from,to);
+  // Real copies, never hard links: Git rewrites these files, and links would reach the build inputs.
+  else if(entry.isFile())await copyFile(from,to);
+ }
+}
+// Replaces the checkout's tree with public/ (the site), .gitlab-ci.yml and README.md.
+export async function stageTree(site,checkout){
+ for(const entry of await readdir(checkout))if(entry!=='.git')await rm(join(checkout,entry),{recursive:true,force:true});
+ await copyTree(site,join(checkout,'public'));
+ await copyFile(join(ROOT,'ops/staging/gitlab-ci.yml'),join(checkout,'.gitlab-ci.yml'));
+ await copyFile(join(ROOT,'ops/staging/README.md'),join(checkout,'README.md'));
+}
+
+export async function publish({root,checkout=CHECKOUT,remote=STAGING_REPOSITORY,env=process.env,dry=false,log=console.log}){
+ const release=JSON.parse(await readFile(join(root,'site/release.json'),'utf8')).release;
+ if(!/^dev-[1-9]\d{0,11}-[a-f0-9]{7,40}$/.test(release||''))throw Error('Only a checked staging build can be published');
+ const secrets=dry?null:await mkdtemp(join(tmpdir(),'scribyra-staging-key-'));
+ try{
+  const gitEnv={...env,GIT_TERMINAL_PROMPT:'0',GIT_AUTHOR_NAME:'Scribyra CI',GIT_AUTHOR_EMAIL:'noreply@scribyra.com',GIT_COMMITTER_NAME:'Scribyra CI',GIT_COMMITTER_EMAIL:'noreply@scribyra.com'};
+  if(secrets){const key=join(secrets,'id');await writeFile(key,decodeKey(env.SCRIBYRA_STAGING_DEPLOY_KEY),{mode:0o600});gitEnv.GIT_SSH_COMMAND=sshCommand(key,join(ROOT,'ops/staging/known_hosts'));}
+  const git=(args,options={})=>execFileSync('git',['-C',checkout,...args],{env:gitEnv,encoding:'utf8',stdio:['ignore','pipe','inherit'],...options});
+  await mkdir(checkout,{recursive:true});
+  let fresh=false;try{fresh=git(['rev-parse','--show-toplevel']).trim()!==resolve(checkout);}catch{fresh=true;}
+  if(fresh)git(['init','-q','-b',STAGING_BRANCH]);
+  try{git(['remote','set-url','origin',remote],{stdio:'ignore'});}catch{git(['remote','add','origin',remote]);}
+  // Shallow: only the last deployment is needed to push the next one on top of it.
+  let fetched=false;
+  if(!dry){try{git(['fetch','-q','--depth','1','origin',STAGING_BRANCH]);fetched=true;}catch{log('Staging repository has no deployment yet; creating the first.');}}
+  if(fetched)git(['checkout','-q','-f','-B',STAGING_BRANCH,'FETCH_HEAD']);else git(['symbolic-ref','HEAD',`refs/heads/${STAGING_BRANCH}`]);
+  await stageTree(join(root,'site'),checkout);
+  git(['add','-A']);
+  try{git(['diff','--cached','--quiet']);log('Staging site unchanged; nothing to publish.');return false;}catch{}
+  git(['commit','-q','--no-gpg-sign','-m',commitMessage({release,sha:env.CI_COMMIT_SHA,pipeline:env.CI_PIPELINE_URL})]);
+  if(dry){log(`Dry run: committed ${release} in ${checkout}; not pushed.`);return true;}
+  git(['push','-q','origin',`HEAD:refs/heads/${STAGING_BRANCH}`],{stdio:['ignore','inherit','inherit']});
+  log(`Published ${release} to ${remote}; its pages job deploys https://dev.scribyra.com/.`);return true;
+ }finally{if(secrets)await rm(secrets,{recursive:true,force:true});}
+}
+
+if(import.meta.url===pathToFileURL(process.argv[1]).href){
+ const root=process.argv[2],dry=process.argv.includes('--dry-run');
+ if(!root)throw Error('Usage: deploy-staging.mjs <prepared folder> [--dry-run]');
+ if(!dry&&!process.env.SCRIBYRA_STAGING_DEPLOY_KEY)throw Error('SCRIBYRA_STAGING_DEPLOY_KEY is not set for this job');
+ await publish({root,remote:process.env.SCRIBYRA_STAGING_REPOSITORY||STAGING_REPOSITORY,dry});
+}

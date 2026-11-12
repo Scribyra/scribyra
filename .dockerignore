@@ -1,0 +1,8 @@
+node_modules
+.cache
+target
+dist
+public/core
+.git
+test-results
+*.sqlite*

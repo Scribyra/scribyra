@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "input": "web/tex-catalog.json.gz",
+  "sha256": "b546ba979ecc420943ffdbcce1bc82fdfb14d407862f392edb02809a8e020e2c",
+  "rawSha256": "3847b282a81d3fb52ac8eda203d47aa7ed18f829959161e63771136ee3247ae7",
+  "snapshot": "texlive-2026-03-02",
+  "source": "https://texlive.info/tlnet-archive/2026/03/02/tlnet/tlpkg/texlive.tlpdb.xz",
+  "sourceSha256": "a331d7bb581657935a3a8f65c87452b341cc4ccd0966203d4eb81f5260456772",
+  "runtimePackages": 4218
+}

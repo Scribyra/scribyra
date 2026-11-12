@@ -1,0 +1,198 @@
+{
+ "chromium wifi-drop 5s": {
+  "engine": "chromium",
+  "down": 5,
+  "method": "link",
+  "a": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": "6458:ice=disconnected 6459:conn=disconnected 6459:ice=connected 6460:conn=connected"
+  },
+  "b": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": ""
+  },
+  "baseT": 200,
+  "recoveredWithoutSignal": true
+ },
+ "chromium wifi-drop 20s": {
+  "engine": "chromium",
+  "down": 20,
+  "method": "link",
+  "a": {
+   "conn": "failed",
+   "ice": "disconnected",
+   "dc": "open",
+   "tl": "6459:ice=disconnected 6459:conn=disconnected 16460:conn=failed"
+  },
+  "b": {
+   "conn": "failed",
+   "ice": "disconnected",
+   "dc": "open",
+   "tl": "6294:ice=disconnected 6294:conn=disconnected 16294:conn=failed"
+  },
+  "baseT": 194,
+  "recoveredWithoutSignal": false,
+  "rejoinConnected": true,
+  "rejoin": {
+   "aRx": 66,
+   "bRx": 84,
+   "ms": [
+    26,
+    26
+   ],
+   "converged": true
+  },
+  "reconHead": "%OFFLINE-B%\n%OFFLINE-A%\n%RECOVERED%\n\\doc"
+ },
+ "chromium wifi-drop 60s": {
+  "engine": "chromium",
+  "down": 60,
+  "method": "link",
+  "a": {
+   "conn": "failed",
+   "ice": "disconnected",
+   "dc": "open",
+   "tl": "6453:ice=disconnected 6453:conn=disconnected 16454:conn=failed"
+  },
+  "b": {
+   "conn": "failed",
+   "ice": "disconnected",
+   "dc": "open",
+   "tl": "6293:ice=disconnected 6294:conn=disconnected 16294:conn=failed"
+  },
+  "baseT": 188,
+  "recoveredWithoutSignal": false,
+  "rejoinConnected": true,
+  "rejoin": {
+   "aRx": 66,
+   "bRx": 84,
+   "ms": [
+    29,
+    26
+   ],
+   "converged": true
+  },
+  "reconHead": "%OFFLINE-B%\n%OFFLINE-A%\n%RECOVERED%\n\\doc"
+ },
+ "chromium SIGSTOP 60s": {
+  "engine": "chromium",
+  "down": 60,
+  "method": "stop",
+  "a": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": "6461:ice=disconnected 6461:conn=disconnected 16462:conn=failed 61229:conn=disconnected 61274:ice=connected 61274:conn=connected"
+  },
+  "b": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": "61025:ice=disconnected 61026:conn=failed 61053:conn=disconnected 61076:ice=connected 61076:conn=connected"
+  },
+  "baseT": 199,
+  "recoveredWithoutSignal": true
+ },
+ "firefox wifi-drop 5s": {
+  "engine": "firefox",
+  "down": 5,
+  "method": "link",
+  "a": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": ""
+  },
+  "b": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": ""
+  },
+  "baseT": 125,
+  "recoveredWithoutSignal": true
+ },
+ "firefox wifi-drop 20s": {
+  "engine": "firefox",
+  "down": 20,
+  "method": "link",
+  "a": {
+   "conn": "disconnected",
+   "ice": "disconnected",
+   "dc": "open",
+   "tl": "10238:ice=disconnected 10238:conn=disconnected"
+  },
+  "b": {
+   "conn": "connected",
+   "ice": "connected",
+   "dc": "open",
+   "tl": ""
+  },
+  "baseT": 135,
+  "recoveredWithoutSignal": true
+ },
+ "firefox wifi-drop 60s": {
+  "engine": "firefox",
+  "down": 60,
+  "method": "link",
+  "a": {
+   "conn": "failed",
+   "ice": "failed",
+   "dc": "closed",
+   "tl": "10437:ice=disconnected 10437:conn=disconnected 30078:ice=failed 30078:conn=failed 30080:dc-close="
+  },
+  "b": {
+   "conn": "failed",
+   "ice": "failed",
+   "dc": "closed",
+   "tl": "30045:ice=failed 30045:conn=failed 30046:dc-close="
+  },
+  "baseT": 112,
+  "recoveredWithoutSignal": false,
+  "rejoinConnected": true,
+  "rejoin": {
+   "aRx": 66,
+   "bRx": 62,
+   "ms": [
+    25,
+    25
+   ],
+   "converged": true
+  },
+  "reconHead": "%OFFLINE-B%\n%OFFLINE-A%\n\\documentclass[1"
+ },
+ "firefox SIGSTOP 60s": {
+  "engine": "firefox",
+  "down": 60,
+  "method": "stop",
+  "a": {
+   "conn": "failed",
+   "ice": "failed",
+   "dc": "closed",
+   "tl": "11495:ice=disconnected 11495:conn=disconnected 30075:ice=failed 30075:conn=failed 30077:dc-close="
+  },
+  "b": {
+   "conn": "failed",
+   "ice": "failed",
+   "dc": "closed",
+   "tl": "60852:ice=failed 60852:conn=failed 60852:dc-close="
+  },
+  "baseT": 102,
+  "recoveredWithoutSignal": false,
+  "rejoinConnected": true,
+  "rejoin": {
+   "aRx": 66,
+   "bRx": 62,
+   "ms": [
+    26,
+    25
+   ],
+   "converged": true
+  },
+  "reconHead": "%OFFLINE-B%\n%OFFLINE-A%\n\\documentclass[1"
+ }
+}

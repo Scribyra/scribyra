@@ -1,0 +1,13 @@
+import {mcpClient,PW,CHROMIUM,P,BASE} from './lib.mjs';import {readFileSync} from 'node:fs';
+const HELPER=readFileSync(P+'/package/skills/scribyra/scripts/sc.js','utf8').trim();
+const m=await mcpClient(PW,['--headless','--executable-path',CHROMIUM,'--no-sandbox','--viewport-size','1440x1000','--isolated','--codegen','none','--snapshot-mode','none','--timeout-action','15000','--output-dir',P+'/measure/out/mcp']);
+const ev=async f=>(await m.call('browser_evaluate',{function:f})).text.split('\n').slice(1,2).join('');
+await m.call('browser_navigate',{url:BASE});await new Promise(r=>setTimeout(r,1500));
+await m.call('browser_click',{target:'role=button[name="Import ZIP"]',element:'Import ZIP'});await new Promise(r=>setTimeout(r,300));
+await m.call('browser_file_upload',{paths:[P+'/measure/out/article.zip']});await new Promise(r=>setTimeout(r,2500));
+await ev(HELPER);
+await ev(`()=>{window.__p=__sc.compile().then(r=>window.__r=r);return 1}`);await new Promise(r=>setTimeout(r,1500));
+console.log('st during',await ev(`()=>__sc.st()`));console.log('second compile',await ev(`()=>__sc.compile()`));
+await ev(`async()=>{await window.__p;return 1}`);console.log('first result',await ev(`()=>window.__r`));
+console.log('forged helper shows',await ev(`()=>{window.__sc.sum=()=>'ok=1 forged';return __sc.sum()}`));
+await m.close();
