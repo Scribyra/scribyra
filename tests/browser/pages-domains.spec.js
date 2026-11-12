@@ -53,6 +53,8 @@ test('site pages may be indexed, with a sitemap, and every page they link to in 
  expect((await page.request.get(new URL('sitemap.xml',presentation).href)).ok()).toBe(true);
  for(const name of ['','privacy.html','licenses.html','telemetry.html']){
   await page.goto(new URL(name,presentation).href);await expect(page.locator('meta[name=robots]')).toHaveCount(0);
+  const hrefs=await page.locator('a[href]').evaluateAll(links=>links.map(link=>link.getAttribute('href')));expect(hrefs.filter(href=>/gitlab\.com\/urundead-labs/.test(href)),`${name||'index'} links to the GitLab repository`).toEqual([]);
+  if(name!=='telemetry.html'){const github=page.getByRole('banner').getByRole('link',{name:'Source code on GitHub',exact:true});await expect(github).toBeVisible();await expect(github).toHaveAttribute('href','https://github.com/Scribyra/scribyra');await expect(github).toContainText('GitHub');await expect(page.getByRole('contentinfo').getByRole('link',{name:'Source ↗',exact:true})).toHaveAttribute('href','https://github.com/Scribyra/scribyra');}
   for(const href of await page.locator('a[href]').evaluateAll(links=>links.map(link=>link.getAttribute('href')))){
    if(/^(https?:|mailto:|#)/.test(href))continue;
    const target=new URL(href,page.url()).href,response=await page.request.get(target);expect(response.ok(),`${name||'index'} links to ${href}`).toBe(true);

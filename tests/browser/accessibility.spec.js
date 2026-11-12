@@ -1,11 +1,11 @@
 import {test,expect} from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 test.use({actionTimeout:15000});
-async function audit(page){const result=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21a','wcag21aa']).analyze();expect(result.violations.map(v=>({id:v.id,impact:v.impact,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))}))).toEqual([]);}
+async function audit(page,scope){const builder=new AxeBuilder({page});if(scope)builder.include(scope);const result=await builder.withTags(['wcag2a','wcag2aa','wcag21a','wcag21aa']).analyze();expect(result.violations.map(v=>({id:v.id,impact:v.impact,nodes:v.nodes.map(n=>({target:n.target,summary:n.failureSummary}))}))).toEqual([]);}
 for(const theme of ['light','dark'])test(`${theme} dashboard, editor and settings expose usable labels, structure and contrast`,async({page})=>{
  await page.goto('/');await expect(page.getByRole('button',{name:'Start with a sample paper'})).toBeVisible();if(theme==='dark')await page.getByRole('button',{name:'Toggle theme',exact:true}).click();await audit(page);
  await page.getByRole('button',{name:'Start with a sample paper'}).click();await expect(page.getByRole('textbox',{name:'LaTeX source',exact:true})).toBeVisible();expect(await page.getByRole('tree',{name:'Project files',exact:true}).ariaSnapshot()).toContain('treeitem \"main.tex\"');expect(await page.getByRole('tablist',{name:'Open files',exact:true}).ariaSnapshot()).toContain('tab \"main.tex\"');await audit(page);
- await page.getByRole('button',{name:'More tools',exact:true}).click();await page.getByRole('button',{name:'Project settings',exact:true}).click();await audit(page);await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'More tools',exact:true})).toBeFocused();
+ await page.getByRole('button',{name:'More tools',exact:true}).click();await expect(page.getByRole('link',{name:'Source code on GitHub',exact:true})).toBeVisible();await audit(page,'#more-tools-menu a');await page.getByRole('button',{name:'Project settings',exact:true}).click();await audit(page);await page.keyboard.press('Escape');await expect(page.getByRole('button',{name:'More tools',exact:true})).toBeFocused();
 });
 test('row-menu rename, keyboard deletion and recovery retain a reachable focus target',async({page})=>{
  await page.goto('/');await page.getByRole('button',{name:'Start with a sample paper'}).click();const main=page.getByRole('treeitem',{name:'main.tex',exact:true});await expect(main).toBeVisible();

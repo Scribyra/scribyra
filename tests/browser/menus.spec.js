@@ -192,9 +192,25 @@ test('the top bar stays calm and More tools keeps every tool reachable by keyboa
  for(const name of tools)await expect(page.getByRole('button',{name,exact:true})).toBeVisible();
  await expect(page.getByRole('button',{name:'Rust companion and MCP',exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'Project settings',exact:true})).toBeFocused();await page.keyboard.press('ArrowDown');await expect(page.getByRole('button',{name:'TeX environment',exact:true})).toBeFocused();
- await page.keyboard.press('End');await expect(page.getByRole('link',{name:'Licences',exact:true})).toBeFocused();await expect(page.getByRole('link',{name:'Privacy',exact:true})).toHaveAttribute('href','https://scribyra.com/privacy.html');
+ await page.keyboard.press('End');await expect(page.getByRole('link',{name:'Source code on GitHub',exact:true})).toBeFocused();await page.keyboard.press('ArrowUp');await expect(page.getByRole('link',{name:'Licences',exact:true})).toBeFocused();await expect(page.getByRole('link',{name:'Privacy',exact:true})).toHaveAttribute('href','https://scribyra.com/privacy.html');
  await page.keyboard.press('Escape');await expect(toggle).toBeFocused();await expect(toggle).toHaveAttribute('aria-expanded','false');
  await toggle.click();await page.getByRole('button',{name:'Project settings',exact:true}).click();const settings=page.getByRole('dialog',{name:'Project settings',exact:true});await expect(settings.getByRole('link',{name:'Privacy',exact:true})).toBeVisible();await expect(settings.getByRole('link',{name:'Licences',exact:true})).toBeVisible();await page.keyboard.press('Escape');await expect(toggle).toBeFocused();
+});
+
+test('the dashboard and More tools link to the source on GitHub in a new tab',async({page})=>{
+ await page.setViewportSize({width:1366,height:768});await page.goto('/');
+ async function check(link){
+  await expect(link).toBeVisible();await expect(link).toHaveAttribute('href','https://github.com/Scribyra/scribyra');await expect(link).toHaveAttribute('target','_blank');await expect(link).toHaveAttribute('rel','noopener');
+  // The mark is inline SVG: no image, font or third-party request.
+  await expect(link.locator('svg[aria-hidden="true"] path')).toHaveCount(1);await expect(link.locator('img')).toHaveCount(0);
+ }
+ const sidebar=page.locator('.dashboard-sidebar');await check(sidebar.getByRole('link',{name:'Source code on GitHub',exact:true}));
+ await expect(sidebar.getByRole('button',{name:'Report a problem',exact:true})).toBeVisible();
+ await page.getByRole('button',{name:'Start with a sample paper'}).click();await expect(page.locator('.cm-content')).toBeVisible();
+ const toggle=page.getByRole('button',{name:'More tools',exact:true}),menu=page.getByRole('group',{name:'More tools',exact:true});
+ await expect(menu.getByRole('link',{name:'Source code on GitHub',exact:true})).toBeHidden();
+ await toggle.click();await check(menu.getByRole('link',{name:'Source code on GitHub',exact:true}));
+ expect(await menu.getByRole('link').evaluateAll(links=>links.map(link=>link.textContent.trim()))).toEqual(['Privacy','Licences','Source code on GitHub']);
 });
 
 test('reporting a problem sends nothing and says what a report holds',async({page})=>{

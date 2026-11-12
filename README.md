@@ -2,6 +2,8 @@
 
 A local-first, open-source LaTeX workspace built with **Rust + Leptos**, CodeMirror, and a WebAssembly LuaLaTeX compiler. Editing, storage, compilation, and PDF rendering happen on your device. No account is required.
 
+Source: **https://github.com/Scribyra/scribyra** (public; it moved there from GitLab, see [the move plan](docs/github-move.md)).
+
 This is a **public beta**, not a production Overleaf replacement. It is tested on Linux in Chromium, Firefox and WebKit, not yet on macOS, Windows or Safari, and collaboration is experimental. It includes a real local editor, offline persistence, LuaLaTeX compilation, ZIP import/export, PDF previews, and an optional loopback collaboration experiment. Anchored comments, proposed source changes, named history and complete project backups work locally. Production sharing/authentication and Git integration remain subsequent milestones.
 
 ![Scribyra editor and PDF preview](docs/screenshots/editor.png)
@@ -182,6 +184,6 @@ The presentation is at **https://scribyra.com/** and the app at **https://app.sc
 
 The `site/` directory remains the presentation source. For a local deployment preview, run `npm run build:pages`, then `python3 -m http.server 4175 --directory .pages`. The app's assets and service worker stay under `/app/`, leaving the presentation outside its offline cache. CI pins Node/Rust/wasm-bindgen, verifies compiler archives, reuses extracted compiler/tool/dependency caches and discards the large downloaded archive. The assembled release is about 320 MiB (approximately 249 MiB ZIP), below GitLab.com's 1-GiB artifact limit. Build artifacts are maintainer-only and expire after one day; the active Pages deployment does not expire. Opening the app uses the latest successfully deployed production build. The first GitLab.com pipeline/deployment for this change still needs verification; the assembled release passes local online/offline compile checks.
 
-The GitLab repository and its Pages site are public.
+The source repository, https://github.com/Scribyra/scribyra, is public, as is the Pages site.
 
 **After the move to GitHub** (`.github/workflows/`): pull requests run `suite / test` (production Pages build, Rust, JavaScript, Pages browser suite in Chromium) on GitHub-hosted runners with Nix (`nix develop .#ci`, a leaner shell with the same toolchain). A push to `dev` deploys staging at https://dev.scribyra.com/; a push to `main` deploys https://app.scribyra.com/ (this repository's GitHub Pages site) and https://scribyra.com/ (the same release, published by the `scribyra-site` repository, because GitHub Pages allows one custom domain per repository) and creates a GitHub Release `web-N`. Details: [delivery](docs/delivery.md) and [the move plan](docs/github-move.md). Staging's `noindex`/`robots.txt` directives are indexing preferences, not access control. The page distinguishes working prototype features from the roadmap.

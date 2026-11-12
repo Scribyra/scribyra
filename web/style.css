@@ -65,3 +65,4 @@
 :root{--log-error:#a8323a;--log-warning:#7a5a12;--log-step:#4b3bb5}
 :root[data-theme=dark]{--log-error:#ff9da3;--log-warning:#e8c477;--log-step:#c7baff}
 .live-badge{margin-left:8px;padding:1px 6px;border-radius:4px;background:var(--accent-soft);color:var(--log-step);font-size:9px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}.live-log .log-step{color:var(--log-step);font-weight:600}.live-log .log-error{color:var(--log-error);font-weight:600}.live-log .log-warning{color:var(--log-warning)}.live-log .log-recovered{color:var(--muted)}.live-log .log-note{color:var(--muted);font-style:italic}.live-log .log-chunk{display:inline}.preview-empty .show-live-log{margin:14px auto 0;padding:6px 8px}.preview-empty .show-live-log svg{width:13px;height:13px}
+.dashboard-bottom .nav-item span{color:inherit}
