@@ -1,0 +1,208 @@
+# The full suite, shared by pull request checks, staging and production: the
+# production Pages build (which also creates the WASM module the Node suite uses),
+# Rust, JavaScript, and the Pages browser suite in Chromium. It is the GitHub copy of
+# `.suite` in .gitlab-ci.yml. No secret ever reaches this job: it installs packages
+# and runs build scripts, so deploy keys stay in the callers' deploy jobs.
+#
+# Callers name their job `suite`, so the check is "suite / test" on every commit,
+# whichever workflow ran it; the rulesets require that name (docs/github-move.md).
+name: suite
+on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Commit to build; empty builds the event's commit.
+        type: string
+        default: ''
+      release:
+        description: Production release label web-N baked into the Pages build; empty for none.
+        type: string
+        default: ''
+      telemetry-session-rate:
+        description: SCRIBYRA_TELEMETRY_SESSION_RATE for the official build; empty keeps the build default.
+        type: string
+        default: ''
+      staging-release:
+        description: dev-N-<sha> label; when set, also builds the staging site and uploads it as `staging-site`.
+        type: string
+        default: ''
+      pages-artifact:
+        description: Upload .pages as the `github-pages` artifact for actions/deploy-pages.
+        type: boolean
+        default: false
+      save-caches:
+        description: Save cargo, npm and BusyTeX caches (pushes to main/dev only, never pull requests).
+        type: boolean
+        default: false
+
+permissions: {}
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+      # Read by the build scripts under their GitLab names (scripts/ci-pages.mjs,
+      # scripts/build-pages.mjs, scripts/deploy-staging.mjs). CI_COMMIT_SHA is set
+      # after checkout. CI_PIPELINE_IID stays unset: the release label comes from
+      # SCRIBYRA_RELEASE.
+      CI_PIPELINE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # The image ships about 30 GB of toolchains this job never uses; the job needs
+      # about 12 GB (docs/github-move.md, "Runner disk").
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup \
+            /opt/hostedtoolcache/CodeQL /usr/local/share/powershell /usr/share/swift
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.ref }}
+          persist-credentials: false
+
+      - name: Record the commit
+        run: echo "CI_COMMIT_SHA=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            accept-flake-config = false
+
+      # `.#ci` is the lean CI shell; a rollback to a commit from before the move has
+      # only the default shell.
+      - name: Choose the Nix shell
+        run: |
+          if nix eval --raw .#devShells.x86_64-linux.ci.name >/dev/null 2>&1; then shell=.#ci; else shell=.; fi
+          echo "NIX_SHELL=$shell" >> "$GITHUB_ENV"
+
+      - name: Restore npm cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: npm-cache
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - name: Restore BusyTeX assets
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: busytex-cache
+        with:
+          path: public/core
+          key: busytex-${{ hashFiles('scripts/assets.mjs', 'scripts/patch-busytex.mjs') }}
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            cargo-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}-
+            cargo-${{ runner.os }}-
+
+      - name: Install packages
+        run: nix develop "$NIX_SHELL" -c npm ci --no-audit --no-fund
+
+      # Only a cold cache downloads the pinned compiler (522 MB); a warm one is
+      # re-patched and checked in prebuild without fetching the archive.
+      - name: Compiler assets
+        run: |
+          if test -s public/core/busytex/busytex.wasm; then nix develop "$NIX_SHELL" -c node scripts/patch-busytex.mjs; else nix develop "$NIX_SHELL" -c npm run assets; fi
+          rm -f .cache/busytex-assets.tar.gz
+
+      - name: Save BusyTeX assets
+        if: inputs.save-caches && steps.busytex-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: public/core
+          key: busytex-${{ hashFiles('scripts/assets.mjs', 'scripts/patch-busytex.mjs') }}
+
+      - name: Native binaries
+        run: nix develop "$NIX_SHELL" -c cargo build -p scribyra-telemetry -p scribyra-companion -p scribyra-folders -p scribyra-sync --bins --examples --locked
+
+      - name: Build (Pages release)
+        env:
+          SCRIBYRA_RELEASE: ${{ inputs.release }}
+          SCRIBYRA_TELEMETRY_SESSION_RATE: ${{ inputs.telemetry-session-rate }}
+        run: |
+          [ -n "$SCRIBYRA_RELEASE" ] || unset SCRIBYRA_RELEASE
+          [ -n "$SCRIBYRA_TELEMETRY_SESSION_RATE" ] || unset SCRIBYRA_TELEMETRY_SESSION_RATE
+          nix develop "$NIX_SHELL" -c python3 scripts/ci-telemetry.py build
+
+      - name: Rust
+        run: nix develop "$NIX_SHELL" -c python3 scripts/ci-telemetry.py rust
+
+      - name: JavaScript
+        run: nix develop "$NIX_SHELL" -c python3 scripts/ci-telemetry.py javascript
+
+      - name: Check the Pages release
+        run: test -s .pages/index.html && test -s .pages/app/index.html && test -s .pages/app/sw.js && test -s .pages/sw.js && test -s .pages/domain-router.js
+
+      # One browser in CI; all three engines are verified before pushing.
+      - name: Pages browser suite (Chromium)
+        run: nix develop "$NIX_SHELL" -c python3 scripts/ci-telemetry.py browser-pages
+
+      - name: Staging build
+        if: inputs.staging-release != ''
+        env:
+          SCRIBYRA_RELEASE: ${{ inputs.staging-release }}
+        run: nix develop "$NIX_SHELL" -c npm run build:staging
+
+      # Closed-schema JSON/JUnit summaries only; test output, traces and fixtures are
+      # never uploaded. Artifacts of a public repository are readable by any signed-in
+      # GitHub user (GitLab limited these to maintainers); the summaries hold counts,
+      # outcome and revision only.
+      - name: Upload run summaries
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: telemetry-${{ github.run_attempt }}
+          path: |
+            .telemetry/*.json
+            .telemetry/*.xml
+          retention-days: 1
+          if-no-files-found: ignore
+
+      - name: Upload the Pages release
+        if: inputs.pages-artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: .pages
+          retention-days: 1
+
+      - name: Upload the staging site
+        if: inputs.staging-release != ''
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          name: staging-site
+          path: .cache/staging/site
+          retention-days: 7
+
+      - name: Save npm cache
+        if: inputs.save-caches && steps.npm-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.npm
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Save cargo cache
+        if: inputs.save-caches
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.run_id }}

@@ -1,5 +1,10 @@
 # Private custom domains
 
+> GitLab setup, current until the move to GitHub. On GitHub the two domains are
+> two Pages sites (`app.scribyra.com`: the `scribyra` repository;
+> `scribyra.com`: `scribyra-site`) serving the same release and the same
+> `domain-router.js`; DNS and certificates are in [github-move.md](github-move.md).
+
 The presentation uses `https://scribyra.com/`; the application uses
 `https://app.scribyra.com/`. Both are aliases for the same private GitLab Pages
 release. The generated host router opens the appropriate shell. The application
