@@ -19,7 +19,19 @@
     });
     devShells = nixpkgs.lib.genAttrs systems (system: let
       pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; };
-    in { default = pkgs.mkShell {
+    in {
+    # CI on GitHub-hosted runners: the same toolchain versions as `default`, without
+    # what the CI suite never uses (Rust docs/clippy/rustfmt, Firefox and WebKit
+    # browsers, nginx, haproxy). It saves about 3 GB of Nix store on a runner whose
+    # disk is small; Chromium is the one CI browser.
+    ci = pkgs.mkShell {
+      buildInputs = [ pkgs.glib ];
+      packages = with pkgs; [ (rust-bin.stable.latest.minimal.override { targets = [ "wasm32-unknown-unknown" ]; }) nodejs_22 wasm-bindgen-cli pkg-config openssl git chromium python3 openssh ];
+      PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1";
+      PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.chromium}/bin/chromium" else "";
+    };
+    default = pkgs.mkShell {
       buildInputs = [ pkgs.glib ];
       packages = with pkgs; [ (rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; }) nodejs_22 wasm-bindgen-cli pkg-config openssl nginx haproxy git chromium python3 playwright-driver.browsers openssh ];
       PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";

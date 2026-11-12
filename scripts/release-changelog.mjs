@@ -1,7 +1,10 @@
 // Generates the changelog for a release merge request (dev → main): every merge
-// request merged into dev since the latest web-<N> release tag, from GitLab's merge
-// commits ("Merge branch 'x' into 'dev'", then the MR title, then "See merge request
-// group/project!N"). Read-only: it only runs git log/tag.
+// request merged into dev since the latest web-<N> release tag, from the merge
+// commits. GitLab writes "Merge branch 'x' into 'dev'", then the MR title, then "See
+// merge request group/project!N"; GitHub writes "Merge pull request #N from owner/x",
+// then the pull request title (repository setting: merge commit message = pull
+// request title). A range may hold both kinds around the move. Read-only: it only
+// runs git log/tag.
 //
 //   node scripts/release-changelog.mjs [--from web-N] [--to origin/dev] [--main origin/main] [--tests FILE]
 import {execFileSync} from 'node:child_process';
@@ -14,13 +17,22 @@ export function latestRelease(tags){
  let best=null;for(const tag of tags){const number=releaseNumber(tag.trim());if(number!==null&&(best===null||number>releaseNumber(best)))best=tag.trim();}
  return best;
 }
-// One merge commit → {branch, target, title, mr} or null for anything else.
-export function parseMergeCommit(subject,body=''){
+const TRAILER=/^(Co-authored-by|Signed-off-by|Reviewed-by|Approved-by|Merged-by):/i;
+// One merge commit → {branch, target, title, mr, ref} or null for anything else. A
+// GitHub merge commit does not name its target branch: `target` is the branch whose
+// first-parent history is being read.
+export function parseMergeCommit(subject,body='',{target=null}={}){
+ const pull=/^Merge pull request #(\d+) from [^/\s]+\/(\S+)$/.exec(subject.trim());
+ if(pull){
+  const title=body.split('\n').map(line=>line.trim()).find(line=>line&&!TRAILER.test(line))||pull[2];
+  return{branch:pull[2],target,title,mr:Number(pull[1]),ref:`#${pull[1]}`};
+ }
  const match=/^Merge branch '([^']+)' into '([^']+)'$/.exec(subject.trim());if(!match)return null;
  const lines=body.split('\n').map(line=>line.trim());
  const reference=lines.map(line=>/^See merge request (\S+)?!(\d+)$/.exec(line)).find(Boolean);
- const title=lines.find(line=>line&&!/^See merge request /.test(line)&&!/^(Co-authored-by|Signed-off-by|Reviewed-by|Approved-by|Merged-by):/i.test(line))||match[1];
- return{branch:match[1],target:match[2],title,mr:reference?Number(reference[2]):null};
+ const title=lines.find(line=>line&&!/^See merge request /.test(line)&&!TRAILER.test(line))||match[1];
+ const mr=reference?Number(reference[2]):null;
+ return{branch:match[1],target:match[2],title,mr,ref:mr===null?null:`!${mr}`};
 }
 export function category(branch){
  if(/^feature\//.test(branch))return'Features';
@@ -39,12 +51,13 @@ export function renderChangelog(entries,{since=null,target='dev',tests=null,dire
   const items=groups.get(name);if(!items)continue;
   out.push(`### ${name}`,'');
   for(const item of items){
-   if(item.branch==='main'){out.push(`- Production fixes merged back into ${target}${item.mr?` (!${item.mr})`:''}`);continue;}
-   out.push(`- ${item.title}${item.mr?` (!${item.mr})`:''}`);
+   const ref=item.ref||(item.mr?`!${item.mr}`:null);
+   if(item.branch==='main'){out.push(`- Production fixes merged back into ${target}${ref?` (${ref})`:''}`);continue;}
+   out.push(`- ${item.title}${ref?` (${ref})`:''}`);
   }
   out.push('');
  }
- out.push('## Test results','',tests?tests.trim():'_Link the passing merge request pipeline and any manual checks here._','');
+ out.push('## Test results','',tests?tests.trim():'_Link the passing pipeline (or workflow run) and any manual checks here._','');
  return out.join('\n');
 }
 
@@ -57,7 +70,7 @@ export function collect({from=null,to='origin/dev',main='origin/main'}={}){
  const entries=[],direct=[];
  for(const record of log.split('\x1e')){
   if(!record.trim())continue;const[parents,subject,body]=record.replace(/^\n/,'').split('\x1f');
-  const merged=parents.trim().split(' ').length>1?parseMergeCommit(subject,body):null;
+  const merged=parents.trim().split(' ').length>1?parseMergeCommit(subject,body,{target:to.replace(/^.*\//,'')}):null;
   if(merged)entries.push(merged);else direct.push(subject.trim());
  }
  return{since,entries:entries.reverse(),direct:direct.reverse()};
