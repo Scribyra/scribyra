@@ -150,3 +150,10 @@ test('only staging releases show the staging badge',()=>{
  const badge=stagingMarker('dev-3-1a2b3c4',{document:doc});assert.equal(badge.textContent,'Staging');assert.equal(appended.length,1);
  assert.equal(doc.title,STAGING_TITLE_PREFIX+'Scribyra');assert.equal(doc.documentElement.dataset.scribyraStaging,'1');
 });
+
+test('staging CI script lines never read as YAML mappings',async()=>{
+  // GitLab refused the staging pipeline when an unquoted script line held ": ".
+  const text=await readFile(new URL('../ops/staging/gitlab-ci.yml',import.meta.url),'utf8');
+  const script=text.split(/^  script:\n/m)[1].split(/^  \S/m)[0];
+  for(const line of script.split('\n')){const item=line.match(/^\s+- (.*)$/);if(item&&!/^["']/.test(item[1]))assert.doesNotMatch(item[1],/: /,line);}
+});
