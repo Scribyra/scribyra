@@ -49,7 +49,7 @@ export function exportItem(item,format){
   return `\n@${type}{${zoteroCitationKey(data)},\n${fields.map(([name,value])=>`\t${name} = {${value}}`).join(',\n')},\n}\n`;
 }
 
-export function fakeZotero({publicBase='https://api.zotero.org'}={}){
+export function fakeZotero({publicBase='https://api.zotero.org',cors=true}={}){
   const libraries=new Map(),keys=new Map(),users=new Map(),groups=new Map();
   const requests=[];let rateLimit=null,backoff=0,keySeq=0;
   function library(prefix){if(!libraries.has(prefix))libraries.set(prefix,{version:1,items:new Map(),collections:new Map()});return libraries.get(prefix);}
@@ -87,7 +87,7 @@ export function fakeZotero({publicBase='https://api.zotero.org'}={}){
   };
   function reply(status,body,headers={}){
     const text=body===undefined?'':typeof body==='string'?body:JSON.stringify(body);
-    return {status,body:text,headers:{...CORS,'Zotero-API-Version':'3',...(typeof body==='string'?{'Content-Type':'text/plain; charset=utf-8'}:body!==undefined?{'Content-Type':'application/json'}:{}),...(backoff?{Backoff:String(backoff)}:{}),...headers}};
+    return {status,body:text,headers:{...(cors?CORS:{}),'Zotero-API-Version':'3',...(typeof body==='string'?{'Content-Type':'text/plain; charset=utf-8'}:body!==undefined?{'Content-Type':'application/json'}:{}),...(backoff?{Backoff:String(backoff)}:{}),...headers}};
   }
   function access(key,prefix){
     const record=keys.get(key);if(!record)return false;

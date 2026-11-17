@@ -21,8 +21,8 @@ Classic results \cite{lovelace_sketch_1843} and \parencite{hopper_compiler_1952}
 \end{document}
 `;
 const article=(title,last,first,year,extra={})=>({itemType:'journalArticle',title,creators:[{creatorType:'author',lastName:last,firstName:first}],date:String(year),publicationTitle:'Annals of Computing',...extra});
-function seed(){
-  const fake=fakeZotero();
+function seed(options){
+  const fake=fakeZotero(options);
   fake.addUser({id:USER,username:'ada'}).addGroup({id:777,name:'Compiler Lab',members:[USER]});
   fake.addKey(KEY,{userId:USER,access:{user:{library:true,notes:false,write:false,files:false},groups:{all:{library:true,write:false}}}});
   fake.collection(`users/${USER}`,{key:'THESIS01',name:'Thesis'}).collection(`users/${USER}`,{key:'CHAPTER2',name:'Chapter 2',parent:'THESIS01'});
@@ -116,7 +116,11 @@ test('link a collection: initial fetch, linked file, autocomplete, and the key n
     // Requests went only to api.zotero.org (the fake), through real CORS preflights.
     const zotero=await page.evaluate(()=>window.__zoteroCalls);
     expect(zotero.length).toBeGreaterThan(3);for(const url of zotero)expect(url).toMatch(/^https:\/\/api\.zotero\.org\//);
-    expect(fake.requests.some(request=>request.method==='OPTIONS'&&request.origin)).toBe(true);
+    // Real cross-origin requests: each carries the page's Origin and the browser checks the CORS
+    // response. Chromium and Firefox preflight the custom headers; Playwright's WebKit does not
+    // send its preflight to the server (recorded in docs/zotero.md).
+    expect(fake.requests.filter(request=>request.method==='GET').every(request=>request.origin===new URL(page.url()).origin)).toBe(true);
+    if(test.info().project.name!=='webkit')expect(fake.requests.some(request=>request.method==='OPTIONS'&&request.origin)).toBe(true);
     const fakeOrigin=`http://127.0.0.1:${server.port}/`;
     for(const request of seen){expect(request.url.startsWith(fakeOrigin)||request.url.startsWith('http://127.0.0.1:'+new URL(page.url()).port+'/')||request.url.startsWith('blob:')||request.url.startsWith('data:'),request.url).toBe(true);if(request.key)expect(request.url.startsWith(fakeOrigin),request.url).toBe(true);}
     expect(fake.requests.filter(request=>request.method==='GET').every(request=>request.key===KEY)).toBe(true);
@@ -312,4 +316,18 @@ test('import bibliography from the tree menu and by drag and drop: problems repo
   // And \cite{ completes keys from imported files as written.
   await page.getByRole('treeitem',{name:'main.tex',exact:true}).click();await page.locator('.cm-content').click();await page.keyboard.press('Control+End');
   await page.keyboard.type('\\cite{Mü',{delay:30});await expect(page.locator('.cm-tooltip-autocomplete').getByRole('option').filter({hasText:'Müller:Über-2019'})).toContainText('Kept key');
+});
+
+test('without the CORS headers api.zotero.org sends, the browser blocks the response and nothing is linked',async({page})=>{
+  const fake=seed({cors:false}),{server}=await start(page,fake);
+  try{
+    await open(page);await rootMenu(page,'Link to Zotero');
+    const dialog=page.getByRole('dialog',{name:'Link to Zotero'});
+    await dialog.getByLabel('Zotero user ID or username').fill('4242');await dialog.getByLabel('Read-only API key').fill(KEY);
+    await dialog.getByRole('button',{name:'Check key'}).click();
+    await expect(dialog.getByRole('status')).toHaveText('Scribyra could not reach api.zotero.org. Check your connection and try again; nothing in the project changed.');
+    await expect(dialog.getByRole('button',{name:'Link and import'})).toBeDisabled();
+    await dialog.getByRole('button',{name:'Cancel'}).click();
+    const traces=await projectTraces(page);expect(traces.databases['scribyra-zotero']||'').not.toContain(KEY);
+  }finally{await server.close();}
 });
