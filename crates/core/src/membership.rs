@@ -97,6 +97,17 @@ struct ProjectBody {
     #[serde(default)]
     name: Option<String>,
 }
+/// `project.epoch`: a new project key after someone lost access (or on request). `after` is the
+/// last log position the rotating client verified; entries from devices cut off by this
+/// rotation are refused above it.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct EpochBody {
+    project: String,
+    epoch: u32,
+    key_commit: String,
+    after: u64,
+}
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct InviteBody {
@@ -195,6 +206,23 @@ pub struct Project {
     pub members: BTreeMap<String, String>,
     /// The project's name encrypted under its name key, if the creator published one.
     pub name: Option<String>,
+    /// Key commitments of every epoch, oldest first (`commits[e - 1]` for epoch `e`), so keys of
+    /// earlier epochs stay checkable for reading history.
+    #[serde(default)]
+    pub commits: Vec<String>,
+    /// Someone lost access since the current epoch began: the next writer rotates the key first.
+    #[serde(default)]
+    pub stale: bool,
+    /// Devices that lost access since the current epoch began; the next rotation cuts them off.
+    #[serde(default)]
+    pub lost: BTreeSet<String>,
+    /// Per device, the `(after, epoch)` of each rotation that cut it off: an entry from it above
+    /// `after` under an epoch older than `epoch` is refused by every reader.
+    #[serde(default)]
+    pub cutoffs: BTreeMap<String, Vec<(u64, u32)>>,
+    /// The `after` of the latest rotation (0 before any): a later rotation may not go back.
+    #[serde(default)]
+    pub after: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -326,6 +354,48 @@ impl OrgState {
     /// scopes (design slice 8), only editors write.
     pub fn can_write(&self, person: &str, project: &str) -> bool {
         self.project_role(person, project) == Some("editor")
+    }
+    /// Whether this person may hold the project's key: a member, or an admin while admin read
+    /// access is on.
+    pub fn key_entitled(&self, person: &str, project: &str) -> bool {
+        self.can_access(person, project) || (self.admin_read && self.is_admin(person) && self.projects.contains_key(project))
+    }
+    /// Whether this person may create the project's next epoch: an editor, or an admin entitled
+    /// to its key.
+    pub fn may_rotate(&self, person: &str, project: &str) -> bool {
+        self.can_write(person, project) || (self.admin_read && self.is_admin(person) && self.projects.contains_key(project))
+    }
+    /// The key commitment of one epoch of a project.
+    pub fn epoch_commit(&self, project: &str, epoch: u32) -> Option<&str> {
+        let p = self.projects.get(project)?;
+        if epoch == p.epoch {
+            return Some(&p.key_commit);
+        }
+        p.commits.get((epoch as usize).checked_sub(1)?).map(String::as_str)
+    }
+    /// Whether a reader refuses an entry at log position `seq` under `epoch` from `device`: a
+    /// rotation cut the device off, the entry is above that rotation's `after`, and it is not
+    /// under an epoch the device could only hold if it was let back in.
+    pub fn entry_cut_off(&self, project: &str, device: &str, seq: u64, epoch: u32) -> bool {
+        self.projects.get(project).and_then(|p| p.cutoffs.get(device)).is_some_and(|cuts| cuts.iter().any(|(after, cut)| seq > *after && epoch < *cut))
+    }
+    /// Records that `person` (all their devices, or only `device`) loses access to the projects
+    /// whose key they could hold: those projects need a new epoch before anyone writes again.
+    fn lose_access(&mut self, person: &str, device: Option<&str>, projects: &[String]) {
+        let devices: Vec<String> = match device {
+            Some(d) => vec![d.to_string()],
+            None => self.devices.iter().filter(|(_, d)| d.person == person).map(|(k, _)| k.clone()).collect(),
+        };
+        for project in projects {
+            if let Some(p) = self.projects.get_mut(project) {
+                p.stale = true;
+                p.lost.extend(devices.iter().cloned());
+            }
+        }
+    }
+    /// Projects whose key this person may hold now.
+    fn entitled_projects(&self, person: &str) -> Vec<String> {
+        self.projects.keys().filter(|p| self.key_entitled(person, p)).cloned().collect()
     }
     /// Encrypted objects (assets, history objects) of a project: editors upload them before the
     /// entry that references them; every member may fetch them. Same rule as the log.
@@ -609,6 +679,8 @@ impl OrgState {
                 if remover != device.person && !self.may_manage(&remover, &device.person) {
                     return Err(fail("only the same person or an admin can remove a device"));
                 }
+                let projects = self.entitled_projects(&device.person);
+                self.lose_access(&device.person, Some(&b.device), &projects);
                 self.former_devices.insert(b.device.clone(), device.person);
                 self.devices.remove(&b.device);
             }
@@ -729,7 +801,11 @@ impl OrgState {
                 if current == "owner" && b.role != "owner" && self.active_owners() == 1 {
                     return Err(fail("an organisation always keeps at least one owner"));
                 }
+                let before = self.entitled_projects(&b.person);
                 self.persons.get_mut(&b.person).unwrap().role = b.role;
+                // An admin who becomes a member loses admin read access to other projects.
+                let lost: Vec<String> = before.into_iter().filter(|p| !self.key_entitled(&b.person, p)).collect();
+                self.lose_access(&b.person, None, &lost);
             }
             "person.remove" => {
                 let b: PersonBody = serde_json::from_value(body).map_err(parse)?;
@@ -742,6 +818,8 @@ impl OrgState {
                 if target.state == "active" && target.role == "owner" && self.active_owners() == 1 {
                     return Err(fail("an organisation always keeps at least one owner"));
                 }
+                let projects = self.entitled_projects(&b.person);
+                self.lose_access(&b.person, None, &projects);
                 self.retire_person_keys(&b.person);
                 self.persons.get_mut(&b.person).unwrap().state = "removed".into();
                 let projects: Vec<String> = self.projects.keys().cloned().collect();
@@ -767,7 +845,10 @@ impl OrgState {
                 if self.projects.contains_key(&b.project) {
                     return Err(fail("project already exists"));
                 }
-                self.projects.insert(b.project, Project { creator: person.clone(), epoch: 1, key_commit: b.key_commit, members: BTreeMap::from([(person, "editor".into())]), name: b.name });
+                self.projects.insert(
+                    b.project,
+                    Project { creator: person.clone(), epoch: 1, commits: vec![b.key_commit.clone()], key_commit: b.key_commit, members: BTreeMap::from([(person, "editor".into())]), name: b.name, stale: false, lost: BTreeSet::new(), cutoffs: BTreeMap::new(), after: 0 },
+                );
             }
             "project.grant" => {
                 let b: GrantBody = serde_json::from_value(body).map_err(parse)?;
@@ -801,6 +882,44 @@ impl OrgState {
                 }
                 self.note_editors(&b.project);
                 self.projects.get_mut(&b.project).unwrap().members.remove(&b.person);
+                if !self.key_entitled(&b.person, &b.project) {
+                    self.lose_access(&b.person, None, std::slice::from_ref(&b.project));
+                }
+            }
+            "project.epoch" => {
+                let b: EpochBody = serde_json::from_value(body).map_err(parse)?;
+                let rotator = device_signer()?;
+                let p = self.projects.get(&b.project).ok_or(fail("unknown project"))?;
+                if !is_hex(&b.key_commit, 32) || b.after > (1u64 << 53) - 1 {
+                    return Err(fail("invalid project epoch"));
+                }
+                if b.epoch != p.epoch + 1 {
+                    return Err(fail("a new epoch must follow the project's current epoch"));
+                }
+                if b.key_commit == p.key_commit || p.commits.contains(&b.key_commit) {
+                    return Err(fail("a new epoch needs a new key"));
+                }
+                if b.after < p.after {
+                    return Err(fail("a new epoch cannot start before the previous one"));
+                }
+                if !self.may_rotate(&rotator, &b.project) {
+                    return Err(fail("only a project's editor (or an admin with read access) can change its key"));
+                }
+                // Devices that lost access and have not been let back in are cut off at `after`.
+                let cut: Vec<String> = p.lost.iter().filter(|d| !self.device_person(d).is_some_and(|person| self.key_entitled(person, &b.project))).cloned().collect();
+                let p = self.projects.get_mut(&b.project).unwrap();
+                for device in cut {
+                    p.cutoffs.entry(device).or_default().push((b.after, b.epoch));
+                }
+                if p.commits.is_empty() {
+                    p.commits.push(p.key_commit.clone());
+                }
+                p.commits.push(b.key_commit.clone());
+                p.epoch = b.epoch;
+                p.key_commit = b.key_commit;
+                p.after = b.after;
+                p.stale = false;
+                p.lost.clear();
             }
             _ => return Err(fail("unsupported membership event type")),
         }
@@ -1208,5 +1327,116 @@ mod tests {
         assert!(o.state.object_access(&ben_p, &project, false) && !o.state.object_access(&ben_p, &project, true));
         o.apply("person.remove", json!({"person":ben_p}), &owner.seed).unwrap();
         assert!(!o.state.object_access(&ben_p, &project, false));
+    }
+
+    fn rotate(o: &mut Org, by: &Dev, project: &str, epoch: u32, commit: u8, after: u64) -> Result<String> {
+        o.apply("project.epoch", json!({"project":project,"epoch":epoch,"keyCommit":hex(&[commit; 32]),"after":after}), &by.seed)
+    }
+    /// Owner (admin, editor of the project), Ben and Cat as editors.
+    fn three_editors(admin_read: bool) -> (Org, Dev, Dev, Dev, String) {
+        let (mut o, owner) = org("e2ee", admin_read);
+        let (ben, cat) = (dev(2), dev(3));
+        for (n, d) in [(2u8, &ben), (3, &cat)] {
+            let (invite, seed) = o.invite(&owner, n, "member", false, None).unwrap();
+            o.join(d, &invite, &seed).unwrap();
+        }
+        let project = o.project(&owner, 40);
+        for d in [&ben, &cat] {
+            o.apply("project.grant", json!({"project":project,"person":o.person(d),"role":"editor"}), &owner.seed).unwrap();
+        }
+        (o, owner, ben, cat, project)
+    }
+
+    #[test]
+    fn removal_makes_a_new_epoch_due_and_the_rotation_cuts_the_removed_devices_off() {
+        let (mut o, owner, ben, cat, project) = three_editors(false);
+        let other = o.project(&owner, 41);
+        assert!(!o.state.projects[&project].stale);
+        o.apply("person.remove", json!({"person":o.person(&cat)}), &owner.seed).unwrap();
+        // Cat could read `project` only: that project needs a new key, the other does not.
+        assert!(o.state.projects[&project].stale && !o.state.projects[&other].stale);
+        assert!(o.state.projects[&project].lost.contains(&cat.key));
+        // A removed person cannot rotate; a remaining editor can, under the next epoch only.
+        assert!(rotate(&mut o, &cat, &project, 2, 0x22, 5).is_err());
+        assert!(rotate(&mut o, &ben, &project, 3, 0x22, 5).is_err());
+        assert_eq!(rotate(&mut o, &ben, &project, 2, 40, 5).unwrap_err().0, "a new epoch needs a new key");
+        rotate(&mut o, &ben, &project, 2, 0x22, 5).unwrap();
+        let p = &o.state.projects[&project];
+        assert_eq!((p.epoch, p.stale, p.after), (2, false, 5));
+        assert!(p.lost.is_empty());
+        // Old epochs stay checkable for reading history.
+        assert_eq!(o.state.epoch_commit(&project, 1), Some(hex(&[40; 32]).as_str()));
+        assert_eq!(o.state.epoch_commit(&project, 2), Some(hex(&[0x22; 32]).as_str()));
+        assert_eq!(o.state.epoch_commit(&project, 3), None);
+        // Cat's entries above `after` under the old epoch are refused; earlier ones and the
+        // remaining editors' are not.
+        assert!(o.state.entry_cut_off(&project, &cat.key, 6, 1));
+        assert!(!o.state.entry_cut_off(&project, &cat.key, 5, 1));
+        assert!(!o.state.entry_cut_off(&project, &ben.key, 9, 1));
+        // A later rotation never goes back before the previous one.
+        assert_eq!(rotate(&mut o, &ben, &project, 3, 0x33, 4).unwrap_err().0, "a new epoch cannot start before the previous one");
+        rotate(&mut o, &owner, &project, 3, 0x33, 5).unwrap();
+        assert_eq!(o.state.projects[&project].commits.len(), 3);
+    }
+
+    #[test]
+    fn only_editors_and_admins_with_read_access_rotate() {
+        let (mut o, owner, ben, cat, project) = three_editors(false);
+        o.apply("project.grant", json!({"project":project,"person":o.person(&cat),"role":"viewer"}), &owner.seed).unwrap();
+        assert_eq!(rotate(&mut o, &cat, &project, 2, 0x22, 0).unwrap_err().0, "only a project's editor (or an admin with read access) can change its key");
+        // An admin who is not on the project rotates only while admin read access is on.
+        let (mut o, owner, ben2, _, _) = three_editors(true);
+        let bens = o.project(&ben2, 50);
+        rotate(&mut o, &owner, &bens, 2, 0x22, 0).unwrap();
+        let (mut o, owner, _, _, _) = three_editors(false);
+        let (invite, seed) = o.invite(&owner, 9, "member", false, None).unwrap();
+        let dan = dev(9);
+        o.join(&dan, &invite, &seed).unwrap();
+        let dans = o.project(&dan, 51);
+        assert!(rotate(&mut o, &owner, &dans, 2, 0x22, 0).is_err());
+        let _ = ben;
+    }
+
+    #[test]
+    fn concurrent_rotations_are_ordered_by_the_log_and_the_loser_is_refused() {
+        let (mut o, owner, ben, cat, project) = three_editors(false);
+        o.apply("person.remove", json!({"person":o.person(&cat)}), &owner.seed).unwrap();
+        // Both sign at the same head: the log takes one; the other no longer follows the head.
+        let first = o.event("project.epoch", json!({"project":project,"epoch":2,"keyCommit":hex(&[0x21; 32]),"after":3}), &owner.seed);
+        let second = o.event("project.epoch", json!({"project":project,"epoch":2,"keyCommit":hex(&[0x22; 32]),"after":3}), &ben.seed);
+        o.state.apply(&first, None).unwrap();
+        assert!(o.state.apply(&second, None).is_err());
+        // Signed again on the new head, the loser's epoch 2 is refused: epoch 2 already exists.
+        assert_eq!(rotate(&mut o, &ben, &project, 2, 0x22, 3).unwrap_err().0, "a new epoch must follow the project's current epoch");
+        assert_eq!(o.state.epoch_commit(&project, 2), Some(hex(&[0x21; 32]).as_str()));
+    }
+
+    #[test]
+    fn revocation_device_removal_and_demotion_make_rotation_due_for_exactly_who_lost_access() {
+        let (mut o, owner, ben, cat, project) = three_editors(true);
+        // Revoked and re-granted before the rotation: not cut off.
+        o.apply("project.revoke", json!({"project":project,"person":o.person(&ben)}), &owner.seed).unwrap();
+        assert!(o.state.projects[&project].stale);
+        o.apply("project.grant", json!({"project":project,"person":o.person(&ben),"role":"editor"}), &owner.seed).unwrap();
+        rotate(&mut o, &owner, &project, 2, 0x22, 1).unwrap();
+        assert!(o.state.projects[&project].cutoffs.is_empty());
+        // Removing one device of a person cuts off that device only.
+        let phone = dev(12);
+        let ben_p = o.person(&ben);
+        let proof = sign(&phone.seed, &device_proof_message(&o.id, &o.state.head, &ben_p, &phone.key, &phone.agreement));
+        o.apply("device.add", json!({"person":ben_p,"device":phone.key,"agreement":phone.agreement,"proof":proof}), &ben.seed).unwrap();
+        o.apply("device.remove", json!({"device":phone.key}), &ben.seed).unwrap();
+        rotate(&mut o, &ben, &project, 3, 0x33, 2).unwrap();
+        assert_eq!(o.state.projects[&project].cutoffs.keys().collect::<Vec<_>>(), vec![&phone.key]);
+        // An entry under the new key from a device let back in is accepted.
+        assert!(!o.state.entry_cut_off(&project, &phone.key, 9, 3));
+        // An admin demoted to member loses admin read access to projects they are not on.
+        let (invite, seed) = o.invite(&owner, 13, "admin", true, None).unwrap();
+        let eve = dev(13);
+        o.join(&eve, &invite, &seed).unwrap();
+        o.apply("person.approve", json!({"person":o.person(&eve),"role":"admin"}), &owner.seed).unwrap();
+        o.apply("person.role", json!({"person":o.person(&eve),"role":"member"}), &owner.seed).unwrap();
+        assert!(o.state.projects[&project].stale && o.state.projects[&project].lost.contains(&eve.key));
+        let _ = cat;
     }
 }

@@ -382,3 +382,104 @@ test('a service restored from an older backup gets the lost changes uploaded aga
   }finally{back.close();}
  }finally{engine?.close();await erase();await s.close();}
 });
+
+// --- Slice 7: epochs and rotation.
+
+const {newProjectKey,wrapProjectKey,wrapRecipients,openEntry:openLogEntry,entryCutOff}=await import('../web/org-crypto.js');
+/** An honest member's view of a project: every update it accepts and can decrypt, in log order. */
+async function replayAs(member,project,keys){
+ const doc=new Y.Doc(),state=await member.state();
+ for(const item of await member.log(project)){
+  if(item.header.kind!=='update'||!keys[item.header.epoch]||entryCutOff(state,project,item.header.device,item.seq,item.header.epoch))continue;
+  try{Y.applyUpdate(doc,openLogEntry(item.body,keys[item.header.epoch]).payload);}catch{}
+ }
+ return doc;
+}
+/** A raw member edits the project's text and appends the change under `epoch`. */
+async function editAs(member,project,{key,epoch,keys,lineage,text}){
+ const doc=await replayAs(member,project,keys),before=Y.encodeStateVector(doc),name=[...doc.share.keys()].find(k=>k.startsWith('text:'));
+ doc.getText(name).insert(0,text);
+ try{return await member.append({project,epoch,key,lineage,payload:Y.encodeStateAsUpdate(doc,before)});}finally{doc.destroy();}
+}
+const textOf=doc=>doc.getText([...doc.share.keys()].find(k=>k.startsWith('text:'))).toString();
+
+test('removing an editor rotates the key: new entries use an epoch the removed device cannot open, and its injected entries are refused',async()=>{
+ const s=await service({org:true});let engine;
+ try{
+  await erase();
+  const p=await localProject('Three editors','\\documentclass{article}\\begin{document}THREE\\end{document}');
+  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'three'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);
+  const [{project}]=await engine.projects();
+  const ben=await rawMember(await engine.createInvite({}),'Ben'),cat=await rawMember(await engine.createInvite({}),'Cat');
+  await engine.grant(project,ben.person,'editor');await engine.grant(project,cat.person,'editor');
+  const k1=await ben.key(project,1),catK1=await cat.key(project,1),lineage=await ben.lineage(project,k1);
+  // Three people edit under epoch 1.
+  assert.equal((await editAs(ben,project,{key:k1,epoch:1,keys:{1:k1},lineage,text:'% FROM_BEN\n'})).seq,2);
+  await editAs(cat,project,{key:catK1,epoch:1,keys:{1:catK1},lineage,text:'% FROM_CAT\n'});
+  await engine.push(p.id);await settled(engine,p.id);
+  let local=await storage.loadProject(p.id);assert.match(textOf(local),/FROM_CAT[\s\S]*FROM_BEN|FROM_BEN[\s\S]*FROM_CAT/);local.destroy();
+  // Cat is removed. Ana's app creates epoch 2 at once, wrapped to the remaining people only.
+  await engine.removePerson(cat.person);
+  assert.equal(await s.sql(`SELECT epoch FROM projects WHERE project='${project}'`),'2');
+  const event=JSON.parse(await s.sql("SELECT raw FROM org_events WHERE raw LIKE '%project.epoch%'"));
+  assert.equal(event.body.after,3);
+  assert.equal(await s.sql(`SELECT count(*) FROM wraps WHERE epoch=2 AND recipient='${cat.agreement}'`),'0');
+  const k2=await ben.key(project,2);assert(k2,'Ben has no key for epoch 2');
+  // The next entry uses epoch 2: Cat's keys cannot open it, Ben's can.
+  await p.edit(doc=>doc.getText([...doc.share.keys()].find(k=>k.startsWith('text:'))).insert(0,'% AFTER_REMOVAL\n'));
+  await engine.push(p.id);await settled(engine,p.id);
+  const last=(await ben.log(project)).at(-1);
+  assert.equal(last.header.epoch,2);
+  assert.throws(()=>openLogEntry(last.body,catK1),/could not be decrypted/);
+  assert.match(new TextDecoder().decode(openLogEntry(last.body,k2).payload),/AFTER_REMOVAL/);
+  await assert.rejects(cat.client.wraps(cat.org));
+  // The service refuses new epoch-1 entries; Ben writes under epoch 2.
+  await assert.rejects(editAs(ben,project,{key:k1,epoch:1,keys:{1:k1,2:k2},lineage,text:'% STALE\n'}),/epoch/);
+  // A misbehaving service injects Cat's later writes: under her old key, and under a key she
+  // made up for the new epoch. Every reader refuses both and keeps syncing.
+  // (Cat kept what she had: the epoch-1 state, read here through Ben since her session is closed.)
+  const catDoc=await replayAs(ben,project,{1:k1}),before=Y.encodeStateVector(catDoc);catDoc.getText([...catDoc.share.keys()].find(k=>k.startsWith('text:'))).insert(0,'% CAT_INJECTED\n');
+  const injected=Y.encodeStateAsUpdate(catDoc,before);catDoc.destroy();
+  await inject(s,project,await cat.seal({project,epoch:1,key:catK1,lineage,payload:injected,seq:2}),{device:cat.device,clientSeq:2,epoch:1});
+  await inject(s,project,await cat.seal({project,epoch:2,key:crypto.getRandomValues(new Uint8Array(32)),lineage,payload:injected,seq:3}),{device:cat.device,clientSeq:3,epoch:2});
+  await editAs(ben,project,{key:k2,epoch:2,keys:{1:k1,2:k2},lineage,text:'% BEN_AFTER\n'});
+  await engine.push(p.id);await settled(engine,p.id);
+  local=await storage.loadProject(p.id);
+  try{assert.match(textOf(local),/BEN_AFTER/);assert.doesNotMatch(textOf(local),/CAT_INJECTED/);}finally{local.destroy();}
+  assert.match(engine.status(p.id).message,/2 changes from removed devices/);
+ }finally{engine?.close();await erase();await s.close();}
+});
+
+test('a member whose change waited offline across a rotation re-encrypts it under the new epoch',async()=>{
+ const s=await service({org:true}),net=lossy();let engine;
+ try{
+  await erase();
+  const p=await localProject('Offline outbox','\\documentclass{article}\\begin{document}OUTBOX\\end{document}');
+  engine=orgBackup({fetchImpl:net.fetch});await engine.connect(await orgCreate(s,'outbox'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);
+  const [{project}]=await engine.projects();
+  const ben=await rawMember(await engine.createInvite({}),'Ben'),cat=await rawMember(await engine.createInvite({}),'Cat');
+  await engine.grant(project,ben.person,'editor');await engine.grant(project,cat.person,'editor');await engine.setRole(ben.person,'admin');
+  // Ana's change is sealed under epoch 1 and kept in her outbox: its upload never arrives.
+  net.fail=(url,init)=>init?.method==='POST'&&/\/log$/.test(url);
+  await p.edit(doc=>doc.getText([...doc.share.keys()].find(k=>k.startsWith('text:'))).insert(0,'% WRITTEN_OFFLINE\n'));
+  await engine.push(p.id).catch(()=>{});
+  assert.equal(engine.status(p.id).state,'waiting');
+  // Meanwhile Ben (an admin) removes Cat and rotates the project to epoch 2, wrapped to the others.
+  await ben.post('person.remove',{person:cat.person});
+  const {key:k2,commit}=newProjectKey(),head=Number(await s.sql(`SELECT head_seq FROM projects WHERE project='${project}'`));
+  await ben.post('project.epoch',{project,epoch:2,keyCommit:commit,after:head});
+  const state=await ben.state(),wraps=[];
+  for(const recipient of wrapRecipients(state,project))wraps.push(await wrapProjectKey({org:ben.org,project,epoch:2,recipient,projectKey:k2},ben.seed));
+  await ben.client.putWraps(ben.org,wraps);
+  // Back online: the outbox entry is refused (409 epoch), re-encrypted under epoch 2 with the
+  // same client sequence, and accepted.
+  net.fail=null;
+  await engine.push(p.id);await settled(engine,p.id);
+  const mine=(await ben.log(project)).filter(item=>item.header.device!==ben.device&&item.header.epoch===2);
+  assert.equal(mine.length,1);
+  assert.match(new TextDecoder().decode(openLogEntry(mine[0].body,k2).payload),/WRITTEN_OFFLINE/);
+  assert.equal(await s.sql(`SELECT count(*) FROM entries WHERE project='${project}' AND epoch=1 AND seq>${head}`),'0');
+ }finally{engine?.close();await erase();await s.close();}
+});

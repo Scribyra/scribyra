@@ -149,10 +149,17 @@ rules the browsers use (`crates/core/src/membership.rs`).
 | `GET /v1/orgs/{org}/info` | Anyone | Whether the org has a genesis, its log head and length, its sealed name, and the service key for managed mode |
 | `GET`/`POST /v1/orgs/{org}/events` | Members; joins and join requests without a session | The signed membership log (paged, with its length) |
 | `GET`/`PUT /v1/orgs/{org}/keys`, `POST /v1/orgs/{org}/keys/report` | Member devices | Key wraps (one per sender), and reporting a wrap that does not open |
-| `GET /v1/orgs/{org}/pending` | Member devices | Entitled keys that still lack a wrap, for the caller's projects and the directory |
+| `GET /v1/orgs/{org}/pending` | Member devices | Entitled keys that still lack a wrap, for the caller's projects (every epoch, so members keep earlier keys to read history) and the directory |
 | `GET /v1/orgs/{org}/heads?since=&wait=` | Member devices | Long-poll notice of membership and project head changes (at most 25 s) |
 | `GET`/`POST /v1/orgs/{org}/device-links`, `POST /v1/orgs/{org}/device-links/{link}`, `POST /v1/orgs/{org}/device-links/sso` | A device of the person; the new browser | One-time device links (15 minutes, four open per person) and SSO device requests |
-| `GET`/`POST /v1/projects/{project}/log` | Project members (append: editors only) | Encrypted log entries, read to the `Scribyra-Log-Head` header |
+| `GET`/`POST /v1/projects/{project}/log` | Project members (append: editors only) | Encrypted log entries, read to the `Scribyra-Log-Head` header. After a `project.epoch` event the service accepts only the new epoch: other new entries get `409 {"error":"epoch"}` (the client re-encrypts), identical repeats of entries it holds still get `200` |
+| `GET`/`PUT /v1/projects/{project}/objects/{id}?epoch=` | Project members (upload: editors only, under the current epoch) | Encrypted assets and history objects under keyed IDs (64 hex, an HMAC the service cannot invert). Uploads are write-once per ID (`204` for identical bytes, `409` for other bytes), at most `object_bytes`, stored content-addressed under the object namespace `p-<project>` and charged to the global, organisation (`org_bytes`) and project (`namespace_bytes`, `namespace_objects`; every ID counts) quotas, `507` when full. Downloads are checked against the stored ciphertext hash (`500` if the stored copy is damaged; an identical re-upload repairs it) |
+
+Project epochs: a signed `project.epoch {project, epoch, keyCommit, after}` event (from an
+editor, or an admin while admin read access is on) is appended only if `after` does not reach
+past the project's log head; the service records the head at that moment in
+`projects.epoch_cutover`. Nothing old is deleted: earlier entries, objects and wraps stay so
+members can read the history.
 
 ### Access and limits
 

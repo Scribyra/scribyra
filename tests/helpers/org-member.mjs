@@ -32,10 +32,14 @@ export async function rawMember(link,name='Member'){
   async log(project){const out=[];for await(const item of client.log(project,0))out.push({...item,...verifyEntryBody(item.body)});return out;},
   /** The project's lineage, read from its first entry. */
   async lineage(project,key){const [first]=await member.log(project);return openEntry(first.body,key).meta.lineage;},
-  async seal({project,epoch,key,payload,kind='update',lineage,seq=++clientSeq}){
-   return sealEntry({projectKey:key,org,project,epoch,clientSeq:seq,lineage,schema:8,person,payload,kind},seed);
+  async seal({project,epoch,key,payload,kind='update',lineage,seq}){
+   return sealEntry({projectKey:key,org,project,epoch,clientSeq:seq??++clientSeq,lineage,schema:8,person,payload,kind},seed);
   },
-  async append(args){const sealed=await member.seal(args);return client.append(args.project,sealed.body);},
+  /** Appends the next entry; a refused one does not use up its client sequence. */
+  async append(args){
+   const seq=args.seq??clientSeq+1,sealed=await member.seal({...args,seq});
+   const ack=await client.append(args.project,sealed.body);clientSeq=Math.max(clientSeq,seq);return ack;
+  },
   async post(type,body){const state=await member.state();return client.postEvent(org,await signEvent({org,prev:state.head,type,body},seed));},
  };
  return member;

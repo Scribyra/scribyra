@@ -157,7 +157,7 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
   const inviteRole=select('Invite as',[['member','Member'],['admin','Admin']],'member'),inviteProject=select('Share a project with them',[['','No project'],...orgProjects.filter(p=>p.role==='editor').map(p=>[p.project,p.name])],''),inviteProjectRole=select('Their role on it',[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']],'editor');
   const inviteApproval=check('Ask me to approve them',false),inviteSso=check('They must sign in with the organisation',!!policy?.required),inviteEmail=field('Their email at the organisation (optional)','','email');
   const inviteParts=[people];
-  if(admin)inviteParts.push(element('p','Removing someone tells the service to stop their access at once. What they already downloaded stays with them, and projects they could read are not re-keyed yet.','org-help'));
+  if(admin)inviteParts.push(element('p','Removing someone tells the service to stop their access at once, and the projects they could read get a new key before anyone writes to them again, so nothing written after the removal is readable with the keys they kept. What they already downloaded stays with them.','org-help'));
   inviteParts.push(inviteRole.row,inviteProject.row,inviteProjectRole.row,inviteApproval.row);
   if(policy?.enabled)inviteParts.push(inviteSso.row,inviteEmail.row);
   inviteParts.push(actions(button('Create invitation link',async()=>{

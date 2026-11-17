@@ -263,10 +263,23 @@ export async function unwrapProjectKey(state,raw,recipient){
  try{projectKey=org_open(key,unhex(wrap.nonce,24),encoder.encode(context),unhex(wrap.ct,48));}
  catch{throw Error('A project key could not be opened: it was altered or not meant for this key.');}
  finally{key.fill(0);shared.fill(0);}
- // The directory key is checked against the genesis commitment; a project key against its epoch's.
- const commit=directory?state.directoryCommit:state.projects[wrap.project]?.keyCommit,epoch=directory?1:state.projects[wrap.project]?.epoch;
- if(!commit||wrap.epoch!==epoch||org_key_commit(projectKey)!==commit){projectKey.fill(0);throw Error('A key does not match the key it was created with.');}
+ // The directory key is checked against the genesis commitment; a project key against the
+ // commitment of its own epoch (earlier epochs stay readable for the history).
+ const commit=directory?(wrap.epoch===1?state.directoryCommit:null):epochCommit(state,wrap.project,wrap.epoch);
+ if(!commit||org_key_commit(projectKey)!==commit){projectKey.fill(0);throw Error('A key does not match the key it was created with.');}
  return{project:wrap.project,epoch:wrap.epoch,key:projectKey};
+}
+
+/** The key commitment of one epoch of a project, from the membership state. */
+export function epochCommit(state,project,epoch){
+ const p=state.projects?.[project];if(!p||!Number.isSafeInteger(epoch)||epoch<1||epoch>p.epoch)return null;
+ return p.commits?.[epoch-1]??(epoch===p.epoch?p.keyCommit:null);
+}
+/** Whether readers refuse an entry: a rotation cut its device off, it sits above that rotation's
+ * `after`, and it is under an epoch older than the one the rotation created (the core's
+ * `entry_cut_off`, read from the replayed state). */
+export function entryCutOff(state,project,device,seq,epoch){
+ return(state.projects?.[project]?.cutoffs?.[device]||[]).some(([after,cut])=>seq>after&&epoch<cut);
 }
 
 // --- Log entries
@@ -294,7 +307,7 @@ export function openEntry(body,projectKey){
  const {sig,...unsigned}=header,updateKey=org_project_subkey(projectKey,'update');
  let plain;
  try{plain=org_open(updateKey,ciphertext.subarray(0,24),encoder.encode(canonical(unsigned)),ciphertext.subarray(24));}
- catch{throw Error('A backed-up change could not be decrypted: it was altered or uses another key.');}
+ catch{throw Object.assign(Error('A backed-up change could not be decrypted: it was altered or uses another key.'),{undecryptable:true});}
  finally{updateKey.fill(0);}
  const metaLength=new DataView(plain.buffer,plain.byteOffset,4).getUint32(0);
  if(metaLength>1024||plain.length<4+metaLength)throw Error('A backed-up change is malformed.');

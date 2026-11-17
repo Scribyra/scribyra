@@ -504,6 +504,22 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
     }
     let result = async {
         let mut tx = o.store.pool.begin().await?;
+        // A new project epoch takes effect at the log's current head, under the project row's
+        // lock, so no append races it; `after` may not reach past what the log holds.
+        if kind == "project.epoch" {
+            let project = value["body"]["project"].as_str().unwrap_or_default();
+            let after = value["body"]["after"].as_u64().unwrap_or(u64::MAX);
+            let head: Option<i64> = sqlx::query_scalar("SELECT head_seq FROM projects WHERE project = $1 AND org = $2 FOR UPDATE").bind(project).bind(&org).fetch_optional(&mut *tx).await?;
+            match head {
+                Some(head) if after <= head as u64 => {
+                    sqlx::query("UPDATE projects SET epoch = $2, epoch_cutover = head_seq WHERE project = $1").bind(project).bind(value["body"]["epoch"].as_i64().unwrap_or(0) as i32).execute(&mut *tx).await?;
+                }
+                _ => {
+                    tx.rollback().await?;
+                    return Ok(Err(error(StatusCode::BAD_REQUEST, "a new epoch cannot start after the log's head")));
+                }
+            }
+        }
         sqlx::query("INSERT INTO org_events (org, seq, hash, raw) VALUES ($1, $2, $3, $4)")
             .bind(&org)
             .bind(next.count as i64)
@@ -525,13 +541,17 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
                 .execute(&mut *tx)
                 .await?;
         }
-        tx.commit().await
+        tx.commit().await.map(Ok)
     }
     .await;
-    if result.is_err() {
-        // The commit may have happened; reload from the database next time.
-        *guard = None;
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    match result {
+        Ok(Ok(())) => {}
+        Ok(Err(refusal)) => return refusal,
+        Err(_) => {
+            // The commit may have happened; reload from the database next time.
+            *guard = None;
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
     }
     let seq = next.count;
     // Removed people and devices lose their sessions at once.
@@ -739,7 +759,9 @@ async fn append(State(o): State<Shared>, Path(project): Path<String>, headers: H
     if header.org != session.org || header.project != project || header.device != session.key {
         return error(StatusCode::FORBIDDEN, "entries must be signed by this device for this project");
     }
-    if header.epoch != epoch {
+    // An epoch the membership log does not have yet is refused here; an older one under the
+    // project row's lock below, where an identical repeat of an entry already held still passes.
+    if header.epoch > epoch {
         return error(StatusCode::CONFLICT, "epoch");
     }
     if let Err(e) = core::verify_entry(&header, ciphertext) {
@@ -778,14 +800,14 @@ async fn record_locked(o: &Orgs, org: &str, project: &str, header: &core::EntryH
     let size = bytes.len() as i64;
     let mut tx = o.store.pool.begin().await.map_err(internal)?;
     // The project row serialises appends to one log; quotas lock global then org.
-    let head = sqlx::query("SELECT head_seq, head_chain FROM projects WHERE project = $1 AND org = $2 FOR UPDATE")
+    let head = sqlx::query("SELECT head_seq, head_chain, epoch FROM projects WHERE project = $1 AND org = $2 FOR UPDATE")
         .bind(project)
         .bind(org)
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal)?
         .ok_or_else(|| error(StatusCode::NOT_FOUND, "unknown project"))?;
-    let (head_seq, head_chain): (i64, String) = (head.get(0), head.get(1));
+    let (head_seq, head_chain, current_epoch): (i64, String, i32) = (head.get(0), head.get(1), head.get(2));
     let existing = sqlx::query("SELECT seq, chain, entry_hash FROM entries WHERE project = $1 AND device = $2 AND client_seq = $3")
         .bind(project)
         .bind(&header.device)
@@ -801,6 +823,11 @@ async fn record_locked(o: &Orgs, org: &str, project: &str, header: &core::EntryH
         } else {
             Err(error(StatusCode::CONFLICT, "different entry at this client sequence"))
         };
+    }
+    // After a cutover only the new epoch is accepted (409 epoch): the client re-encrypts.
+    if header.epoch as i32 != current_epoch {
+        let _ = tx.rollback().await;
+        return Err(error(StatusCode::CONFLICT, "epoch"));
     }
     let last: Option<i64> = sqlx::query_scalar("SELECT max(client_seq) FROM entries WHERE project = $1 AND device = $2")
         .bind(project)
@@ -1086,7 +1113,11 @@ async fn pending(State(o): State<Shared>, Path(org): Path<String>, headers: Head
         std::iter::once(org.clone())
             .chain(state.projects.keys().cloned())
             .filter(|project| state.may_wrap(&person, project))
-            .filter_map(|project| state.key_epoch(&project).map(|epoch| (project.clone(), epoch, state.wrap_recipients(&project))))
+            // Every epoch: members keep (and new members get) earlier keys to read the history.
+            .flat_map(|project| {
+                let recipients = state.wrap_recipients(&project);
+                (1..=state.key_epoch(&project).unwrap_or(0)).map(move |epoch| (project.clone(), epoch, recipients.clone()))
+            })
             .collect()
     };
     let rows = match sqlx::query("SELECT project, epoch, recipient FROM wraps WHERE org = $1").bind(&org).fetch_all(&o.store.pool).await {

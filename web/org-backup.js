@@ -24,7 +24,7 @@ import {
  sealName,openName,sealProjectName,openProjectName,wrapRecipients,
  parseInvite,formatInvite,inviteSeed,inviteMessage,formatDeviceLink,parseDeviceLink,linkSeed,deviceRequestMessage,linkCode,
  formatOrgLink,parseOrgLink,newDeviceCode,deviceCodeMac,signInUrl,keyCommit,
- sealObject,openObjectPart,objectParts,objectVariants,blobrefPayload,checkBlobref,
+ sealObject,openObjectPart,objectParts,objectVariants,blobrefPayload,checkBlobref,entryCutOff,
 } from './org-crypto.js';
 import {org_ed25519_public,org_ed25519_sign,org_ed25519_verify,org_object_id,blob_hash,history_validate_manifest} from './pkg/scribyra_app.js';
 
@@ -433,17 +433,36 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   if(!editorEver(state))state=await refreshMembership();
   if(header.org!==connection.org||header.project!==cursor.project||!editorEver(state))
    throw fault('A change was not written by an editor’s device. Sync paused.');
+  const next={...cursor,seq:item.seq,chain,header,hash,refused:false};
+  // A device a rotation cut off (its person was removed, or it lost access) is refused above the
+  // `after` the rotating client signed, whatever position the service gave it: a service that
+  // colludes with a removed member cannot get their later writes accepted. Every honest reader
+  // decides the same from the entry, its position and the membership log.
+  if(entryCutOff(state,cursor.project,header.device,item.seq,header.epoch)){
+   if(header.clientSeq===(cursor.devices[header.device]||0)+1)next.devices={...cursor.devices,[header.device]:header.clientSeq};
+   return{...next,refused:true};
+  }
   if(header.clientSeq!==(cursor.devices[header.device]||0)+1)throw fault('A change was replayed or is missing. Sync paused.');
-  return{...cursor,seq:item.seq,chain,devices:{...cursor.devices,[header.device]:header.clientSeq},header,hash};
+  return{...next,devices:{...cursor.devices,[header.device]:header.clientSeq}};
  }
- /** Reads the log from `cursor` to the head, verifying every entry; `each` sees each verified entry. */
+ /**
+  * Reads the log from `cursor` to the head, verifying every entry; `each` sees each accepted
+  * entry. Entries from cut-off devices, and entries that do not decrypt under their epoch's key,
+  * are skipped and counted in `refusedCount` (never retried: every reader refuses the same).
+  */
  async function readVerified(cursor,each=()=>{}){
+  let refused=cursor.refusedCount||0;
   for await(const item of await authed(async()=>client.log(cursor.project,cursor.seq))){
-   cursor=await verifyItem(cursor,item);await each(item,cursor.header,cursor.hash);
+   cursor=await verifyItem(cursor,item);
+   if(cursor.refused)refused++;
+   else{
+    try{await each(item,cursor.header,cursor.hash);}
+    catch(error){if(!error.undecryptable)throw error;refused++;}
+   }
    // Large entries take a while to decrypt: let the page (and its connections) breathe.
    await new Promise(resolve=>setTimeout(resolve,0));
   }
-  return cursor;
+  return{...cursor,refusedCount:refused};
  }
  function openChecked(item,header,key,lineage){
   const opened=openEntry(item.body,key);
@@ -522,7 +541,8 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     }finally{doc.destroy();}
    }
   }finally{ring.wipe();}
-  const current={...await db.get('links',link.localId),seq:cursor.seq,chain:cursor.chain,devices:cursor.devices,vector,pushedSequence};
+  const stored=await db.get('links',link.localId);
+  const current={...stored,seq:cursor.seq,chain:cursor.chain,devices:cursor.devices,vector,pushedSequence,refused:(stored?.refused||0)+(cursor.refusedCount||0)};
   await db.put('links',current);
   if(payloads.length)onRemote(link.localId);
   return current;
@@ -544,7 +564,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   catch(error){
    if(error instanceof ServiceError&&error.status===409){
     if(/client sequence/.test(error.message))return{rollback:true};
-    if(/epoch/.test(error.message))throw fault('This project’s key changed. Sync paused until this version of Scribyra can re-encrypt.');
+    if(/\(epoch\)/.test(error.message))return{epochChanged:true};
     throw fault('The service holds a different change at this position. Sync paused for this project.');
    }
    if(error instanceof ServiceError&&error.status===403)throw Object.assign(fault('You can no longer change this project on the service. Your changes stay on this device.'),{forbidden:true});
@@ -566,6 +586,108 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   await tx.objectStore('links').put(current);await tx.objectStore('outbox').delete([link.localId,entry.clientSeq]);await tx.done;
   return current;
  }
+ /**
+  * The project's key changed while this entry waited (the service answered 409 epoch): it is
+  * opened with its old key and sealed again under the current epoch with the same client
+  * sequence, since the service never accepted it. Files a blobref lists are uploaded again under
+  * the new epoch where this browser still has them. The outbox keeps the new bytes first.
+  */
+ async function reseal(link,entry){
+  await refreshMembership();
+  await rotateIfDue(link.project,link);
+  const epoch=connection.state.projects[link.project]?.epoch,{header}=verifyEntryBody(entry.body);
+  if(!epoch||header.epoch>=epoch)throw Error('The service refused this change’s key, but this browser knows no newer one yet. Retrying shortly.');
+  const ring=keyRing(link.project);
+  try{
+   const opened=openEntry(entry.body,await ring.need(header.epoch)),key=await ring.need(epoch);
+   let payload=opened.payload,refs=[];
+   if(header.kind==='blobref'){
+    const listed=checkBlobref(payload).objects,local=await storage.readStoredBytes({blobs:listed.filter(o=>o.kind==='asset').map(o=>o.hash),objects:listed.filter(o=>o.kind==='history').map(o=>o.hash)});
+    const wanted=listed.map(o=>({kind:o.kind,hash:o.hash,bytes:(o.kind==='asset'?local.blobs:local.objects).get(o.hash)})).filter(o=>o.bytes&&blob_hash(o.bytes)===o.hash);
+    refs=await uploadObjects(link.project,epoch,key,wanted);
+    const moved=new Set(refs.map(o=>o.kind+o.hash));
+    payload=blobrefPayload([...refs,...listed.filter(o=>!moved.has(o.kind+o.hash))]);
+   }
+   const sealed=await sealEntry({projectKey:key,org:connection.org,project:link.project,epoch,clientSeq:header.clientSeq,lineage:opened.meta.lineage,schema:opened.meta.schema,person:opened.meta.person,payload,kind:header.kind},await deviceIdentity());
+   const next={...entry,body:sealed.body,headerRaw:sealed.headerRaw,ciphertext:sealed.ciphertext};
+   const tx=db.transaction(['outbox','objects'],'readwrite');
+   await tx.objectStore('outbox').put(next);await noteObjects(refs,link.project,tx.objectStore('objects'),{confirmed:true});await tx.done;
+   return next;
+  }finally{ring.wipe();}
+ }
+ /** Sends one entry; one that waited across a key change is re-encrypted and sent again. */
+ async function deliver(link,entry){
+  let sent=await send(link,entry);
+  if(sent.epochChanged){
+   const resealed=await reseal(link,entry);
+   sent=await send(await db.get('links',link.localId),resealed);
+   if(sent.epochChanged)throw Error('This project’s key changed again while sending. Retrying shortly.');
+  }
+  return sent;
+ }
+ const mayRotate=project=>{
+  const s=connection.state,me=s.persons[connection.person],p=s.projects[project];
+  return!!p&&me?.state==='active'&&(p.members[connection.person]==='editor'||(s.adminRead&&['owner','admin'].includes(me.role)));
+ };
+ /** A rotation whose answer was lost: keep its key if the log took it, discard it otherwise. */
+ async function settleRotation(project){
+  const pending=connection.pendingEpochs?.[project];if(!pending)return;
+  const p=connection.state.projects[project];
+  if(p&&p.epoch>=pending.epoch){
+   const key=await openAtRest(connection.storageKey,pending.sealed,keyContext(connection.org,project,pending.epoch));
+   try{if(p.commits?.[pending.epoch-1]===pending.commit&&!(await hasKey(project,pending.epoch)))await storeKey(project,pending.epoch,key);}finally{key.fill(0);}
+   delete connection.pendingEpochs[project];await saveConnection();
+  }
+ }
+ /**
+  * Creates the project's next epoch when someone lost access since the current one began (the
+  * membership log marks it stale), before this browser writes anything more: a new key,
+  * committed in a signed project.epoch whose `after` is the last log position this browser
+  * verified, then wrapped to every remaining entitled key. Concurrent rotations are ordered by
+  * the log; the loser discards its key. Returns whether the epoch changed.
+  */
+ async function rotateIfDue(project,link=null){
+  await settleRotation(project);
+  if(!connection.state.projects[project]?.stale||!mayRotate(project))return false;
+  return withLock(`scribyra:org-rotate:${project}`,async()=>{
+   await refreshMembership();await settleRotation(project);
+   const p=connection.state.projects[project];
+   if(!p?.stale||!mayRotate(project)||!(await hasKey(project,p.epoch)))return false;
+   const after=link?(await pull(link)).seq:(await readVerified({project,seq:0,chain:project,devices:{}})).seq;
+   const epoch=p.epoch+1;
+   let pending=connection.pendingEpochs?.[project];
+   if(pending?.epoch!==epoch){
+    const {key,commit}=newProjectKey();
+    try{pending={epoch,commit,sealed:await sealAtRest(connection.storageKey,key,keyContext(connection.org,project,epoch))};}finally{key.fill(0);}
+    connection.pendingEpochs={...connection.pendingEpochs,[project]:pending};await saveConnection();
+   }
+   try{
+    await post('project.epoch',()=>{
+     const now=connection.state.projects[project];
+     if(now.epoch>=epoch||!now.stale)throw Object.assign(Error('Another member changed this project’s key first.'),{superseded:true});
+     return{project,epoch,keyCommit:pending.commit,after:Math.max(after,now.after||0)};
+    });
+   }catch(error){
+    // Lost answers and lost races alike: the log decides whose key this epoch is.
+    await refreshMembership().catch(()=>{});
+    if(!error.superseded&&connection.state.projects[project]?.epoch<epoch)throw error;
+   }
+   await settleRotation(project);
+   if(connection.state.projects[project]?.commits?.[epoch-1]!==pending.commit)return true;
+   await fulfilPending().catch(()=>{});
+   return true;
+  });
+ }
+ /** After this browser removed someone: rotate the projects it can rotate now; linked ones rotate in their own queue. */
+ async function rotateStale(){
+  const links=new Map((await db.getAll('links')).map(l=>[l.project,l]));
+  for(const [project,p] of Object.entries(connection.state.projects)){
+   if(!p.stale||!mayRotate(project))continue;
+   const link=links.get(project);
+   if(link)await push(link.localId).catch(()=>{});
+   else await rotateIfDue(project).catch(()=>{});
+  }
+ }
  /** Creates the project on the service once, even across retries and crashes (no orphans). */
  async function ensureCreated(link){
   if(link.created!==false)return link;
@@ -583,12 +705,16 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   if(me()?.state==='removed'){setStatus(localId,'removed','You were removed from the organisation. This project stays on this device.');return;}
   setStatus(localId,'backing-up');
   link=await ensureCreated(link);
+  // Membership first (a removal or a new epoch changes what this browser accepts and writes).
+  await refreshMembership();
   try{link=await pull(link);}
   catch(error){if(!error.rollback)throw error;link=await recoverRollback(link);}
   const myRole=role(link.project);
   if(myRole!=='editor'){attempts.delete(localId);setStatus(localId,myRole?'read-only':'removed',myRole?`Your role on this project is ${myRole}: what you change stays on this device.`:'This project is no longer shared with you. It stays on this device.');return;}
+  // Someone lost access: a new key first, before anything new is written.
+  if(await rotateIfDue(link.project,link))link=await db.get('links',localId);
   for(const entry of (await db.getAll('outbox')).filter(e=>e.localId===localId).sort((a,b)=>a.clientSeq-b.clientSeq)){
-   const sent=await send(link,entry);
+   const sent=await deliver(link,entry);
    if(sent.rollback){link=await recoverRollback(link);break;}
    link=sent;
   }
@@ -623,7 +749,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     await tx.objectStore('links').put({...link,clientSeq});await tx.done;
     let current={...link,clientSeq};
     for(const entry of entries){
-     const sent=await send(current,entry);
+     const sent=await deliver(current,entry);
      if(sent.rollback){await recoverRollback(link);throw Error('The service lost recent changes. Re-uploading from this device.');}
      current=sent;
     }
@@ -631,7 +757,9 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   }
   // Named versions from other devices bring their history objects along when they can.
   await syncHistory(link).catch(()=>{});
-  attempts.delete(localId);setStatus(localId,live?'synced':'backed-up');
+  attempts.delete(localId);
+  const refusedCount=(await db.get('links',localId))?.refused||0;
+  setStatus(localId,live?'synced':'backed-up',refusedCount?`${refusedCount===1?'1 change':refusedCount+' changes'} from removed devices (or that did not decrypt) ${refusedCount===1?'was':'were'} refused.`:'');
  }
  async function push(localId){
   return queue(localId,async()=>{
@@ -961,10 +1089,10 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   },
   async revokeInvite(invite){await load();await post('invite.revoke',()=>({invite}));},
   async approve(person,orgRole='member'){await load();await post('person.approve',()=>({person,role:orgRole}));await fulfilPending().catch(()=>{});},
-  async setRole(person,orgRole){await load();await post('person.role',()=>({person,role:orgRole}));await fulfilPending().catch(()=>{});},
-  async removePerson(person){await load();await post('person.remove',()=>({person}));},
+  async setRole(person,orgRole){await load();await post('person.role',()=>({person,role:orgRole}));await fulfilPending().catch(()=>{});await rotateStale();},
+  async removePerson(person){await load();await post('person.remove',()=>({person}));await rotateStale();},
   async grant(project,person,projectRole){await load();await post('project.grant',()=>({project,person,role:projectRole}));await fulfilPending();},
-  async revoke(project,person){await load();await post('project.revoke',()=>({project,person}));},
+  async revoke(project,person){await load();await post('project.revoke',()=>({project,person}));await rotateStale();},
   /** The org link (no secret): where people sign in with the organisation's SSO. */
   async orgLink(){await load();return formatOrgLink(appOrigin,{service:connection.service,org:connection.org,genesis:connection.state.genesis});},
   async ssoPolicy(){await load();return client.ssoPolicy(connection.org).catch(()=>({enabled:false}));},
@@ -1119,7 +1247,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    if(connection.deviceLinks?.[request.link]){delete connection.deviceLinks[request.link];await saveConnection();}
    await fulfilPending();
   },
-  async removeDevice(device){await load();await post('device.remove',()=>({device}));},
+  async removeDevice(device){await load();await post('device.remove',()=>({device}));await rotateStale();},
   /** On the new device: answers a device link and shows the code to compare. */
   async acceptDeviceLink(text){
    if(orgConnected())throw Error('This browser is already connected to a service.');
