@@ -324,6 +324,42 @@ test.describe('History view',()=>{
   const toggle=panel.getByRole('button',{name:'Versions',exact:true});await toggle.click();const first=panel.getByRole('option').first();await expect(first).toBeFocused({timeout:5000});await page.keyboard.press('Escape');await expect(first).toBeHidden();await expect(toggle).toBeFocused();await expect(panel).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
  });
+ // Compiling shows a PDF; opening History hides it. The hidden viewer used to report a negative
+ // zoom, the interface dropped every later state update, and History kept showing stale rows.
+ const compile=async page=>{const button=page.getByRole('button',{name:'Compile',exact:true});await button.click();await expect(button).toHaveAttribute('data-state','idle',{timeout:300000});expect(await page.evaluate(()=>window.scribyra.lastCompile?.success)).toBe(true);await expect(page.locator('#zoom-label')).toHaveText(/^[1-9][0-9]*%$/);};
+ const edit=async(page,line)=>{await page.locator('.cm-content').click();await page.keyboard.press('Control+Home');await page.keyboard.type(line+'\n');await expect(page.locator('.save-indicator')).toHaveText('Saved locally');};
+ const stored=page=>page.evaluate(async()=>{
+  const db=await new Promise((resolve,reject)=>{const req=indexedDB.open('scribyra-v1');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+  const all=store=>new Promise((resolve,reject)=>{const req=db.transaction(store).objectStore(store).getAll();req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});
+  try{const [projects,journal,checkpoints,catalog,objects]=await Promise.all(['projects','journal','checkpoints','historyCatalog','historyObjects'].map(all)),hashes=new Set(objects.map(object=>object.hash));
+   return{projects:projects.map(p=>[p.id,p.sequence,p.update.length,JSON.stringify(p.history)]),journal:journal.map(r=>[r.sequence,r.from??r.sequence,!!r.point,r.checkpointId??null,r.update.length]),checkpoints:checkpoints.map(r=>[r.sequence,!!r.replayOnly,r.update.length]),catalog:catalog.map(r=>[r.checkpointId,r.reason,r.sequence,hashes.has(r.checkpointRef)])};}
+  finally{db.close();}
+ });
+ test('after naming, editing and compiling twice, the named version stays restorable and restores',async({page})=>{
+  await start(page);await edit(page,'% before naming');
+  let panel=await open(page);await name(panel,'Before compiling');await panel.getByRole('button',{name:'Back to editor',exact:true}).click();
+  await edit(page,'% after naming');
+  const before=await stored(page);expect(before.catalog.filter(row=>row[1]==='named')).toEqual([[expect.any(String),'named',expect.any(Number),true]]);
+  // Compiling writes nothing to the project or its history.
+  for(let run=0;run<2;run++){await compile(page);expect(await stored(page)).toEqual(before);}
+  panel=await open(page);
+  const current=panel.getByRole('option',{name:/Current version/}),named=panel.getByRole('option',{name:/Before compiling/});
+  await expect(current).toContainText('1 file changed since the last version');await expect(panel.locator('.history-lines tr.add')).toContainText('% after naming');
+  await expect(named).not.toContainText('Not available');await named.click();await expect(panel.getByRole('heading',{name:'Before compiling',exact:true})).toBeVisible();await expect(panel.locator('.history-restorable')).toHaveText('Restorable');
+  await panel.getByRole('button',{name:'Restore into this project',exact:true}).click();const plan=page.getByRole('dialog',{name:'Restore into this project?'});await expect(plan).toContainText('1 file will change');
+  await plan.getByRole('button',{name:'Restore into this project',exact:true}).click();await expect(panel.getByRole('status',{name:'History status'})).toContainText('Restored.');await expect(panel.getByRole('option',{name:/Before restore/})).toBeVisible();
+  await page.keyboard.press('Escape');await expect(panel).toBeHidden();await expect(page.locator('.cm-content')).toContainText('% before naming');await expect(page.locator('.cm-content')).not.toContainText('% after naming');
+  await expect(page.locator('#zoom-label')).toHaveText(/^[1-9][0-9]*%$/);
+ });
+ test('after an edit and one compile, the current version says which files changed',async({page})=>{
+  await start(page);await edit(page,'% edited before compiling');const before=await stored(page);
+  await compile(page);expect(await stored(page)).toEqual(before);
+  const panel=await open(page),current=panel.getByRole('option',{name:/Current version/});
+  await expect(panel.getByRole('option',{name:/Starting point/})).toBeVisible();await expect(current).toContainText('1 file changed since the last version');await expect(current).not.toContainText('Up to date');
+  await expect(panel.locator('.history-lines tr.add')).toContainText('% edited before compiling');await expect(panel).not.toContainText('Nothing has changed yet');
+  // The view keeps following the project: naming works and lists the new version.
+  await name(panel,'After compiling');await expect(current).toContainText('Up to date');
+ });
  test('says a damaged version is not available and offers no restore',async({page})=>{
   await start(page);let panel=await open(page);await name(panel,'Damaged');
   await page.evaluate(async()=>{const db=await new Promise((resolve,reject)=>{const req=indexedDB.open('scribyra-v1');req.onsuccess=()=>resolve(req.result);req.onerror=()=>reject(req.error);});try{const rows=await new Promise(resolve=>{const req=db.transaction('historyCatalog').objectStore('historyCatalog').getAll();req.onsuccess=()=>resolve(req.result);}),row=rows.find(row=>row.reason==='named');await new Promise(resolve=>{const tx=db.transaction('historyObjects','readwrite'),store=tx.objectStore('historyObjects'),get=store.get(row.checkpointRef);get.onsuccess=()=>{const bytes=new Uint8Array(get.result.bytes);bytes[0]^=255;store.put({...get.result,bytes});};tx.oncomplete=resolve;});}finally{db.close();}});

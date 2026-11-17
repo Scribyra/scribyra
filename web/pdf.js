@@ -8,6 +8,11 @@ export const pdfState=()=>({pdfPage:1,pdfPages:0,pdfScale:100,pdfFindOpen:false,
 let reader,loaded,pending,generation=0,onState=()=>{},onError=console.error,onNavigate=()=>{};
 export function configurePdf(options){onState=options.onState;onError=options.onError;onNavigate=options.onNavigate||(()=>{});}
 const update=patch=>onState(patch);
+// pdf.js fits 'page-width' to the container: while the preview is hidden (History or another
+// view replaces it) that width is zero and the fitted scale comes out negative. Report only real
+// zoom levels; the application state carries a percentage, never a negative or invalid one.
+export const scalePercent=scale=>Number.isFinite(scale)&&scale>0?Math.round(scale*100):null;
+const shown=host=>host.isConnected&&host.clientWidth>0&&host.clientHeight>0;
 function makeReader(){
   const host=document.getElementById('pdf-viewer');if(!host)throw new Error('PDF preview is not available.');
   host.replaceChildren();host.tabIndex=0;host.setAttribute('aria-label','PDF document');
@@ -21,10 +26,10 @@ function makeReader(){
   const context={host,bus,abort,link,find,viewer,location:null,query:'',caseSensitive:false,whole:false,findOpen:false};
   const live=()=>reader===context&&!abort.signal.aborted;
   let resizeFrame;
-  const resize=new ResizeObserver(()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{if(!live()||!viewer.pdfDocument)return;const scale=viewer.currentScaleValue;if(scale==='page-width'||scale==='page-fit')viewer.currentScaleValue=scale;viewer.update();});});
+  const resize=new ResizeObserver(()=>{cancelAnimationFrame(resizeFrame);resizeFrame=requestAnimationFrame(()=>{if(!live()||!viewer.pdfDocument||!shown(host))return;const scale=viewer.currentScaleValue;if(scale==='page-width'||scale==='page-fit')viewer.currentScaleValue=scale;viewer.update();});});
   resize.observe(host);abort.signal.addEventListener('abort',()=>{resize.disconnect();cancelAnimationFrame(resizeFrame);},{once:true});
   bus.on('pagechanging',({pageNumber})=>{if(live())update({pdfPage:pageNumber});});
-  bus.on('scalechanging',({scale})=>{clearSourceHighlight();if(live())update({pdfScale:Math.round(scale*100)});});
+  bus.on('scalechanging',({scale})=>{clearSourceHighlight();const percent=scalePercent(scale);if(live()&&percent)update({pdfScale:percent});});
   bus.on('updateviewarea',({location})=>{if(live())context.location=location;});
   bus.on('pagerendered',({error})=>{if(live()&&error){update({pdfError:'This page could not be rendered. Try compiling again or downloading the PDF.'});onError(error);}});
   const matches=({matchesCount})=>{if(live()&&context.findOpen&&context.query){const {current,total}=matchesCount;update({pdfFindCount:total,pdfFindStatus:total?`${current} of ${total} matches`:'No matches'});}};
@@ -83,7 +88,7 @@ export async function showPdf(bytes,{signal}={}){
     if(context&&reader===context&&loaded===task&&!committed){
       loaded=previous;context.link.setDocument(previousDocument||null);context.viewer.setDocument(previousDocument||null);
       if(previousDocument){context.viewer.currentScaleValue=scale;if(position)context.viewer.scrollPageIntoView({pageNumber:position.pageNumber,destArray:[null,{name:'XYZ'},position.left,position.top,null],allowNegativeOffset:true});}
-      update({pdfPages:previousDocument?.numPages||0,pdfPage:context.viewer.currentPageNumber,pdfScale:Math.round(context.viewer.currentScale*100)||100});
+      update({pdfPages:previousDocument?.numPages||0,pdfPage:context.viewer.currentPageNumber,pdfScale:scalePercent(context.viewer.currentScale)??100});
     }
   };
   const cancel=()=>{rollback();void task.destroy().catch(()=>{});};
@@ -96,7 +101,7 @@ export async function showPdf(bytes,{signal}={}){
     context.viewer.currentScaleValue=scale;
     if(position)context.viewer.scrollPageIntoView({pageNumber:Math.min(position.pageNumber,document.numPages),destArray:[null,{name:'XYZ'},position.left,position.top,null],allowNegativeOffset:true});
     check();committed=true;
-    update({pdfPages:document.numPages,pdfPage:context.viewer.currentPageNumber,pdfScale:Math.round(context.viewer.currentScale*100),pdfError:'',pdfFindCount:0,pdfFindStatus:''});
+    update({pdfPages:document.numPages,pdfPage:context.viewer.currentPageNumber,...(scalePercent(context.viewer.currentScale)?{pdfScale:scalePercent(context.viewer.currentScale)}:{}),pdfError:'',pdfFindCount:0,pdfFindStatus:''});
     if(context.findOpen&&context.query)runFind();
     void previous?.destroy().catch(()=>{});return document.numPages;
   }catch(error){rollback();if(pending===task)pending=null;if(loaded!==task){if(signal?.aborted)void task.destroy().catch(()=>{});else await task.destroy();}if(previous&&reader!==context)void previous.destroy().catch(()=>{});throw error;}
