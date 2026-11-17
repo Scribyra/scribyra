@@ -76,6 +76,11 @@ pub struct Config {
     pub entry_inline_bytes: usize,
     /// Signed-in organisation sessions held in memory.
     pub sessions: usize,
+    /// How often the single sign-on recheck runs (each login is rechecked after its org's
+    /// `recheck_seconds`).
+    pub sso_recheck_tick_seconds: u64,
+    /// Minimum interval between JWKS refetches triggered by an unknown key ID.
+    pub sso_jwks_refetch_seconds: u64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -125,6 +130,8 @@ impl Default for Config {
             org_bytes: 1024 * 1024 * 1024,
             entry_inline_bytes: 64 * 1024,
             sessions: 10000,
+            sso_recheck_tick_seconds: 60,
+            sso_jwks_refetch_seconds: 60,
         }
     }
 }
@@ -196,6 +203,9 @@ impl Config {
             || self.sessions > 1_000_000
         {
             return Err("invalid organisation limits");
+        }
+        if !(1..=3600).contains(&self.sso_recheck_tick_seconds) || self.sso_jwks_refetch_seconds > 3600 {
+            return Err("invalid single sign-on limits");
         }
         if let Some(url) = &self.public_url {
             let uri: axum::http::Uri = url.parse().map_err(|_| "invalid public_url")?;

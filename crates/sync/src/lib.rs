@@ -8,4 +8,5 @@ pub mod listener;
 pub mod migrate_sqlite;
 pub mod org;
 pub mod service;
+pub mod sso;
 pub mod store;

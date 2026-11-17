@@ -36,6 +36,8 @@ pub type Shared = Arc<Service>;
 pub struct Service {
     pub config: Config,
     pub store: Arc<Store>,
+    /// Single sign-on; the organisation module reads logins and revocations from here.
+    pub sso: Arc<crate::sso::Sso>,
     rooms: Mutex<HashMap<String, Room>>,
     http: Arc<Semaphore>,
     disk: Arc<Semaphore>,
@@ -491,8 +493,10 @@ async fn session(mut socket: WebSocket, s: Shared) {
 pub fn state(store: Store) -> Shared {
     let config = store.config.clone();
     let (shutdown, _) = watch::channel(false);
+    let store = Arc::new(store);
     Arc::new(Service {
-        store: Arc::new(store),
+        sso: crate::sso::Sso::new(store.clone()),
+        store,
         rooms: Mutex::new(HashMap::new()),
         http: Arc::new(Semaphore::new(config.http_concurrency)),
         uploads: Arc::new(Semaphore::new(config.uploads)),
@@ -555,6 +559,7 @@ pub fn router(s: Shared) -> Router {
         .route("/v1/connect", get(upgrade))
         .with_state(s.clone())
         .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone())))
+        .merge(crate::sso::routes(s.sso.clone()))
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
@@ -576,6 +581,7 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
         "{{\"event\":\"listening\",\"address\":\"{}\",\"protocol\":1,\"schema\":{schema}}}",
         listener.local_addr()?
     );
+    s.sso.spawn_recheck();
     let owner = s.store.clone();
     tokio::spawn(async move {
         loop {
