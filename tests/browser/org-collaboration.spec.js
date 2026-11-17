@@ -83,7 +83,8 @@ test('an organisation invites a reviewer, links a second device, and syncs edits
   await expect(source(ben.page)).toContainText('ORG_SHARED_START');
   // A reviewer cannot switch to Editing.
   await expect(ben.page.getByRole('combobox',{name:'Editor mode'})).toHaveValue('reviewing');
-  await expect(ben.page.locator('select[aria-label="Editor mode"] option[value="editing"]')).toBeDisabled();
+  // Playwright's toBeDisabled reports a natively disabled <option> as enabled, so read the property.
+  await expect(ben.page.locator('select[aria-label="Editor mode"] option[value="editing"]')).toHaveJSProperty('disabled',true);
   await expect(dialog.getByRole('list',{name:'Members'})).toContainText('Ben');
 
   // Ana links a second browser of her own.
