@@ -385,7 +385,7 @@ test('a service restored from an older backup gets the lost changes uploaded aga
 
 // --- Slice 7: epochs and rotation.
 
-const {newProjectKey,wrapProjectKey,wrapRecipients,openEntry:openLogEntry,entryCutOff}=await import('../web/org-crypto.js');
+const {newProjectKey,wrapProjectKey,wrapRecipients,openEntry:openLogEntry,entryCutOff,rotationCuts}=await import('../web/org-crypto.js');
 /** An honest member's view of a project: every update it accepts and can decrypt, in log order. */
 async function replayAs(member,project,keys){
  const doc=new Y.Doc(),state=await member.state();
@@ -469,7 +469,7 @@ test('a member whose change waited offline across a rotation re-encrypts it unde
   // Meanwhile Ben (an admin) removes Cat and rotates the project to epoch 2, wrapped to the others.
   await ben.post('person.remove',{person:cat.person});
   const {key:k2,commit}=newProjectKey(),head=Number(await s.sql(`SELECT head_seq FROM projects WHERE project='${project}'`));
-  await ben.post('project.epoch',{project,epoch:2,keyCommit:commit,after:head});
+  await ben.post('project.epoch',{project,epoch:2,keyCommit:commit,after:head,cuts:Object.fromEntries(rotationCuts(await ben.state(),project).map(d=>[d,0]))});
   const state=await ben.state(),wraps=[];
   for(const recipient of wrapRecipients(state,project))wraps.push(await wrapProjectKey({org:ben.org,project,epoch:2,recipient,projectKey:k2},ben.seed));
   await ben.client.putWraps(ben.org,wraps);
@@ -481,5 +481,43 @@ test('a member whose change waited offline across a rotation re-encrypts it unde
   assert.equal(mine.length,1);
   assert.match(new TextDecoder().decode(openLogEntry(mine[0].body,k2).payload),/WRITTEN_OFFLINE/);
   assert.equal(await s.sql(`SELECT count(*) FROM entries WHERE project='${project}' AND epoch=1 AND seq>${head}`),'0');
+ }finally{engine?.close();await erase();await s.close();}
+});
+
+test('a removed member’s writes injected before the rotation are held, then refused; a cut that goes back stops sync instead of diverging',async()=>{
+ // Review H1/H2/H3 of slice 7.
+ const s=await service({org:true});let engine;
+ try{
+  await erase();
+  const p=await localProject('Held','\\documentclass{article}\\begin{document}HELD\\end{document}');
+  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'held'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);
+  const [{project}]=await engine.projects();
+  const ben=await rawMember(await engine.createInvite({}),'Ben'),cat=await rawMember(await engine.createInvite({}),'Cat');
+  await engine.grant(project,ben.person,'editor');await engine.grant(project,cat.person,'editor');await engine.setRole(ben.person,'admin');
+  const k1=await ben.key(project,1),catK1=await cat.key(project,1),lineage=await ben.lineage(project,k1);
+  await editAs(cat,project,{key:catK1,epoch:1,keys:{1:catK1},lineage,text:'% CAT_BEFORE\n'});
+  await engine.push(p.id);await settled(engine,p.id);
+  // Ben removes Cat; before anyone rotates, a colluding service appends Cat's later change.
+  await ben.post('person.remove',{person:cat.person});
+  const catDoc=await replayAs(ben,project,{1:k1}),before=Y.encodeStateVector(catDoc);catDoc.getText([...catDoc.share.keys()].find(k=>k.startsWith('text:'))).insert(0,'% CAT_AFTER_REMOVAL\n');
+  await inject(s,project,await cat.seal({project,epoch:1,key:catK1,lineage,payload:Y.encodeStateAsUpdate(catDoc,before),seq:2}),{device:cat.device,clientSeq:2,epoch:1});catDoc.destroy();
+  // Ana's app holds it, rotates with Cat cut off after her last change it accepted (1), then refuses it.
+  await engine.push(p.id);await settled(engine,p.id);
+  const event=JSON.parse(await s.sql("SELECT raw FROM org_events WHERE raw LIKE '%project.epoch%'"));
+  assert.deepEqual(event.body.cuts,{[cat.device]:1});
+  let local=await storage.loadProject(p.id);
+  try{assert.match(textOf(local),/CAT_BEFORE/);assert.doesNotMatch(textOf(local),/CAT_AFTER_REMOVAL/);}finally{local.destroy();}
+  assert.match(engine.status(p.id).message,/1 change from removed devices/);
+  // A rotation that cuts back further than what this browser accepted is a disagreement: stop.
+  const cat2=await rawMember(await engine.createInvite({}),'Cat2');await engine.grant(project,cat2.person,'editor');
+  const k2=await cat2.key(project,2);
+  await editAs(cat2,project,{key:k2,epoch:2,keys:{1:k1,2:k2},lineage,text:'% CAT2\n'});
+  await engine.push(p.id);await settled(engine,p.id);
+  await ben.post('person.remove',{person:cat2.person});
+  const {commit}=newProjectKey(),head=Number(await s.sql(`SELECT head_seq FROM projects WHERE project='${project}'`));
+  await ben.post('project.epoch',{project,epoch:3,keyCommit:commit,after:head,cuts:{[cat2.device]:0}});
+  await engine.push(p.id).catch(()=>{});
+  assert.equal(engine.status(p.id).state,'paused');assert.match(engine.status(p.id).message,/already accepted was cut off/);
  }finally{engine?.close();await erase();await s.close();}
 });

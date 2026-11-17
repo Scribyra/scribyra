@@ -670,7 +670,9 @@ async fn get_wraps(State(o): State<Shared>, Path(org): Path<String>, headers: He
         }
         keys
     };
-    let rows = sqlx::query("SELECT raw FROM wraps WHERE org = $1 AND recipient = ANY($2) ORDER BY project, epoch LIMIT 10000")
+    // Newest epochs first: if a device has more wraps than one answer holds, the keys it needs to
+    // write now arrive before history keys.
+    let rows = sqlx::query("SELECT raw FROM wraps WHERE org = $1 AND recipient = ANY($2) ORDER BY epoch DESC, project LIMIT 10000")
         .bind(&org)
         .bind(&recipients)
         .fetch_all(&o.store.pool)

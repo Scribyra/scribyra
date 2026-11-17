@@ -275,12 +275,25 @@ export function epochCommit(state,project,epoch){
  const p=state.projects?.[project];if(!p||!Number.isSafeInteger(epoch)||epoch<1||epoch>p.epoch)return null;
  return p.commits?.[epoch-1]??(epoch===p.epoch?p.keyCommit:null);
 }
-/** Whether readers refuse an entry: a rotation cut its device off, it sits above that rotation's
- * `after`, and it is under an epoch older than the one the rotation created (the core's
+const keyEntitled=(state,person,project)=>{
+ const p=state.projects?.[project],who=state.persons?.[person];
+ return!!p&&who?.state==='active'&&(!!p.members[person]||(!!state.adminRead&&['owner','admin'].includes(who.role)));
+};
+const deviceEntitled=(state,device,project)=>{const person=state.devices?.[device]?.person;return!!person&&keyEntitled(state,person,project);};
+/** Whether readers refuse an entry: a rotation cut its device off after an earlier client
+ * sequence, and it is under an epoch older than the one that rotation created (the core's
  * `entry_cut_off`, read from the replayed state). */
-export function entryCutOff(state,project,device,seq,epoch){
- return(state.projects?.[project]?.cutoffs?.[device]||[]).some(([after,cut])=>seq>after&&epoch<cut);
+export function entryCutOff(state,project,device,clientSeq,epoch){
+ return(state.projects?.[project]?.cutoffs?.[device]||[]).some(([last,cut])=>clientSeq>last&&epoch<cut);
 }
+/** Whether readers hold an entry: its device lost access and the rotation that decides where it
+ * is cut off has not come yet (the core's `entry_held`). */
+export function entryHeld(state,project,device){
+ const p=state.projects?.[project];
+ return!!p?.stale&&(p.lost||[]).includes(device)&&!deviceEntitled(state,device,project);
+}
+/** The devices the next rotation must cut off (the core's `rotation_cuts`). */
+export const rotationCuts=(state,project)=>(state.projects?.[project]?.lost||[]).filter(device=>!deviceEntitled(state,device,project));
 
 // --- Log entries
 

@@ -35,7 +35,11 @@ fn epochs(backend: Value) {
     assert!(org.state.projects[&project].stale);
     assert_ne!(org.append(&cat_token, &project, &entry(&org.id, &project, &cat.seed, 2, 1, &random_bytes(100))).status, 201);
     // A rotation cannot claim a log position the service does not have; at the head it is accepted.
-    let rotate = |org: &mut Org, by: &Device, token: &str, epoch: u32, after: u64| org.post(Some(token), "project.epoch", json!({"project":project,"epoch":epoch,"keyCommit":random_hex(32),"after":after}), &by.seed);
+    // The rotation names each device it cuts off with the last client sequence it accepted from it.
+    let rotate = |org: &mut Org, by: &Device, token: &str, epoch: u32, after: u64| {
+        let cuts: serde_json::Map<String, Value> = org.state.rotation_cuts(&project).into_iter().map(|d| (d, json!(1))).collect();
+        org.post(Some(token), "project.epoch", json!({"project":project,"epoch":epoch,"keyCommit":random_hex(32),"after":after,"cuts":cuts}), &by.seed)
+    };
     assert_eq!(rotate(&mut org, &ben, &ben_token, 2, 4).status, 400);
     assert_eq!(rotate(&mut org, &ben, &ben_token, 2, 3).status, 201);
     let row = postgres().psql(s.database_url(), &format!("SELECT epoch || ',' || epoch_cutover FROM projects WHERE project = '{project}'"));
@@ -66,16 +70,16 @@ fn epochs(backend: Value) {
     // Concurrent rotations: both sign at the same head; the log takes one, the other is a
     // conflict, and signed again on the new head it is refused (that epoch exists).
     let head = org.state.head.clone();
-    let a = sign_event(&org.id, &head, "project.epoch", json!({"project":project,"epoch":3,"keyCommit":random_hex(32),"after":4}), &owner.seed);
-    let b = sign_event(&org.id, &head, "project.epoch", json!({"project":project,"epoch":3,"keyCommit":random_hex(32),"after":4}), &ben.seed);
+    let a = sign_event(&org.id, &head, "project.epoch", json!({"project":project,"epoch":3,"keyCommit":random_hex(32),"after":4,"cuts":{}}), &owner.seed);
+    let b = sign_event(&org.id, &head, "project.epoch", json!({"project":project,"epoch":3,"keyCommit":random_hex(32),"after":4,"cuts":{}}), &ben.seed);
     assert_eq!(org.post_raw(Some(&token), &a).status, 201);
     assert_eq!(org.post_raw(Some(&ben_token), &b).status, 409);
     assert_eq!(rotate(&mut org, &ben, &ben_token, 3, 4).status, 400);
     assert_eq!(postgres().psql(s.database_url(), &format!("SELECT epoch FROM projects WHERE project = '{project}'")), "3");
-    // Readers' rule: Cat's devices are cut off above the `after` Ben signed.
+    // Readers' rule: Cat's device is cut off after the client sequence Ben signed (1).
     let state = &org.state;
-    assert!(state.entry_cut_off(&project, &cat.key, 4, 1) && !state.entry_cut_off(&project, &cat.key, 3, 1));
-    assert!(!state.entry_cut_off(&project, &ben.key, 4, 1));
+    assert!(state.entry_cut_off(&project, &cat.key, 2, 1) && !state.entry_cut_off(&project, &cat.key, 1, 1));
+    assert!(!state.entry_cut_off(&project, &ben.key, 9, 1));
     // The membership state the service replays after a restart agrees.
     let reply = send("GET", &org.url(&format!("/v1/orgs/{}/events?after=0", org.id)), Some(&token), "", b"").json();
     let events: Vec<String> = serde_json::from_value(reply["events"].clone()).unwrap();
