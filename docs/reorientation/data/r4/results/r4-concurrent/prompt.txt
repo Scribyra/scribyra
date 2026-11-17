@@ -1,0 +1,1 @@
+In my open coastal-survey project in Scribyra, add this sentence at the end of the introduction paragraph: "Field work ran from 6 to 24 October." Then compile and confirm it built. I am working in the same tab at the same time. Use only your browser tools on the browser I already have open; don't open a new browser.

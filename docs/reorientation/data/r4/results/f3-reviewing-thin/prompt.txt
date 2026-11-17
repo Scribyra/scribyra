@@ -1,0 +1,1 @@
+In the paper I have open in my Scribyra tab, change the author from "Your name" to "Paul Schuldesz", then compile and tell me the result. Use only your browser tools on the browser I already have open; don't open a new browser. Use window.scribyra.agent in the tab; see /agent.md.
