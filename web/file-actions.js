@@ -14,17 +14,24 @@ export function moveDestinations(nodes,node){
 }
 export function moveTarget(node,folder){return `${folder?`${folder}/`:''}${node.path.slice(node.path.lastIndexOf('/')+1)}`;}
 
-export function treeMenuItems(node,{blocked,trashCount}){
+export function treeMenuItems(node,{blocked,trashCount,linked=false}){
   const disabled=!!blocked;
   const creating=[
     {label:'New file',value:'new-file',icon:'file-plus',disabled},
     {label:'New folder',value:'new-folder',icon:'folder-plus',disabled},
   ];
+  // Bibliographies: a .bib file from any reference manager, or a file linked to Zotero.
+  const bibliography=[
+    {label:'Import bibliography…',value:'import-bibliography',icon:'book',hint:'BibTeX or BibLaTeX .bib',disabled},
+    {label:'Link to Zotero…',value:'zotero-link',icon:'link',hint:'Creates a .bib you can refresh',disabled},
+  ];
   if(!node)return [...creating,{separator:true},
     {label:'Upload files',value:'upload',icon:'upload',disabled},
     {label:'Import folder',value:'import-folder',icon:'folder',disabled},
+    {separator:true},...bibliography,
     ...(trashCount?[{separator:true},{label:'Restore last deletion',value:'restore',icon:'restore',disabled}]:[])];
-  return [...(node.folder?[...creating,{label:'Upload files',value:'upload',icon:'upload',disabled},{separator:true}]:[]),
+  const zotero=linked&&!node.folder?[{label:'Refresh from Zotero',value:'zotero-refresh',icon:'restore',disabled},{label:'Zotero links…',value:'zotero-panel',icon:'link'},{separator:true}]:[];
+  return [...(node.folder?[...creating,{label:'Upload files',value:'upload',icon:'upload',disabled},...bibliography,{separator:true}]:[]),...zotero,
     {label:'Rename',value:'rename',icon:'pencil',disabled},
     {label:'Move',value:'move',icon:'move',disabled},
     {label:'Duplicate',value:'duplicate',icon:'copy',disabled},

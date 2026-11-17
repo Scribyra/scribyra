@@ -102,6 +102,14 @@ struct State {
     download_loaded: f64,
     download_total: f64,
     filter: String,
+    zotero: ZoteroBar,
+}
+/// The bar above a linked .bib file; web/zotero.js owns the link itself.
+#[derive(Clone, Default, Deserialize)]
+#[serde(default)]
+struct ZoteroBar {
+    linked: bool,
+    summary: String,
 }
 #[derive(Clone, Default, Deserialize)]
 struct SearchHit {
@@ -186,6 +194,7 @@ fn Icon(#[prop(default = "file")] name: &'static str) -> impl IntoView {
         "page-next" => "m9 6 6 6-6 6",
         "plug" => "M9 3v5m6-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4",
         "servers" => "M4 5h16v5H4Zm0 9h16v5H4Zm4-6.5h.01M8 16.5h.01",
+        "book" => "M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3ZM5 17a3 3 0 0 1 3-3h11",
         "package" => "m12 3 8 4.5v9L12 21l-8-4.5v-9Zm0 9 8-4.5M12 12v9m0-9L4 7.5",
         "sliders" => "M4 7h9m5 0h2M4 17h2m5 0h9M13 5h5v4h-5Zm-7 10h5v4H6Z",
         "pulse" => "M3 12h4l3-7 4 14 3-7h4",
@@ -289,6 +298,7 @@ fn App() -> impl IntoView {
                             <hr/>
                             <button aria-label="Share project" aria-haspopup="dialog" on:click=move |_| action("direct-share", "")><Icon name="share"/><span class="tools-item-text">"Share project"<small>{move || if s.get().direct_active { "Experimental · in a direct session" } else if s.get().direct_enabled { "Experimental · direct sessions on" } else { "Experimental · off" }}</small></span></button>
                             <hr/>
+                            <button aria-label="Zotero" aria-haspopup="dialog" on:click=move |_| action("zotero", "")><Icon name="book"/><span class="tools-item-text">"Zotero"<small>"Link a library, refresh, keys"</small></span></button>
                             <button aria-label="MCP providers" on:click=move |_| action("providers", "")><Icon name="servers"/><span>"MCP providers"</span></button>
                             // The Rust companion is discontinued (November 8, 2026). Its item exists only behind
                             // the test-only localStorage switch scribyra-companion-dev; see web/main.js.
@@ -368,7 +378,9 @@ fn App() -> impl IntoView {
                                         <button class="icon-button" aria-label="Show source in PDF" title=move || format!("Show source in PDF. {}", s.get().source_map_status) disabled=move || !s.get().source_map_ready||s.get().source_map_busy on:click=move |_| action("source-to-pdf","")><Icon name="to-pdf"/></button>
                                         <review_workspace::ReviewToggle state=Signal::derive(move || s.get().review_workspace)/>
                                     </div>
-                                </div><div id="code-editor" role="tabpanel" aria-label="Source editor" aria-labelledby=move || if s.get().active.is_empty(){None}else{Some(dom_id("tab",&s.get().active))}></div>
+                                </div>
+                                <Show when=move || s.get().zotero.linked><div class="linked-file-bar" role="group" aria-label="Zotero link"><span class="linked-file-summary">{move || s.get().zotero.summary}</span><button class="button secondary compact" disabled=move || matches!(s.get().review_workspace.mode.as_str(), "viewing" | "reviewing") title=move || if !matches!(s.get().review_workspace.mode.as_str(), "viewing" | "reviewing") { "Fetch changes from Zotero; asks before changing entries you edited" } else { "Switch to Editing to refresh from Zotero" } on:click=move |_| action("zotero-refresh", "")>"Refresh from Zotero"</button></div></Show>
+                                <div id="code-editor" role="tabpanel" aria-label="Source editor" aria-labelledby=move || if s.get().active.is_empty(){None}else{Some(dom_id("tab",&s.get().active))}></div>
                             </section>
                             <review_workspace::Panel state=Signal::derive(move || s.get().review_workspace) comments=Signal::derive(move || s.get().comments)>
                                 <comments::Comments state=Signal::derive(move || s.get().comments)/>
