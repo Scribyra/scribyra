@@ -99,6 +99,20 @@ pub fn org_device_proof_message(org: &str, prev: &str, person: &str, device: &st
 pub fn org_recovery_proof_message(org: &str, prev: &str, person: &str, signing: &str, agreement: &str) -> Vec<u8> {
     core::recovery_proof_message(org, prev, person, signing, agreement)
 }
+#[wasm_bindgen]
+pub fn org_invite_message(org: &str, prev: &str, invite: &str, person: &str, device: &str, agreement: &str) -> Vec<u8> {
+    core::invite_message(org, prev, invite, person, device, agreement)
+}
+#[wasm_bindgen]
+pub fn org_device_request_message(org: &str, link: &str, person: &str, device: &str, agreement: &str) -> Vec<u8> {
+    core::device_request_message(org, link, person, device, agreement)
+}
+/// The X25519 keys entitled to a project's key (or the directory key, `project` = org ID).
+#[wasm_bindgen]
+pub fn org_wrap_recipients(state_json: &str, project: &str) -> Result<String, JsValue> {
+    let state: core::OrgState = serde_json::from_str(state_json).map_err(|_| JsValue::from_str("invalid organisation state"))?;
+    Ok(serde_json::to_string(&state.wrap_recipients(project)).unwrap())
+}
 /// Replay events (a JSON array of canonical event strings) onto a state, or onto a
 /// fresh state for `org` when `state_json` is empty. Returns the new state as JSON.
 #[wasm_bindgen]

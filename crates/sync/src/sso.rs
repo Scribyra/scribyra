@@ -278,7 +278,7 @@ impl Sso {
     /// person (a blocked link stays blocked); Err(Conflict) if the subject or the person is
     /// linked elsewhere.
     pub async fn link(&self, login: &Login, person: &str) -> Result<(), LinkError> {
-        if !is_hex64(person) {
+        if !scribyra_core::orgsync::is_uuid(person) {
             return Err(LinkError::Invalid);
         }
         let mut tx = self.store.pool.begin().await?;
@@ -311,6 +311,11 @@ impl Sso {
         }
         tx.commit().await?;
         Ok(())
+    }
+    /// The SSO identity linked to a person, if any: (issuer, subject, blocked).
+    pub async fn person_link(&self, org: &str, person: &str) -> Result<Option<(String, String, bool)>, StoreError> {
+        let row = sqlx::query("SELECT issuer, subject, state FROM sso_links WHERE org = $1 AND person = $2").bind(org).bind(person).fetch_optional(&self.store.pool).await?;
+        Ok(row.map(|r| (r.get(0), r.get(1), r.get::<String, _>(2) == "blocked")))
     }
     /// Removes the person's link (also clearing a block); a later login can link again.
     pub async fn unlink(&self, org: &str, person: &str) -> Result<(), StoreError> {
@@ -586,7 +591,8 @@ fn login_json(login: &Login, link: Option<(String, bool)>) -> Value {
         "state": state,
     })
 }
-fn bearer(headers: &HeaderMap) -> Option<&str> {
+/// The SSO login token from `Authorization: ScribyraSSO <token>`, if well formed.
+pub fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("ScribyraSSO ")).filter(|t| is_hex64(t))
 }
 

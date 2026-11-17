@@ -354,12 +354,14 @@ async fn recheck_revokes_disabled_users_and_fires_the_hook() {
     assert_eq!(s.sso.login("short").await.unwrap(), None);
 
     // Linking.
-    let (person, other) = (random_hex(32), random_hex(32));
+    let uuid = || { let h = random_hex(16); format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]) };
+    let (person, other) = (uuid(), uuid());
     assert_eq!(s.sso.linked_person(&login).await.unwrap(), None);
     s.sso.link(&login, &person).await.unwrap();
     s.sso.link(&login, &person).await.unwrap();
     assert_eq!(s.sso.link(&login, &other).await, Err(LinkError::Conflict));
     assert_eq!(s.sso.link(&login, "nothex").await, Err(LinkError::Invalid));
+    assert_eq!(s.sso.link(&login, &random_hex(32)).await, Err(LinkError::Invalid));
     let mut stranger = login.clone();
     stranger.subject = "sub-someone-else".into();
     assert_eq!(s.sso.link(&stranger, &person).await, Err(LinkError::Conflict));

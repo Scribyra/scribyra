@@ -43,7 +43,7 @@ CREATE TABLE sso_links (
     org text NOT NULL REFERENCES orgs (org) ON DELETE CASCADE,
     issuer text NOT NULL,
     subject text NOT NULL,
-    person text NOT NULL CHECK (person ~ '^[0-9a-f]{64}$'),
+    person text NOT NULL CHECK (person ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'),
     email text,
     state text NOT NULL DEFAULT 'active' CHECK (state IN ('active', 'blocked')),
     linked timestamptz NOT NULL DEFAULT now(),

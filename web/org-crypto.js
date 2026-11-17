@@ -8,6 +8,7 @@ import {
  org_enrol_seed,org_enrol_message,org_recovery_secrets,org_encode_recovery_code,org_decode_recovery_code,org_key_commit,org_project_subkey,
  org_person_id,org_event_signing_message,org_device_proof_message,org_recovery_proof_message,org_wrap_signing_message,org_wrap_context,org_check_wrap,
  org_entry_signing_message,org_verify_entry,org_entry_hash,org_chain_next,org_apply_events,
+ org_invite_message,org_device_request_message,org_wrap_recipients,
 } from './pkg/scribyra_app.js';
 
 const encoder=new TextEncoder(),decoder=new TextDecoder();
@@ -106,16 +107,83 @@ export async function signEvent({org,prev,type,body},signer){
  event.sig=await sign(signer,org_event_signing_message(JSON.stringify(event)));
  return canonical(event);
 }
-export function genesisBody({org,secret,device,agreement,adminRead=true}){
+/**
+ * The owner's genesis: their device, the org's encryption mode and admin read access, the
+ * directory key's commitment and the org's and owner's names sealed under it; the setup
+ * code's key signs all of it.
+ */
+export function genesisBody({org,secret,device,agreement,adminRead=true,mode='e2ee',serviceKey=null,directoryKey,name,ownerName}){
  const enrol=org_enrol_seed(secret),person=org_person_id(org,device);
- const body={person,device,agreement,enrol:org_ed25519_public(enrol),enrolSig:'',mode:'e2ee',adminRead:!!adminRead};
+ const body={person,device,agreement,enrol:org_ed25519_public(enrol),enrolSig:'',mode,adminRead:!!adminRead,
+  name:sealName(directoryKey,org,'org',name),directoryCommit:org_key_commit(directoryKey),ownerName:sealName(directoryKey,org,person,ownerName)};
+ if(mode==='managed'){if(!serviceKey)throw Error('This service does not offer organisation-managed encryption.');body.serviceKey=serviceKey;}
  body.enrolSig=org_ed25519_sign(enrol,org_enrol_message(org,JSON.stringify(body)));
  return body;
+}
+
+// --- Names: sealed under the directory key (people, the org) or a project's name key.
+
+const MAX_NAME=120;
+function sealWith(key,context,text){
+ const bytes=encoder.encode(String(text||'').trim().slice(0,MAX_NAME));
+ if(!bytes.length||bytes.length>256)throw Error('Enter a name.');
+ const nonce=randomBytes(24);return hex(concat(nonce,org_seal(key,nonce,encoder.encode(context),bytes)));
+}
+function openWith(key,context,sealed){
+ try{const bytes=unhex(sealed);return decoder.decode(org_open(key,bytes.subarray(0,24),encoder.encode(context),bytes.subarray(24)));}
+ catch{return null;}
+}
+const nameContext=(org,subject)=>`scribyra-name/1\n${org}\n${subject}`;
+export function sealName(directoryKey,org,subject,text){const key=org_project_subkey(directoryKey,'name');try{return sealWith(key,nameContext(org,subject),text);}finally{key.fill(0);}}
+export function openName(directoryKey,org,subject,sealed){if(!sealed)return null;const key=org_project_subkey(directoryKey,'name');try{return openWith(key,nameContext(org,subject),sealed);}finally{key.fill(0);}}
+const projectNameContext=(org,project)=>`scribyra-project-name/1\n${org}\n${project}`;
+export function sealProjectName(projectKey,org,project,text){const key=org_project_subkey(projectKey,'name');try{return sealWith(key,projectNameContext(org,project),text||'Untitled project');}finally{key.fill(0);}}
+export function openProjectName(projectKey,org,project,sealed){if(!sealed)return null;const key=org_project_subkey(projectKey,'name');try{return openWith(key,projectNameContext(org,project),sealed);}finally{key.fill(0);}}
+/** The X25519 keys entitled to a project's key (or the directory key: project = org ID). */
+export const wrapRecipients=(state,project)=>JSON.parse(org_wrap_recipients(JSON.stringify(state),project));
+
+// --- Invitation links and device links (fragments: they never reach the app's host).
+
+const seedFrom=(secret,purpose)=>org_hkdf(secret,new Uint8Array(0),encoder.encode(`scribyra/1/${purpose}`),32);
+export function inviteSeed(secret){return seedFrom(secret,'invite');}
+export function inviteMessage(org,prev,invite,person,device,agreement){return org_invite_message(org,prev,invite,person,device,agreement);}
+export function linkSeed(secret){return seedFrom(secret,'device-link');}
+export function deviceRequestMessage(org,link,person,device,agreement){return org_device_request_message(org,link,person,device,agreement);}
+/** `https://app/#join=…`: everything a joiner needs, including the directory key. */
+export function formatInvite(origin,{service,org,genesis,invite,secret,directoryKey}){
+ return `${origin}/#join=${b64url(encoder.encode(canonical({v:1,service,org,genesis,invite,secret:hex(secret),directory:hex(directoryKey)})))}`;
+}
+function fragmentValue(text,name){
+ const value=String(text||'').trim(),at=value.indexOf(`#${name}=`);
+ const raw=at>=0?value.slice(at+name.length+2):value;
+ let parsed;try{parsed=JSON.parse(decoder.decode(unb64url(raw.split(/[&\s]/)[0])));}catch{throw Error('This is not a Scribyra link. Copy the whole link you were sent.');}
+ if(!parsed||parsed.v!==1)throw Error('This link is from an unsupported version of Scribyra.');
+ return parsed;
+}
+export function parseInvite(text){
+ const p=fragmentValue(text,'join'),service=serviceOrigin(p.service);
+ unhex(p.org,32);unhex(p.genesis,32);unhex(p.invite,16);
+ return{service,org:p.org,genesis:p.genesis,invite:p.invite,secret:unhex(p.secret,32),directoryKey:unhex(p.directory,32)};
+}
+export function formatDeviceLink(origin,{service,org,genesis,person,link,secret}){
+ return `${origin}/#device=${b64url(encoder.encode(canonical({v:1,service,org,genesis,person,link,secret:hex(secret)})))}`;
+}
+export function parseDeviceLink(text){
+ const p=fragmentValue(text,'device'),service=serviceOrigin(p.service);
+ unhex(p.org,32);unhex(p.genesis,32);unhex(p.link,16);
+ if(typeof p.person!=='string'||!/^[0-9a-f-]{36}$/.test(p.person))throw Error('This device link is damaged.');
+ return{service,org:p.org,genesis:p.genesis,person:p.person,link:p.link,secret:unhex(p.secret,32)};
+}
+/** The code both devices show while linking: it depends on the link secret and the new keys. */
+export function linkCode(secret,device,agreement){
+ const digest=org_sha256_hex(concat(encoder.encode('scribyra-device-compare/1'),secret,unhex(device,32),unhex(agreement,32)));
+ return(parseInt(digest.slice(0,10),16)%1e8).toString().padStart(8,'0').replace(/(\d{4})(\d{4})/,'$1 $2');
 }
 export const enrolPublic=secret=>org_ed25519_public(org_enrol_seed(secret));
 export const personId=(org,device)=>org_person_id(org,device);
 /** Signed by the new device's own key; binds its person, agreement key and log position. */
-export async function deviceProof({org,prev,person,device,agreement},identity){
+export async function deviceProof({org,prev,link,person,device,agreement},identity){
+ if(link)prev=`link:${link}`;
  return sign(identity,org_device_proof_message(org,prev,person,device,agreement));
 }
 /** Signed by the recovery signing seed: proves whoever registers it holds the code. */
@@ -130,7 +198,6 @@ export function applyEvents(state,org,events,expectedEnrol){
 // --- Project keys and wraps
 
 export function newProjectKey(){const key=randomBytes(32);return{key,commit:org_key_commit(key)};}
-export const keyCommit=key=>org_key_commit(key);
 const wrapKey=(shared,wrap,context)=>org_hkdf(shared,concat(unhex(wrap.enc,32),unhex(wrap.recipient,32)),encoder.encode('scribyra-wrap/1'+context),32);
 /** ECIES-style wrap: fresh X25519, HKDF-SHA-256, XChaCha20-Poly1305 over the canonical context. */
 export async function wrapProjectKey({org,project,epoch,recipient,projectKey},sender){
@@ -170,6 +237,7 @@ export async function unwrapProjectKey(state,raw,recipient){
 
 // --- Log entries
 
+export const keyCommit=key=>org_key_commit(key);
 const META_DOMAIN='scribyra-entry';
 /** Builds `u32 header length ‖ canonical header ‖ nonce ‖ ciphertext`. */
 export async function sealEntry({projectKey,org,project,epoch,clientSeq,lineage,schema,person,payload},identity){

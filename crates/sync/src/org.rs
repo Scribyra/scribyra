@@ -35,6 +35,7 @@ const MAX_LOG_PAGE_BYTES: usize = 16 * 1024 * 1024;
 
 pub struct Orgs {
     store: Arc<Store>,
+    sso: Arc<crate::sso::Sso>,
     public_url: Option<String>,
     challenges: Mutex<HashMap<String, (String, Instant)>>,
     sessions: Mutex<HashMap<String, Session>>,
@@ -46,6 +47,7 @@ pub struct Orgs {
 struct Session {
     org: String,
     key: String,
+    person: String,
     until: Instant,
 }
 type Shared = Arc<Orgs>;
@@ -89,9 +91,28 @@ pub fn entry_key(project: &str, hash: &str) -> Result<BlobKey, StoreError> {
 }
 
 impl Orgs {
-    pub fn new(store: Arc<Store>) -> Shared {
+    pub fn new(store: Arc<Store>, sso: Arc<crate::sso::Sso>) -> Shared {
         let public_url = store.config.public_url.clone();
-        Arc::new(Self { store, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default() })
+        let mut revocations = sso.revocations();
+        let orgs = Arc::new(Self { store, sso, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default() });
+        // When the identity provider disables someone, or they sign out, their device sessions
+        // close at once.
+        let weak = Arc::downgrade(&orgs);
+        if let Ok(runtime) = tokio::runtime::Handle::try_current() {
+            runtime.spawn(async move {
+                loop {
+                    match revocations.recv().await {
+                        Ok((org, person)) => {
+                            let Some(orgs) = weak.upgrade() else { break };
+                            orgs.sessions.lock().unwrap().retain(|_, s| !(s.org == org && s.person == person));
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+        orgs
     }
     fn changes(&self, org: &str) -> tokio::sync::watch::Receiver<u64> {
         let mut changes = self.changes.lock().unwrap();
@@ -168,10 +189,34 @@ impl Orgs {
             None => Err(error(StatusCode::UNAUTHORIZED, "sign in required")),
         }
     }
-    /// Single sign-on checks for joins. Organisations get SSO in a later step; until then an
-    /// invitation or join request that needs it is refused.
-    async fn sso_gate(&self, _headers: &HeaderMap, _org: &str, _email_hash: Option<&str>) -> Result<(), Response> {
-        Err(error(StatusCode::FORBIDDEN, "single sign-on is required"))
+    /// The SSO login presented with `Authorization: ScribyraSSO <token>`, if any, for this org.
+    async fn sso_login(&self, headers: &HeaderMap, org: &str) -> Result<Option<crate::sso::Login>, Response> {
+        let Some(token) = crate::sso::bearer(headers) else { return Ok(None) };
+        match self.sso.login(token).await {
+            Ok(Some(login)) if login.org == org => Ok(Some(login)),
+            Ok(Some(_)) => Err(error(StatusCode::FORBIDDEN, "this single sign-on belongs to another organisation")),
+            Ok(None) => Err(error(StatusCode::UNAUTHORIZED, "single sign-on expired")),
+            Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        }
+    }
+    /// Joining through SSO (an SSO-bound invitation, or a join request): a live login for this
+    /// org whose identity is not yet anyone's, with the invited email if the invitation names one.
+    async fn sso_gate(&self, headers: &HeaderMap, org: &str, email_hash: Option<&str>) -> Result<crate::sso::Login, Response> {
+        let Some(login) = self.sso_login(headers, org).await? else {
+            return Err(error(StatusCode::FORBIDDEN, "single sign-on is required"));
+        };
+        match self.sso.linked_person(&login).await {
+            Ok(None) => {}
+            Ok(Some(_)) => return Err(error(StatusCode::CONFLICT, "this single sign-on identity already belongs to a member")),
+            Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+        }
+        if let Some(expected) = email_hash {
+            let matches = login.email_verified && login.email.as_deref().is_some_and(|e| core::hex(&core::sha256(e.to_lowercase().as_bytes())) == expected);
+            if !matches {
+                return Err(error(StatusCode::FORBIDDEN, "this invitation is for another email address"));
+            }
+        }
+        Ok(login)
     }
     /// The session's current role in its org; refuses keys that are no longer active.
     fn role(state: &OrgState, session: &Session) -> Result<KeyRole, Response> {
@@ -208,6 +253,9 @@ struct SessionRequest {
     key: String,
     challenge: String,
     sig: String,
+    /// An SSO login token: required in orgs that require SSO, and links the person on first use.
+    #[serde(default)]
+    sso: Option<String>,
 }
 async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -> Response {
     let Some(public_url) = o.public_url.clone() else {
@@ -237,6 +285,45 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
         Some(KeyRole::Recovery { person }) => (person, "recovery"),
         None => return error(StatusCode::FORBIDDEN, "key is not active"),
     };
+    drop(guard);
+    let mut until = Instant::now() + Duration::from_secs(SESSION_SECONDS);
+    let (policy, link) = match (o.sso.policy(&org).await, o.sso.person_link(&org, &person).await) {
+        (Ok(policy), Ok(link)) => (policy, link),
+        _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    // Someone the identity provider disabled is refused whatever they present.
+    if link.as_ref().is_some_and(|(_, _, blocked)| *blocked) {
+        return error(StatusCode::FORBIDDEN, "disabled at your organisation's identity provider");
+    }
+    let mut sso = false;
+    match &request.sso {
+        Some(token) => {
+            let login = match o.sso.login(token).await {
+                Ok(Some(login)) if login.org == org => login,
+                Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "this single sign-on belongs to another organisation"),
+                Ok(None) => return error(StatusCode::UNAUTHORIZED, "single sign-on expired"),
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            };
+            match o.sso.linked_person(&login).await {
+                Ok(Some((p, false))) if p == person => {}
+                Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "this single sign-on identity belongs to another member"),
+                // First sign-in with SSO for a person who joined before it was set up: link them.
+                Ok(None) if link.is_none() => match o.sso.link(&login, &person).await {
+                    Ok(()) => {}
+                    Err(_) => return error(StatusCode::CONFLICT, "this single sign-on identity could not be linked"),
+                },
+                Ok(None) => return error(StatusCode::FORBIDDEN, "this member is linked to another single sign-on identity"),
+                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+            }
+            // A device session never outlives the SSO login behind it.
+            if let Ok(left) = login.expires.duration_since(std::time::SystemTime::now()) {
+                until = until.min(Instant::now() + left);
+            }
+            sso = true;
+        }
+        None if policy.as_ref().is_some_and(|p| p.required) => return error(StatusCode::UNAUTHORIZED, "single sign-on is required"),
+        None => {}
+    }
     let token = random_hex();
     let mut sessions = o.sessions.lock().unwrap();
     let now = Instant::now();
@@ -251,8 +338,9 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
     if sessions.len() >= o.store.config.sessions {
         return error(StatusCode::SERVICE_UNAVAILABLE, "too many sessions");
     }
-    sessions.insert(core::hex(&core::sha256(token.as_bytes())), Session { org, key: request.key, until: now + Duration::from_secs(SESSION_SECONDS) });
-    Json(serde_json::json!({"token": token, "expires": SESSION_SECONDS, "person": person, "role": role})).into_response()
+    let expires = until.saturating_duration_since(now).as_secs();
+    sessions.insert(core::hex(&core::sha256(token.as_bytes())), Session { org, key: request.key, person: person.clone(), until });
+    Json(serde_json::json!({"token": token, "expires": expires, "person": person, "role": role, "sso": sso})).into_response()
 }
 
 #[derive(Deserialize)]
@@ -318,6 +406,8 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         Ok(s) => s,
         Err(r) => return r,
     };
+    // An SSO login that a join brings along, linked to the new person once the join commits.
+    let mut joining_login = None;
     if state.genesis.is_none() {
         // The setup code's signature inside genesis authenticates the first event.
         if kind != "genesis" {
@@ -342,19 +432,25 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
                     if invite.expires <= unix_now() {
                         return error(StatusCode::GONE, "the invitation expired");
                     }
-                    if invite.sso
-                        && let Err(r) = o.sso_gate(&headers, &org, invite.email_hash.as_deref()).await
-                    {
-                        return r;
-                    }
+                    joining_login = if invite.sso {
+                        match o.sso_gate(&headers, &org, invite.email_hash.as_deref()).await {
+                            Ok(login) => Some(login),
+                            Err(r) => return r,
+                        }
+                    } else {
+                        // Optional: a joiner signed in with SSO is linked right away.
+                        match o.sso_login(&headers, &org).await {
+                            Ok(login) => login,
+                            Err(r) => return r,
+                        }
+                    };
                 }
             }
             // Asking to join without an invitation needs the org's single sign-on.
-            "person.request" => {
-                if let Err(r) = o.sso_gate(&headers, &org, None).await {
-                    return r;
-                }
-            }
+            "person.request" => match o.sso_gate(&headers, &org, None).await {
+                Ok(login) => joining_login = Some(login),
+                Err(r) => return r,
+            },
             _ => {
                 let session = match o.session(&headers) {
                     Ok(s) => s,
@@ -417,6 +513,12 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         let _ = sqlx::query("DELETE FROM device_links WHERE org = $1 AND link = $2").bind(&org).bind(link).execute(&o.store.pool).await;
     }
     *guard = Some(next);
+    drop(guard);
+    if let (Some(login), Some(person)) = (&joining_login, value["body"]["person"].as_str()) {
+        // The person exists now; a failed link (a concurrent link of the same identity) only
+        // means they sign in with SSO once more to be linked.
+        let _ = o.sso.link(login, person).await;
+    }
     o.changed(&org);
     (StatusCode::CREATED, Json(serde_json::json!({"seq": seq, "hash": hash}))).into_response()
 }
@@ -745,10 +847,11 @@ async fn info(State(o): State<Shared>, Path(org): Path<String>) -> Response {
         Ok(slot) => slot,
         Err(r) => return r,
     };
-    let genesis = {
+    // The head lets someone holding an invitation sign their join at the current position.
+    let (genesis, head, count) = {
         let mut guard = slot.lock().await;
         match o.state(&mut guard, &org).await {
-            Ok(state) => state.genesis.is_some(),
+            Ok(state) => (state.genesis.is_some(), state.head.clone(), state.count),
             Err(r) => return r,
         }
     };
@@ -756,7 +859,7 @@ async fn info(State(o): State<Shared>, Path(org): Path<String>) -> Response {
         Ok(key) => key,
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    Json(serde_json::json!({"genesis": genesis, "serviceKey": key})).into_response()
+    Json(serde_json::json!({"genesis": genesis, "head": head, "count": count, "serviceKey": key})).into_response()
 }
 /// Keys this device's person could hand out but has not yet: for every project the person can
 /// open (and the org directory), the entitled X25519 keys that have no wrap for the current
@@ -944,6 +1047,66 @@ async fn request_link(State(o): State<Shared>, Path((org, link)): Path<(String, 
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SsoLinkRequest {
+    link: String,
+    device: String,
+    agreement: String,
+    proof: String,
+}
+/// A new browser signed in with the org's SSO as an existing member asks to become one of
+/// their devices. It waits, like a link answer, until one of that person's devices compares a
+/// code and signs device.add; the service alone cannot add it.
+async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap, Json(request): Json<SsoLinkRequest>) -> Response {
+    if !core::is_hex(&request.link, 16) || !core::is_hex(&request.device, 32) || !core::valid_agreement_key(&request.agreement) {
+        return error(StatusCode::BAD_REQUEST, "invalid device request");
+    }
+    let login = match o.sso_login(&headers, &org).await {
+        Ok(Some(login)) => login,
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "single sign-on is required"),
+        Err(r) => return r,
+    };
+    let person = match o.sso.linked_person(&login).await {
+        Ok(Some((person, false))) => person,
+        Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "disabled at your organisation's identity provider"),
+        Ok(None) => return error(StatusCode::FORBIDDEN, "this single sign-on identity is not a member yet"),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let proof = core::device_proof_message(&org, &core::link_binding(&request.link), &person, &request.device, &request.agreement);
+    if !core::ed25519_verify(&request.device, &proof, &request.proof) {
+        return error(StatusCode::FORBIDDEN, "the new device did not prove possession of its key");
+    }
+    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "via": "sso", "email": login.email});
+    let result = async {
+        let mut tx = o.store.pool.begin().await?;
+        sqlx::query("DELETE FROM device_links WHERE org = $1 AND expires < now()").bind(&org).execute(&mut *tx).await?;
+        let open: i64 = sqlx::query_scalar("SELECT count(*) FROM device_links WHERE org = $1 AND person = $2").bind(&org).bind(&person).fetch_one(&mut *tx).await?;
+        if open >= MAX_LINKS_PER_PERSON {
+            return Ok(false);
+        }
+        let inserted = sqlx::query("INSERT INTO device_links (org, link, person, link_key, expires, request) VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5), $6) ON CONFLICT DO NOTHING")
+            .bind(&org)
+            .bind(&request.link)
+            .bind(&person)
+            .bind(&request.device)
+            .bind(LINK_SECONDS as f64)
+            .bind(&stored)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(inserted.rows_affected() == 1)
+    }
+    .await;
+    match result {
+        Ok(true) => {
+            o.changed(&org);
+            (StatusCode::ACCEPTED, Json(serde_json::json!({"person": person}))).into_response()
+        }
+        Ok(false) => error(StatusCode::TOO_MANY_REQUESTS, "too many open device requests"),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
 /// The open links of this device's person, with any answer waiting for approval.
 async fn list_links(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap) -> Response {
     let session = match o.session(&headers) {
@@ -985,6 +1148,7 @@ pub fn routes(o: Shared) -> Router {
         .route("/v1/orgs/{org}/pending", get(pending))
         .route("/v1/orgs/{org}/heads", get(heads))
         .route("/v1/orgs/{org}/device-links", get(list_links).post(create_link))
+        .route("/v1/orgs/{org}/device-links/sso", post(sso_link_request))
         .route("/v1/orgs/{org}/device-links/{link}", post(request_link))
         .route("/v1/projects/{project}/log", get(read_log).post(append))
         .with_state(o)

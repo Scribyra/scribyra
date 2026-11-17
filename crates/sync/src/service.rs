@@ -558,7 +558,7 @@ pub fn router(s: Shared) -> Router {
         )
         .route("/v1/connect", get(upgrade))
         .with_state(s.clone())
-        .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone())))
+        .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone(), s.sso.clone())))
         .merge(crate::sso::routes(s.sso.clone()))
         .layer(
             CorsLayer::new()
