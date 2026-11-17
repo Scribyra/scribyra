@@ -102,16 +102,14 @@ exceeds the expected opted-in users (aim for under 60% of the limit).
 ### Changing the session sampling rate
 
 The rate is a build setting, so changing it needs no code change, only a new
-pipeline:
+production run:
 
-1. In GitLab, open the project's **Settings → CI/CD → Variables** and add (or edit)
+1. In the GitHub repository's **Settings → Secrets and variables → Actions →
+   Variables**, add (or edit) the repository variable
    `SCRIBYRA_TELEMETRY_SESSION_RATE` with one of `1`, `0.5`, `0.25`, `0.1`, `0.01`.
-   It is not secret; leave it unmasked. Protect it if only the default branch should
-   see it (the deploy job runs only there). Project variables override the `'1'`
-   default in `.gitlab-ci.yml`.
-2. Run a pipeline on the default branch (**Build → Pipelines → Run pipeline**), or
-   wait for the next merge. Any other value fails the `build` step, so a typo cannot
-   deploy.
+   It is not secret. Only the `production` workflow reads it; unset means `1`.
+2. Run `gh workflow run production.yml --ref main`, or wait for the next merge. Any
+   other value fails the `build` step, so a typo cannot deploy.
 3. Open tabs keep their old rate until they reload or take the update. Records carry
    `sampling_rate`, so dashboards stay correct across the change: divide counts by
    it (for example `sum by (...) (...) / sampling_rate` or per-record `1/sampling_rate`
@@ -324,8 +322,10 @@ certificates and those Pages domain certificates are independent.
 
 ## Continuous CI publication
 
-The existing `.gitlab-ci.yml` already runs `ci-telemetry.py` for build, Rust,
-JavaScript and Chromium Pages suites. With both variables present the helper
+The CI suite (`.github/workflows/suite.yml`) runs `ci-telemetry.py` for build, Rust,
+JavaScript and Chromium Pages suites; on GitHub no ingress variables are set, so
+it keeps the summaries as one-day artifacts. The variable commands below are for
+the former GitLab project. With both variables present the helper
 publishes each closed-schema summary to `/v1/runs`. Without them it saves safe
 local artifacts. A failed suite still publishes its summary; later suites after
 that failure are not claimed to have run. Unavailable ingestion is best effort
