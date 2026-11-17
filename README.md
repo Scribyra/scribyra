@@ -23,9 +23,9 @@
 </p>
 
 <p align="center">
-  <a href="https://app.scribyra.com/"><img src="https://img.shields.io/badge/Open_the_app-%E2%86%97-6856d8?style=for-the-badge" alt="Open the app" height="36"></a>
+  <a href="https://app.scribyra.com/"><img src="https://img.shields.io/badge/Open_the_app_%E2%86%97-6856d8?style=for-the-badge" alt="Open the app" height="36"></a>
   &nbsp;
-  <a href="https://scribyra.com/"><img src="https://img.shields.io/badge/Website-scribyra.com-eeebfc?style=for-the-badge&labelColor=5d4bbf" alt="Website: scribyra.com" height="36"></a>
+  <a href="https://scribyra.com/"><img src="https://img.shields.io/badge/Website-eeebfc?style=for-the-badge" alt="Website" height="36"></a>
 </p>
 
 <br>
@@ -46,29 +46,29 @@
 <table>
   <tr>
     <td width="33%" valign="top">
-      <h3>🔒 Yours, on your device</h3>
+      <b>🔒 Yours, on your device</b><br>
       Projects live in your browser. No account, no sign-in, and compiling never uploads your document.
     </td>
     <td width="33%" valign="top">
-      <h3>⚡ Real LuaLaTeX, in the tab</h3>
+      <b>⚡ Real LuaLaTeX, in the tab</b><br>
       TeX Live 2026 compiled to WebAssembly. One ~79&nbsp;MB download on first use, then it works offline.
     </td>
     <td width="33%" valign="top">
-      <h3>💬 Comments and suggestions</h3>
+      <b>💬 Comments and suggestions</b><br>
       Comments anchored to your text, suggested changes you accept or reject, and a discussion on each.
     </td>
   </tr>
   <tr>
     <td width="33%" valign="top">
-      <h3>🕰️ History you can go back to</h3>
+      <b>🕰️ History you can go back to</b><br>
       Named versions, line-by-line comparisons, restore, complete backups and plain ZIP export.
     </td>
     <td width="33%" valign="top">
-      <h3>📜 See TeX at work</h3>
+      <b>📜 See TeX at work</b><br>
       A live compile log streams each pass, its output and warnings while the document builds.
     </td>
     <td width="33%" valign="top">
-      <h3>🤖 Bring your AI agent</h3>
+      <b>🤖 Bring your AI agent</b><br>
       <em>Experimental.</em> An agent with a browser tool can read, edit and compile in your open tab.
     </td>
   </tr>
@@ -78,37 +78,30 @@ Free and open source under the AGPL. Every feature stays available in the free s
 
 ## What works
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/review-dark.png">
+    <img src="docs/screenshots/review-light.png" alt="A suggested change with Accept and Reject and a reply from a second author, next to an anchored comment and the compiled PDF" width="100%">
+  </picture>
+  <br>
+  <sub><b>Review together.</b> Comment on a selection, suggest changes that stay out of your source until accepted, and discuss each one.</sub>
+</p>
+
 <table>
   <tr>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/review-dark.png">
-        <img src="docs/screenshots/review-light.png" alt="A suggested change with Accept and Reject, a reply from a second author, and an anchored comment">
-      </picture>
-      <p align="center"><b>Review together.</b> Suggestions stay out of your source until accepted.</p>
-    </td>
     <td width="50%" valign="top">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/history-dark.png">
         <img src="docs/screenshots/history-light.png" alt="The history view comparing a named version with the current project, line by line">
       </picture>
-      <p align="center"><b>Go back in time.</b> Compare named versions and restore safely.</p>
+      <p align="center"><sub><b>Go back in time.</b> Compare named versions, then restore in place or as a copy.</sub></p>
     </td>
-  </tr>
-  <tr>
     <td width="50%" valign="top">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/compile-log-dark.png">
-        <img src="docs/screenshots/compile-log-light.png" alt="The live compile log showing a second LuaLaTeX pass rerunning for cross-references">
+        <img src="docs/screenshots/compile-log-light.png" alt="The live compile log while a second LuaLaTeX pass reruns for cross-references">
       </picture>
-      <p align="center"><b>Watch it compile.</b> Passes, output and warnings, live.</p>
-    </td>
-    <td width="50%" valign="top">
-      <picture>
-        <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/editor-dark.png">
-        <img src="docs/screenshots/editor-light.png" alt="Source and PDF side by side">
-      </picture>
-      <p align="center"><b>Write and see.</b> Source and PDF side by side, with SyncTeX jumps.</p>
+      <p align="center"><sub><b>Watch it compile.</b> Each pass, its output and warnings stream in live.</sub></p>
     </td>
   </tr>
 </table>
@@ -156,11 +149,9 @@ Everything else, including setup without Nix, tests, measurements, self-hosting 
 
 ## Roadmap
 
-| | |
-| --- | --- |
-| ✅ **Available** | The everyday workspace · TeX downloaded as you need it · comments, reviews and history |
-| 🧪 **Experimental** | An AI working in your tab · direct sessions on a shared network (off by default) |
-| 🗺️ **Planned** | Remote and local Git · plugins, including Zotero · remote backup, sync and collaboration · end-to-end encryption · managed hosting |
+- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, and comments, reviews and history.
+- 🧪 **Experimental:** an AI working in your tab, and direct sessions on a shared network (off by default).
+- 🗺️ **Planned:** remote and local Git, plugins including Zotero, remote backup, sync and collaboration, end-to-end encryption, and managed hosting.
 
 The [full roadmap](docs/roadmap.md) has the milestones, their state and the evidence behind them.
 
