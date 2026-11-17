@@ -38,6 +38,9 @@ import './style.css';
 import './menu.css';
 import './review-editor.css';
 import {editorSearch} from './editor-search.js';
+import {latexCompletion,prefetchCompletionData} from './latex-completion.js';
+import {latexIndex} from './latex-index.js';
+import './latex-completion.css';
 import * as Y from 'yjs';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from '@codemirror/view';
 import { EditorState, Compartment } from '@codemirror/state';
@@ -73,7 +76,7 @@ const startupAt=performance.now(),dashboardTitle=document.title;
 let providerPanel;const providerConnections=new Map();
 let environmentPanel,companionPanel,companion;let pdfBuild=null,leavingProject=false;
 let allProjects = [], doc, projectId, editor, sync, pdfBytes, commands;
-let collaboration,agent,agentOwner,transientProject=false,direct,openingDirectAttempt;
+let collaboration,agent,agentOwner,transientProject=false,direct,openingDirectAttempt,completionIndex=null;
 let initialDirectInvite=location.hash.startsWith('#direct=')?location.href:'';
 if(initialDirectInvite)history.replaceState(null,'',location.pathname+location.search);
 // An invite pasted into the address bar of an open tab must not stay in the URL or history either.
@@ -96,7 +99,7 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // providers stay reachable only behind this test-only switch; production never
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
-const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
+const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
 const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
@@ -104,14 +107,14 @@ const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision
 const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision,emit,notify:notice,showRectangle:showSourceRectangle,clearMarker:clearSourceHighlight,activate:(id,line)=>{activateFile(id);selectSourceLine(line);}});
 function persistWorkspace() {
   if (!projectId || !doc || transientProject) return;
-  try { localStorage.setItem(`scribyra:workspace:${projectId}`,JSON.stringify({tabs:state.tabs.map(f=>f.id),active:state.active,fontSize:state.fontSize,tabSize:state.tabSize,wrap:state.wrap,auto:state.auto})); }
+  try { localStorage.setItem(`scribyra:workspace:${projectId}`,JSON.stringify({tabs:state.tabs.map(f=>f.id),active:state.active,fontSize:state.fontSize,tabSize:state.tabSize,wrap:state.wrap,auto:state.auto,autocomplete:state.autocomplete})); }
   catch { state.notice='Editor preferences could not be saved on this device.'; }
 }
 function loadWorkspace() {
   let prefs;try{prefs=JSON.parse(localStorage.getItem(`scribyra:workspace:${projectId}`));}catch{}
   const files=projectFiles(doc),ids=new Set(files.map(f=>f.id));
   state.fontSize=Number.isInteger(prefs?.fontSize)&&prefs.fontSize>=12&&prefs.fontSize<=24?prefs.fontSize:14;
-  state.tabSize=[2,4,8].includes(prefs?.tabSize)?prefs.tabSize:2;state.wrap=prefs?.wrap!==false;state.auto=prefs?.auto===true;
+  state.tabSize=[2,4,8].includes(prefs?.tabSize)?prefs.tabSize:2;state.wrap=prefs?.wrap!==false;state.auto=prefs?.auto===true;state.autocomplete=prefs?.autocomplete!==false;
   if(Array.isArray(prefs?.tabs)){state.tabs=[...new Set(prefs.tabs)].filter(id=>ids.has(id)).map(id=>files.find(f=>f.id===id));state.active=state.tabs.some(f=>f.id===prefs.active)?prefs.active:state.tabs[0]?.id||'';}
   else {state.active=(files.find(f=>f.id===doc.getMap('meta').get('mainFile'))||files.find(f=>!f.binary)||files[0])?.id||'';state.tabs=[];}
 }
@@ -122,7 +125,7 @@ function captureSelection() {
 }
 const syntaxColors={'#708':'keyword','#219':'keyword','#05a':'special','#164':'variable','#a11':'string','#00f':'number','#085':'variable','#a50':'type','#777':'comment','#c00':'invalid'};
 const accessibleHighlight=HighlightStyle.define(defaultHighlightStyle.specs.map(style=>({...style,...(style.color?{color:syntaxColors[style.color]?`var(--syntax-${syntaxColors[style.color]})`:'var(--text)'}:{})})));
-function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[])];}
+function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
 // Comments stay available in Viewing; anything that decides a suggestion or changes accepted source does not.
 const viewingRefuses=new Set(['suggestion.accept','suggestion.reject','suggestion.withdraw','review.acceptAll','review.acceptSet','review.propose','review.retry','review-accept-visible','review-reject-visible','change.undo','change.redo']);
 function activateFile(id,start,end=start) {
@@ -271,7 +274,7 @@ async function leaveProject({save=true,directAttempt}={}) {
   try{if(save)await flushSave();}catch(error){leavingProject=false;throw error;}
   agent?.close();agent=null;window.scribyra.agent=null;
   tabSession?.close();tabSession=null; persistWorkspace(); workspace.leave(); navigation.clear(); selections.clear(); clearTimeout(autoTimer); autoPending=false; builds.close(); state.busy = false;
-  texLinks.close();transientProject=false;
+  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;
   clearAsset(); collapsed.clear(); sourcePositions.clear(); lastSource=null;
   sync?.close(); sync = null; editor?.destroy(); editor = null; mountedFile = null;
   for (const manager of undoManagers.values()) manager.destroy(); undoManagers.clear();
@@ -319,7 +322,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   Object.assign(state,collaboration.state);
   agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
   window.scribyra.agent=agent.api;
-  loadWorkspace();texLinks.open(id,doc); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
+  loadWorkspace();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');
   if(previousEngine!=='lualatex') { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
   refreshDoc(); state.selected = state.active; emit();
@@ -723,7 +726,7 @@ async function action(name, value = '', detail = {}) {
         const target=doc,seen={name:state.name,mainFile:state.mainFile},result=await editorSettings(state,state.files);if(!result||target!==doc)break;
         // Only what the person changed is sent; another tab's or a peer's edit elsewhere doesn't void it.
         {const command=sharedSettings(seen,{name:result.name,mainFile:result.mainFile},'Project settings');if(Object.keys(command).length>1)client.run(command,expected);}
-        Object.assign(state,{fontSize:result.fontSize,tabSize:result.tabSize,wrap:result.wrap,auto:result.auto});
+        Object.assign(state,{fontSize:result.fontSize,tabSize:result.tabSize,wrap:result.wrap,auto:result.auto,autocomplete:result.autocomplete});
         editor?.dispatch({effects:editorOptions.reconfigure(options())});document.getElementById('code-editor')?.style.setProperty('--editor-font-size',`${state.fontSize}px`);
         if(!state.auto){autoPending=false;clearTimeout(autoTimer);}persistWorkspace();emit();break;
       }

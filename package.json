@@ -46,6 +46,7 @@
     "release:changelog": "node scripts/release-changelog.mjs"
   },
   "dependencies": {
+    "@codemirror/autocomplete": "6.20.4",
     "@codemirror/commands": "^6.8.0",
     "@codemirror/language": "^6.11.0",
     "@codemirror/legacy-modes": "^6.5.0",

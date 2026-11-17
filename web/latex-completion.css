@@ -1,0 +1,17 @@
+/* LaTeX autocomplete: the popup shares the look of the app's menus (menu.css) in both themes. */
+#code-editor .cm-tooltip.latex-completions{box-sizing:border-box;padding:4px;border:1px solid var(--border)!important;border-radius:10px;background:var(--surface)!important;color:var(--text)!important;box-shadow:var(--popup-shadow);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12.5px;line-height:1.35}
+#code-editor .latex-completions>ul{font-family:inherit!important;min-width:min(340px,calc(100vw - 32px));max-width:min(480px,calc(100vw - 32px));max-height:min(312px,45vh)!important;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+#code-editor .latex-completions>ul>li{display:grid;grid-template-columns:max-content minmax(0,1fr) auto;grid-template-areas:"label detail source" "description description description";align-items:baseline;min-height:28px;box-sizing:border-box;padding:5px 8px;border-radius:6px;color:var(--text);white-space:nowrap;cursor:pointer}
+#code-editor .latex-completions>ul>li+li{margin-top:1px}
+#code-editor .latex-completions>ul>li:hover{background:var(--subtle)}
+#code-editor .latex-completions>ul>li[aria-selected]{background:var(--accent-soft);color:var(--text)}
+#code-editor .latex-completions .cm-completionLabel{grid-area:label;font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:12px;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+#code-editor .latex-completions .cm-completionMatchedText{text-decoration:none;color:var(--accent);font-weight:650}
+#code-editor .latex-completions .cm-completionDetail{grid-area:detail;margin:0;font-style:normal;font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis}
+#code-editor .latex-completions .latex-completion-text .cm-completionDetail{margin-left:10px;font-family:inherit;font-size:11.5px}
+#code-editor .latex-completions .cm-completionSource{grid-area:source;justify-self:end;margin-left:14px;font-size:10.5px;line-height:17px;color:var(--muted);max-width:150px;overflow:hidden;text-overflow:ellipsis}
+#code-editor .latex-completions li[aria-selected] .cm-completionSource{color:var(--text)}
+#code-editor .latex-completions .cm-completionDescription{grid-area:description;display:none;margin-top:2px;font-size:11px;line-height:1.4;color:var(--muted);white-space:normal;overflow-wrap:anywhere}
+#code-editor .latex-completions li[aria-selected] .cm-completionDescription{display:block}
+#code-editor .latex-completions li[aria-selected] .cm-completionDetail,#code-editor .latex-completions li[aria-selected] .cm-completionDescription{color:color-mix(in srgb,var(--text) 72%,var(--accent-soft))}
+@media (forced-colors:active){#code-editor .latex-completions>ul>li[aria-selected]{outline:2px solid Highlight}}
