@@ -91,6 +91,8 @@ test('Escape closes, Enter is a newline when the list is closed, Ctrl+Space reop
   await type(page,'\\sec');await expect(popup(page)).toBeVisible();await page.keyboard.press('Escape');await expect(popup(page)).toBeHidden();
   await page.keyboard.press('Enter');let state=await view(page);expect(state.text.endsWith('\\sec\n')).toBe(true);
   await type(page,'plain words');await page.waitForTimeout(250);await expect(popup(page)).toBeHidden();await page.keyboard.press('Enter');state=await view(page);expect(state.text.endsWith('plain words\n')).toBe(true);
+  // A command typed in full that takes no argument leaves Enter to the newline.
+  await type(page,'\\item');await expect(selected(page)).toContainText('\\item');await page.keyboard.press('Enter');state=await view(page);expect(state.text.endsWith('\\item\n')).toBe(true);await expect(popup(page)).toBeHidden();
   await type(page,'\\sub');await page.keyboard.press('Escape');await page.keyboard.press('Control+Space');await expect(selected(page)).toContainText('\\subsection');await page.keyboard.press('Escape');
   await page.keyboard.press('End');await page.keyboard.press('Enter');await type(page,'% a comment \\sec');await page.waitForTimeout(300);await expect(popup(page)).toBeHidden();await page.keyboard.press('Control+Space');await page.waitForTimeout(300);await expect(popup(page)).toBeHidden();
   await page.keyboard.press('Enter');await page.keyboard.insertText('\\begin{verbatim}\n');await type(page,'\\sec');await page.waitForTimeout(300);await expect(popup(page)).toBeHidden();

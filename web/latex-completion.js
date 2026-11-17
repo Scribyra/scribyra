@@ -3,7 +3,7 @@
 // `\end`; inside `\ref{`, `\cite{`, `\input{`, `\includegraphics{` and `\usepackage{` it offers
 // names from the project and the TeX catalog. Enter or Tab accepts, Escape closes,
 // Ctrl/Cmd+Space opens it by hand. Command data loads lazily on first use.
-import {autocompletion,snippet,acceptCompletion,startCompletion,completionStatus,pickedCompletion} from '@codemirror/autocomplete';
+import {autocompletion,snippet,acceptCompletion,startCompletion,completionStatus,pickedCompletion,selectedCompletion,closeCompletion} from '@codemirror/autocomplete';
 import {keymap} from '@codemirror/view';
 import {Prec} from '@codemirror/state';
 
@@ -140,7 +140,7 @@ function insertSnippet(template,usageKey){
 function commandOption(item,ranges,brace){
   // Text already typed after the name (an opening brace or bracket) is kept, never doubled.
   const template=brace&&/^[{[(]/.test(item.template)?'':item.template;
-  return {label:item.label,detail:item.detail,type:'command',description:item.description,source:item.source,ranges:ranges.map(r=>r+1),
+  return {label:item.label,detail:item.detail,type:'command',description:item.description,source:item.source,ranges:ranges.map(r=>r+1),complete:!template,
     apply:insertSnippet('\\'+escapeName(item.name)+template,item.usageKey)};
 }
 function environmentOption(item,ranges,{from,to,label=item.label}){
@@ -229,13 +229,20 @@ export function latexCompletion({index=()=>null,currentPath=()=>''}={}){
     if(!option[field])return null;const span=document.createElement('span');span.className=className;
     const pause=document.createElement('span');pause.className='sr-only';pause.textContent=', ';span.append(pause,option[field]);return span;}});
   return [
+    // Before autocompletion's own keymap, which shares the highest precedence.
+    Prec.highest(keymap.of([
+      {key:'Tab',run:view=>completionStatus(view.state)==='active'&&acceptCompletion(view)},
+      // `\item` typed in full needs nothing more: Enter closes the list and starts a new line.
+      {key:'Enter',run:view=>{
+        if(completionStatus(view.state)!=='active')return false;const option=selectedCompletion(view.state),{head}=view.state.selection.main;
+        if(!option?.complete||view.state.sliceDoc(head-option.label.length,head)!==option.label||/[A-Za-z]/.test(view.state.sliceDoc(head,head+1)))return false;
+        closeCompletion(view);return false;
+      }},
+      {key:'Mod-Space',run:view=>!view.state.readOnly&&startCompletion(view)},
+    ])),
     autocompletion({override:[source],activateOnTyping:true,activateOnTypingDelay:20,icons:false,closeOnBlur:true,maxRenderedOptions:MAX_OPTIONS,
       tooltipClass:()=>'latex-completions',optionClass:option=>`latex-completion-${option.type||'text'}`,
       addToOptions:[render('cm-completionSource','source'),render('cm-completionDescription','description')]}),
-    Prec.highest(keymap.of([
-      {key:'Tab',run:view=>completionStatus(view.state)==='active'&&acceptCompletion(view)},
-      {key:'Mod-Space',run:view=>!view.state.readOnly&&startCompletion(view)},
-    ])),
   ];
 }
 /** Load the command data in idle time so the first `\` finds it ready. */
