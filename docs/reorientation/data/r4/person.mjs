@@ -30,7 +30,9 @@ try{
   // Types a numbered comment line at the end of a file every few seconds, as a person working alongside the agent.
   case 'keep-typing':{const [file,count,every]=[args[0],Number(args[1]||10),Number(args[2]||15000)];
    for(let i=1;i<=count;i++){await openFile(file);await source.click();await page.keyboard.press('Control+End');await page.keyboard.type(`\n% person note ${i}`,{delay:60});console.log(new Date().toISOString(),'typed',i);await page.waitForTimeout(every);}break;}
-  case 'reload':await page.reload();await source.waitFor();console.log(await page.title());break;
+  // The person's approval: accept each open suggestion in the review panel.
+  case 'accept':{const items=page.getByRole('article',{name:'Suggestion'});const n=await items.count();for(let i=0;i<n;i++){console.log('accepting:',await items.first().getByRole('button').first().innerText());await items.first().getByRole('button',{name:'Accept',exact:true}).click();await page.waitForTimeout(1000);}console.log('accepted',n);break;}
+  case 'reload':await page.reload();await page.waitForTimeout(3000);console.log(await page.title());break;
   default:throw Error('unknown command '+cmd);
  }
 }finally{await browser.close();}

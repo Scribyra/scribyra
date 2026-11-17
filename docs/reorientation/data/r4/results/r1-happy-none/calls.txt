@@ -1,0 +1,16 @@
+browser_tabs [288 chars] {"action": "list"}
+browser_snapshot [8185 chars] {}
+browser_click [388 chars] {"target": "e122"}
+browser_find [4560 chars] {"regex": "/12|twelve/i"}
+browser_click [377 chars] {"target": "e247"}
+browser_press_key [116 chars] {"key": "Home"}
+browser_run_code_unsafe [446 chars] {"code": "async (page) => { for (let i=0;i<11;i++) await page.keyboard.press('ArrowRight'); await page.keyboard.press('Shift+ArrowRight'); await page.keyboard.press('Shift+ArrowRight'); await page.keyboard.type('14'); return await page.getByText('We visited').first().textContent(); }"}
+browser_click [391 chars] {"target": "e108"}
+browser_wait_for [574 chars] {"time": 5}
+browser_click [565 chars] {"target": "e215"}
+browser_snapshot [814 chars] {"target": "e212"}
+browser_find [5007 chars] {"regex": "/warning|page|error|Output written/i"}
+browser_wait_for [576 chars] {"time": 8}
+browser_snapshot [6314 chars] {"target": "e279"}
+browser_wait_for [402 chars] {"time": 10}
+browser_find [1290 chars] {"regex": "/Compilation status|Output written on main\\.pdf \\(\\d+ pages?|LaTeX Warning[^\"]{0,80}|Compiled|Compile failed|Warnings?/", "maxResults": 12}

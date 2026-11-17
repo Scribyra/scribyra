@@ -1,0 +1,7 @@
+browser_tabs [304 chars] {"action": "list"}
+browser_navigate [331 chars] {"url": "http://127.0.0.1:4492/agent.md"}
+browser_evaluate [2246 chars] {"function": "() => document.body.innerText"}
+browser_navigate_back [566 chars] {}
+browser_evaluate [1095 chars] {"function": "async () => { const a = window.scribyra.agent; return {s: await a.status(), t: await a.readTree({})}; }"}
+browser_evaluate [2431 chars] {"function": "async () => { const a = window.scribyra.agent; const r = await a.readSource({path:'main.tex'}); const p = await a.patchSource({expectedRevision:r.revision, requestId:'author-1', edits:[{path:'main.tex', find:'Your name', replace:'Paul Schuldesz'}]}); return {r, p}; }"}
+browser_evaluate [1464 chars] {"function": "async () => { const a = window.scribyra.agent; const c = await a.compile(); const jobId = c.value?.jobId; const p = await a.poll({jobId, waitMs:25000}); return {c, p}; }"}

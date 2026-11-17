@@ -1,0 +1,6 @@
+browser_tabs [116 chars] {"action": "list"}
+browser_evaluate [2293 chars] {"function": "async () => { const r = await fetch('/agent.md'); return await r.text(); }"}
+browser_evaluate [1983 chars] {"function": "async () => { const a = window.scribyra.agent; return {s: await a.status(), t: await a.readTree({})}; }"}
+browser_evaluate [1163 chars] {"function": "async () => await window.scribyra.agent.readSource({path:'sections/results.tex'})"}
+browser_evaluate [1662 chars] {"function": "async () => { const a = window.scribyra.agent; const out = {}; for (const p of ['main.tex','sections/introduction.tex','sections/method.tex']) out[p] = (await a.readSource({path:p})).value.content; return out; }"}
+browser_evaluate [1481 chars] {"function": "async () => { const a = window.scribyra.agent; const c = await a.compile(); const jobId = c.value?.jobId ?? c.jobId; let p = await a.poll({jobId, waitMs:25000}); return {c, p}; }"}
