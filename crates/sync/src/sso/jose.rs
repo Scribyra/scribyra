@@ -375,10 +375,8 @@ pub struct Logout {
 /// Check a logout token's claims (OpenID Connect Back-Channel Logout 1.0, section 2.6).
 pub fn check_logout_token(claims: &Map<String, Value>, expect: &Expect) -> Result<Logout, ClaimError> {
     check_common(claims, expect)?;
-    if let Some(exp) = number(claims, "exp") {
-        if exp + SKEW_SECONDS <= expect.now {
-            return Err(ClaimError::Expired);
-        }
+    if number(claims, "exp").is_some_and(|exp| exp + SKEW_SECONDS <= expect.now) {
+        return Err(ClaimError::Expired);
     }
     // Logout tokens are short lived: refuse old ones even without `exp`.
     if number(claims, "iat").is_some_and(|iat| iat + 600 < expect.now) {

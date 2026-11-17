@@ -7,6 +7,7 @@
 //! test process exits (normally, by panic or by signal).
 #![allow(dead_code)]
 pub mod orgs;
+pub mod sso;
 use scribyra_sync::blobs::S3Settings;
 use std::{
     io::{BufRead, BufReader, Read, Write},

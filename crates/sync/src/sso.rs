@@ -376,10 +376,10 @@ impl Sso {
     /// The provider's discovery document, cached for an hour. Its `issuer` must equal the
     /// configured issuer exactly and every endpoint must be https (http only on loopback).
     async fn provider(&self, issuer: &str) -> Result<Provider, &'static str> {
-        if let Some((provider, fetched)) = self.discovery.lock().unwrap().get(issuer) {
-            if fetched.elapsed() < Duration::from_secs(DISCOVERY_SECONDS) {
-                return Ok(provider.clone());
-            }
+        if let Some((provider, fetched)) = self.discovery.lock().unwrap().get(issuer)
+            && fetched.elapsed() < Duration::from_secs(DISCOVERY_SECONDS)
+        {
+            return Ok(provider.clone());
         }
         let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
         let (status, body) = self.call(Outbound::Get(url)).await.map_err(|_| "unavailable")?;
@@ -616,7 +616,7 @@ async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Re
     if !is_hex64(&request.org) || !is_hex64(&request.challenge) {
         return error(StatusCode::BAD_REQUEST, "invalid request");
     }
-    if !s.origins.iter().any(|o| *o == request.return_to) {
+    if !s.origins.contains(&request.return_to) {
         return error(StatusCode::BAD_REQUEST, "return origin not allowed");
     }
     let settings = match s.settings(&request.org).await {
@@ -1008,15 +1008,11 @@ pub async fn command(config: &Config, args: &[String]) -> Result<Value, &'static
         if secret.is_empty() || secret.len() > 1024 || secret.contains(['\n', '\r']) {
             return Err("the client secret file must hold one non-empty line");
         }
-        if let Some(d) = &email_domain {
-            if d.len() > 253 || !d.contains('.') || d.starts_with(['.', '-']) || !d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-') {
-                return Err("--email-domain must be a domain name such as example.org");
-            }
+        if email_domain.as_ref().is_some_and(|d| d.len() > 253 || !d.contains('.') || d.starts_with(['.', '-']) || !d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')) {
+            return Err("--email-domain must be a domain name such as example.org");
         }
-        if let Some(c) = &groups_claim {
-            if c.is_empty() || c.len() > 128 || !c.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.:/".contains(&b)) {
-                return Err("--groups-claim must be a claim name");
-            }
+        if groups_claim.as_ref().is_some_and(|c| c.is_empty() || c.len() > 128 || !c.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.:/".contains(&b))) {
+            return Err("--groups-claim must be a claim name");
         }
         Some((issuer, client_id, secret.to_owned()))
     };
