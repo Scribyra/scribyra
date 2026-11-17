@@ -78,11 +78,24 @@ export function recoverySecrets(code){
 // --- Device keys
 
 const X25519={name:'X25519'};
-export async function newAgreementKey(){
+/** A device's X25519 agreement key. With `sealWith` (an at-rest storage key) the private key is
+ * also returned sealed as PKCS#8, for browsers that cannot keep an X25519 CryptoKey in IndexedDB;
+ * the CryptoKey in memory is non-extractable either way. */
+export async function newAgreementKey({sealWith=null,context=''}={}){
  if(!globalThis.crypto?.subtle)throw Error('Remote backup needs Web Crypto, which this page does not provide (use https or localhost).');
  let keys;
- try{keys=await crypto.subtle.generateKey(X25519,false,['deriveBits']);}catch{throw Error('This browser cannot create an X25519 key. Use a current Chromium, Firefox or Safari.');}
- return{privateKey:keys.privateKey,publicKey:hex(new Uint8Array(await crypto.subtle.exportKey('raw',keys.publicKey)))};
+ try{keys=await crypto.subtle.generateKey(X25519,!!sealWith,['deriveBits']);}catch{throw Error('This browser cannot create an X25519 key. Use a current Chromium, Firefox or Safari.');}
+ const publicKey=hex(new Uint8Array(await crypto.subtle.exportKey('raw',keys.publicKey)));
+ if(!sealWith)return{privateKey:keys.privateKey,publicKey};
+ const pkcs8=new Uint8Array(await crypto.subtle.exportKey('pkcs8',keys.privateKey));
+ try{return{privateKey:await crypto.subtle.importKey('pkcs8',pkcs8,X25519,false,['deriveBits']),publicKey,sealed:await sealAtRest(sealWith,pkcs8,context)};}
+ finally{pkcs8.fill(0);}
+}
+/** Reopens an agreement key sealed by newAgreementKey as a non-extractable CryptoKey. */
+export async function openAgreementKey(storageKey,{publicKey,sealed},context){
+ const pkcs8=await openAtRest(storageKey,sealed,context);
+ try{return{privateKey:await crypto.subtle.importKey('pkcs8',pkcs8,X25519,false,['deriveBits']),publicKey,sealed};}
+ finally{pkcs8.fill(0);}
 }
 /** Sign with a WebCrypto Ed25519 identity ({privateKey,publicKey}) or a raw 32-byte seed. */
 export async function sign(signer,message){

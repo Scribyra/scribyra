@@ -105,7 +105,7 @@ Clients pin the genesis hash when they join (it is in the invitation link). A se
 A device is a browser profile. On first connection to a service (or when D is turned on, as today) the app creates, inside a Web Lock:
 
 - the Ed25519 signing key (non-extractable, as D's `newIdentity` already does), and
-- an X25519 agreement key (non-extractable; WebCrypto X25519 is available in current Chromium, Firefox and Safari).
+- an X25519 agreement key (non-extractable; WebCrypto X25519 is available in current Chromium, Firefox and Safari). WebKit on Linux stores an IndexedDB record that holds an X25519 `CryptoKey` but reads it back as null; where a one-time round trip shows this, the key is created extractable once, kept in IndexedDB only as PKCS#8 sealed by the local storage key, and imported as a non-extractable `CryptoKey` whenever the connection is read.
 
 The **first** device of a person defines the person ID. Later devices are added by a `device.add` event signed by an existing device of the same person (linking) or by an admin (re-enrolment after loss). Linking works like pairing a phone: the new device shows a QR code or a 12-character code with its public keys; the existing device scans or types it, shows a comparison code (D's `comparisonCode`), and signs.
 
@@ -387,7 +387,7 @@ Awareness (cursors, selections, presence, agent labels) uses the existing relay.
 ```
 Device (per browser profile)
   ├─ Ed25519 signing key         non-extractable; signs events, entries, wraps
-  ├─ X25519 agreement key        non-extractable; receives wrapped keys
+  ├─ X25519 agreement key        non-extractable (sealed by the storage key where IndexedDB cannot keep it); receives wrapped keys
   └─ local storage key           non-extractable AES-GCM; encrypts cached keys in IndexedDB
 
 Person

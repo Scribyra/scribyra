@@ -144,6 +144,32 @@ test('lost answers resume: genesis, project creation and a kit replacement are n
  }finally{engine?.close();await erase();await s.close();}
 });
 
+test('a browser that cannot keep an X25519 key in IndexedDB keeps it sealed and opens shared keys after a reload',async()=>{
+ const s=await service({org:true});let engine;
+ try{
+  await erase();
+  // WebKit on Linux reads a record holding an X25519 CryptoKey back as null; the engine then seals it.
+  engine=orgBackup({fetchImpl:fetch,sealAgreement:true});await engine.connect(await orgCreate(s,'sealed'));await engine.confirmKit();
+  const a=await localProject('Sealed agreement','\\documentclass{article}\\begin{document}SEALED\\end{document}');
+  await engine.backUp(a.id);await settled(engine,a.id);
+  engine.close();
+  const {openDB}=await import('idb'),raw=await openDB('scribyra-org');
+  try{
+   const record=await raw.get('connection','current');
+   assert.equal(record.agreement.privateKey,undefined);assert(record.agreement.sealed?.ct instanceof Uint8Array);
+   assert.equal(await raw.get('connection','x25519-probe'),undefined);
+   // Drop the cached project keys, so the reloaded browser must open its wraps with the sealed key.
+   await raw.clear('keys');
+  }finally{raw.close();}
+  engine=orgBackup({fetchImpl:fetch,sealAgreement:true});await engine.start();
+  assert.equal(engine.connected,true);
+  const [project]=await engine.projects();
+  const result=await engine.download(project.project);
+  assert(result,'nothing was downloaded');
+  assert.deepEqual((await storage.listProjects()).map(p=>p.name).sort(),['Sealed agreement','Sealed agreement']);
+ }finally{engine?.close();await erase();await s.close();}
+});
+
 test('restore reads every page of a long log, and an interrupted restore can be finished later',async()=>{
  const s=await service({org:true});let engine,fresh;
  try{

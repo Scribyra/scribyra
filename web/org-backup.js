@@ -18,7 +18,7 @@ import {validateReplica} from './replication.js';
 import {validateRetainedState,MAX_RETAINED_BYTES} from './model.js';
 import {orgClient,ServiceError} from './org-client.js';
 import {
- parseSetupCode,parseKit,formatKit,newRecoveryCode,recoverySecrets,recoveryProof,newAgreementKey,newStorageKey,sealAtRest,openAtRest,
+ parseSetupCode,parseKit,formatKit,newRecoveryCode,recoverySecrets,recoveryProof,newAgreementKey,openAgreementKey,newStorageKey,sealAtRest,openAtRest,
  signEvent,genesisBody,enrolPublic,deviceProof,applyEvents,newProjectKey,wrapProjectKey,unwrapProjectKey,personId,
  sealEntry,openEntry,verifyEntryBody,entryHash,chainNext,randomBytes,hex,unhex,sha256Hex,
  sealName,openName,sealProjectName,openProjectName,wrapRecipients,
@@ -49,6 +49,7 @@ const INVITE_DAYS=7;
 const LINK_MS=15*60*1000;
 const keyContext=(org,project,epoch)=>`scribyra-org-key/1\n${org}\n${project}\n${epoch}`;
 const kitContext=org=>`scribyra-org-kit/1\n${org}`;
+const agreementContext=(org,device)=>`scribyra-org-agreement/1\n${org}\n${device}`;
 const SSO_FLOW='scribyra:sso-flow',SSO_LOGIN='scribyra:sso-login';
 const readSession=key=>{try{return JSON.parse(globalThis.sessionStorage?.getItem(key)||'null');}catch{return null;}};
 const writeSession=(key,value)=>{try{if(value)globalThis.sessionStorage.setItem(key,JSON.stringify(value));else globalThis.sessionStorage.removeItem(key);}catch{}};
@@ -73,17 +74,40 @@ function mergeVectors(a,b){
  return Uint8Array.from(bytes);
 }
 
-export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},fetchImpl,locks=globalThis.navigator?.locks,appOrigin=globalThis.location?.origin}={}){
+export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},fetchImpl,locks=globalThis.navigator?.locks,appOrigin=globalThis.location?.origin,sealAgreement}={}){
  let db,connection,client,closed=false,unwatch,pendingKitText='',following=null,live=false,polling=null,onlineHook=null;
  const statuses=new Map(),timers=new Map(),attempts=new Map(),queues=new Map();
  const setStatus=(localId,state,message='')=>{statuses.set(localId,{state,message,label:STATUS_TEXT[state]});onChange(localId);};
  async function open(){db??=await database();return db;}
+ // WebKit on Linux stores a record that holds an X25519 CryptoKey but reads it back as null. Where
+ // that round trip fails, the agreement key is kept sealed (PKCS#8) under the non-extractable
+ // storage key instead, and reopened as a non-extractable CryptoKey when the record is read.
+ let agreementSealed=sealAgreement===undefined?null:Promise.resolve(!!sealAgreement);
+ function mustSealAgreement(){
+  return agreementSealed??=(async()=>{
+   const store=await open(),probe=(await crypto.subtle.generateKey({name:'X25519'},false,['deriveBits'])).privateKey;
+   try{await store.put('connection',{probe},'x25519-probe');return(await store.get('connection','x25519-probe'))?.probe?.type!=='private';}
+   catch{return true;}
+   finally{await store.delete('connection','x25519-probe').catch(()=>{});}
+  })();
+ }
+ async function readConnection(){
+  const stored=await (await open()).get('connection','current');
+  if(stored?.agreement?.sealed)stored.agreement=await openAgreementKey(stored.storageKey,stored.agreement,agreementContext(stored.org,stored.device));
+  return stored;
+ }
  async function load(){
-  await open();connection=await db.get('connection','current');
+  const stored=await readConnection();
+  // A connect, join or link in progress here owns `connection` until it is ready; a record read
+  // meanwhile is older than that flow's own state and must not replace it.
+  if(stored?.ready||!connection||connection.ready)connection=stored;
   if(!connection||!connection.ready)throw Error('This browser is not connected to a service.');
   client??=orgClient(connection.service,{fetchImpl});return connection;
  }
- async function saveConnection(){await (await open()).put('connection',connection,'current');}
+ async function saveConnection(){
+  const record=connection.agreement?.sealed?{...connection,agreement:{publicKey:connection.agreement.publicKey,sealed:connection.agreement.sealed}}:connection;
+  await (await open()).put('connection',record,'current');
+ }
  async function signIn(){
   try{return await client.signIn(connection.org,await deviceIdentity(),{sso:connection.ssoToken});}
   catch(error){if(ssoNeeded(error)){connection.ssoToken=null;connection.ssoNeeded=true;await saveConnection();onMembership();}throw error;}
@@ -486,7 +510,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  }
  async function withCreatedKeys(){const identity=await profileIdentity({create:true});setDirectKeyPresent(true);return identity;}
  async function freshConnection(service,org,person,identity,extra={}){
-  const agreement=await newAgreementKey(),storageKey=await newStorageKey();
+  const storageKey=await newStorageKey(),agreement=await newAgreementKey(await mustSealAgreement()?{sealWith:storageKey,context:agreementContext(org,identity.publicKey)}:{});
   connection={service,org,person,device:identity.publicKey,agreement,storageKey,state:null,ready:false,...extra};
   await saveConnection();if(extra.joined||extra.genesisExpected)markJoining();return connection;
  }
@@ -529,7 +553,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** Starts syncing linked projects if this browser was connected before (or resumes a waiting join). */
   async start(){
    if(orgJoining()&&!orgConnected()){
-    await open();const stored=await db.get('connection','current');
+    const stored=await readConnection();
     if(stored&&!stored.ready&&stored.joined){connection=stored;client=orgClient(stored.service,{fetchImpl});}
     return false;
    }
@@ -557,7 +581,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     const identity=await withCreatedKeys();await open();
     client=orgClient(setup.service,{fetchImpl});
     // A previous attempt for this organisation left its keys and genesis here: resume it.
-    const previous=await db.get('connection','current');
+    const previous=await readConnection();
     let raw,state;
     if(previous&&!previous.ready&&previous.org===setup.org&&previous.device===identity.publicKey&&previous.genesis){connection=previous;raw=previous.genesis;state=previous.pendingState;}
     else{
@@ -622,7 +646,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     if(known&&known.person!==person)throw Error('This browser already belongs to someone else in this organisation.');
     await open();
     // Resume an enrolment whose answer was lost, or enrol (or re-key) this browser's device.
-    const previous=await db.get('connection','current');
+    const previous=await readConnection();
     if(previous&&!previous.ready&&previous.org===kit.org&&previous.device===identity.publicKey&&state.devices[identity.publicKey]?.agreement===previous.agreement.publicKey)connection={...previous,state};
     else{
      await freshConnection(kit.service,kit.org,person,identity);
@@ -720,7 +744,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    try{
     const identity=await withCreatedKeys();await open();
     client=orgClient(invite.service,{fetchImpl});
-    const previous=await db.get('connection','current');
+    const previous=await readConnection();
     if(previous&&!previous.ready&&previous.org===invite.org&&previous.device===identity.publicKey&&previous.joined)connection=previous;
     else{
      const login=ssoLogin(invite.service,invite.org),person=personId(invite.org,identity.publicKey);
@@ -773,7 +797,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   },
   /** A join or device link waiting for approval: try to get in now. */
   async checkAdmission(){
-   await open();connection??=await db.get('connection','current');
+   await open();connection??=await readConnection();
    if(!connection||connection.ready)return!!connection?.ready;
    client??=orgClient(connection.service,{fetchImpl});
    return admit(connection.genesisExpected,{sso:connection.ssoToken});
