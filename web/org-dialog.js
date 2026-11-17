@@ -206,9 +206,13 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
   }else if(!engine.connected)notConnected();
   else if(drawing)redraw=true;
   // One query of the service at a time; changes that arrive meanwhile redraw once afterwards.
-  else drawing=connected().then(parts=>{if(dialog&&engine.connected&&!kit){body.replaceChildren(...parts);dialog.scrollTop=scroll;}}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;if(redraw){redraw=false;render();}});
+  else drawing=connected().then(parts=>{if(dialog&&engine.connected&&!kit){body.replaceChildren(...parts);dialog.scrollTop=scroll;keepFocus();}}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;if(redraw){redraw=false;render();}});
   status.textContent=busy?'Working…':feedback;
+  keepFocus();
  };
+ // Redrawing removes the focused control; keep focus in the dialog so the keyboard (Escape,
+ // Tab) still works.
+ function keepFocus(){if(dialog&&(!document.activeElement||document.activeElement===document.body))dialog.focus({preventScroll:true});}
  session=openDialog(dialog,{anchor,onClose(){clearInterval(poll);dialog.remove();dialog=null;}});
  render();
  // A kit that was not confirmed as saved, or a restore that stopped early, is offered again.

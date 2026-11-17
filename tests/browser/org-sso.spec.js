@@ -31,7 +31,7 @@ test('joining through the organisation’s single sign-on, by invitation and by 
  const s=await service({org:true});const contexts=[];let provider;
  try{
   const ana=await profile(browser,info);contexts.push(ana.context);
-  await ana.page.getByRole('button',{name:'Remote backup'}).click();
+  await ana.page.getByRole('button',{name:'Remote backup',exact:true}).click();
   const dialog=dialogOf(ana.page);
   await dialog.getByRole('textbox',{name:'Setup code'}).fill(await orgCreate(s,'acme'));
   await dialog.getByRole('textbox',{name:'Organisation name'}).fill('Acme SSO');
@@ -41,7 +41,7 @@ test('joining through the organisation’s single sign-on, by invitation and by 
   const org=await s.sql('SELECT org FROM orgs LIMIT 1');
   await configureSso(s,org,provider);
   // Reopen so the dialog sees the org's SSO.
-  await ana.page.keyboard.press('Escape');await ana.page.getByRole('button',{name:'Remote backup'}).click();
+  await dialog.getByRole('button',{name:'Close remote backup'}).click();await ana.page.getByRole('button',{name:'Remote backup',exact:true}).click();
   await expect(dialog.getByRole('checkbox',{name:'They must sign in with the organisation'})).toBeVisible();
   await dialog.getByRole('checkbox',{name:'They must sign in with the organisation'}).check();
   await dialog.getByRole('textbox',{name:'Their email at the organisation (optional)'}).fill('Ben@acme.test');

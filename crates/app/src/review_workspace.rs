@@ -94,7 +94,7 @@ pub fn Mode(state: Signal<State>) -> impl IntoView {
                 _ => view! { <crate::Icon name="pencil"/> }.into_any(),
             }}
             <select aria-label="Editor mode" title="Choose how you work: Editing, Reviewing or Viewing" prop:value=mode on:change=move |e| crate::action("review-mode", &event_target_value(&e))>
-                <option value="editing" data-icon="pencil" data-hint="Changes apply directly" disabled=move || refused("editing")>"Editing"</option><option value="reviewing" data-icon="track" data-hint="Your edits are saved as suggestions" disabled=move || refused("reviewing")>"Reviewing"</option><option value="viewing" data-icon="eye" data-hint="Read only" disabled=move || refused("viewing")>"Viewing"</option>
+                <option value="editing" data-icon="pencil" data-hint="Changes apply directly" prop:disabled=move || refused("editing")>"Editing"</option><option value="reviewing" data-icon="track" data-hint="Your edits are saved as suggestions" prop:disabled=move || refused("reviewing")>"Reviewing"</option><option value="viewing" data-icon="eye" data-hint="Read only" prop:disabled=move || refused("viewing")>"Viewing"</option>
             </select>
             <crate::Icon name="chevron"/>
         </label>

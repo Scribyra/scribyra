@@ -441,7 +441,8 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
      const moved=since!==undefined&&heads.version!==since;
      failures=0;since=heads.version;live=true;
      if(heads.events>connection.state.count){await refreshMembership();await exchangeKeys().catch(()=>{});}
-     else if(moved)onMembership();
+     // Something moved: keys may have arrived for this device, or others may be waiting for them.
+     else if(moved){await exchangeKeys().catch(()=>{});onMembership();}
      for(const link of await db.getAll('links'))if((heads.heads[link.project]??0)>link.seq)schedule(link.localId,50);
     }catch(error){
      if(closed)break;
@@ -734,7 +735,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
       try{await client.postEvent(invite.org,raw,{auth:false,sso:login?.token});break;}
       catch(error){
        if(error instanceof ServiceError&&error.status===409&&attempt<3&&/head/.test(error.message))continue;
-       await deleteDB(DB).catch(()=>{});db=null;connection=null;
+       db?.close();db=null;connection=null;await deleteDB(DB).catch(()=>{});markConnected(false);
        if(error instanceof ServiceError&&error.status===403&&/single sign-on|email/.test(error.message))throw Object.assign(Error(/email/.test(error.message)?'This invitation is for another email address.':'This invitation needs you to sign in with your organisation first.'),{sso:true});
        if(error instanceof ServiceError&&error.status===410)throw Error('This invitation has expired. Ask for a new one.');
        if(error instanceof ServiceError&&(error.status===400||error.status===409))throw Error('This invitation was already used or withdrawn. Ask for a new one.');
@@ -764,7 +765,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
      const proof=await deviceProof({org:link.org,prev:head,person,device:identity.publicKey,agreement},identity);
      const raw=await signEvent({org:link.org,prev:head,type:'person.request',body:{person,device:identity.publicKey,agreement,proof,name:sealName(throwaway,link.org,person,'pending')}},identity);
      try{await client.postEvent(link.org,raw,{auth:false,sso:login.token});break;}
-     catch(error){if(error instanceof ServiceError&&error.status===409&&attempt<3&&/head/.test(error.message))continue;await deleteDB(DB).catch(()=>{});db=null;connection=null;throw error;}
+     catch(error){if(error instanceof ServiceError&&error.status===409&&attempt<3&&/head/.test(error.message))continue;db?.close();db=null;connection=null;await deleteDB(DB).catch(()=>{});markConnected(false);throw error;}
     }
    }finally{throwaway.fill(0);}
    connection.joined=true;await saveConnection();markJoining();
@@ -865,7 +866,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     let sig;try{sig=org_ed25519_sign(seed,deviceRequestMessage(link.org,link.link,link.person,identity.publicKey,agreement));}finally{seed.fill(0);}
     const proof=await deviceProof({org:link.org,link:link.link,person:link.person,device:identity.publicKey,agreement},identity);
     try{await client.answerLink(link.org,link.link,{device:identity.publicKey,agreement,proof,sig});}
-    catch(error){await deleteDB(DB).catch(()=>{});db=null;connection=null;if(error instanceof ServiceError&&(error.status===404||error.status===409))throw Error('This device link was already used or has expired. Make a new one.');throw error;}
+    catch(error){db?.close();db=null;connection=null;await deleteDB(DB).catch(()=>{});markConnected(false);if(error instanceof ServiceError&&(error.status===404||error.status===409))throw Error('This device link was already used or has expired. Make a new one.');throw error;}
     connection.linkCode=linkCode(link.secret,identity.publicKey,agreement);await saveConnection();
     return{code:connection.linkCode};
    }finally{link.secret.fill(0);}

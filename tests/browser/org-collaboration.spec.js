@@ -28,7 +28,7 @@ async function saveKit(page){
 }
 const project=row=>dialogOf(row.page()).getByRole('listitem').filter({hasText:row.name});
 async function openProject(page,name){
- await page.keyboard.press('Escape');
+ const open=dialogOf(page);if(await open.isVisible())await open.getByRole('button',{name:'Close remote backup'}).click();
  await page.locator('.project-card').filter({hasText:name}).locator('.card-open').click();
  await expect(page.locator('.cm-content')).toBeVisible();
 }
@@ -45,7 +45,7 @@ test('an organisation invites a reviewer, links a second device, and syncs edits
    await storage.saveProject(id,doc);doc.destroy();await window.scribyra.action('home');
   });
   // Create the organisation: name, the owner's name, end-to-end encryption.
-  await ana.page.getByRole('button',{name:'Remote backup'}).click();
+  await ana.page.getByRole('button',{name:'Remote backup',exact:true}).click();
   const dialog=dialogOf(ana.page);
   await dialog.getByRole('textbox',{name:'Setup code'}).fill(await orgCreate(s,'acme'));
   await dialog.getByRole('textbox',{name:'Organisation name'}).fill('Acme Lab');

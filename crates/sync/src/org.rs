@@ -605,7 +605,11 @@ async fn put_wraps(State(o): State<Shared>, Path(org): Path<String>, headers: He
     }
     .await;
     match result {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Ok(()) => {
+            // Recipients learn through the long poll that keys arrived for them.
+            o.changed(&org);
+            StatusCode::NO_CONTENT.into_response()
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }

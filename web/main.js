@@ -185,7 +185,8 @@ let orgEngine=null,orgPanel=null,orgRefresh=0;
 function remoteBackup(){
   orgEngine??=orgBackup({onChange:localId=>{
     if(localId===projectId){const status=orgEngine.status(localId);state.remoteStatus=status?.label||'';state.remoteDetail=status?.message||'';emit();}
-    orgPanel?.render();clearTimeout(orgRefresh);orgRefresh=setTimeout(()=>{if(!state.current)void refreshProjects().catch(()=>{});},300);
+    // Throttled, not debounced: a stream of status changes must not keep the cards stale.
+    orgPanel?.render();if(!orgRefresh)orgRefresh=setTimeout(()=>{orgRefresh=0;if(!state.current)void refreshProjects().catch(()=>{});},300);
   },
   // Another device's changes were merged into the committed project: the open editor merges the new head.
   onRemote:localId=>{if(localId===projectId)void tabSession?.refresh({force:true});else if(!state.current)void refreshProjects().catch(()=>{});},
@@ -356,7 +357,8 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   window.scribyra.agent=agent.api;
   loadWorkspace();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');
-  if(previousEngine!=='lualatex') { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
+  // A shared project's reviewers and viewers do not change its settings (only editors write).
+  if(previousEngine!=='lualatex'&&(!roleModes||roleModes.includes('editing'))) { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
   refreshDoc(); state.selected = state.active; emit();
   if(!transientProject)watchLocalProject(target,id);
 }

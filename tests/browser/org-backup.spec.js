@@ -32,7 +32,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   });
   // Off means off: nothing about remote backup exists until the person connects.
   expect(await page.evaluate(async()=>(await indexedDB.databases()).map(d=>d.name).filter(n=>n==='scribyra-org'||n==='scribyra-direct'))).toEqual([]);
-  await page.getByRole('button',{name:'Remote backup'}).click();
+  await page.getByRole('button',{name:'Remote backup',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Remote backup'});
   await dialog.getByRole('textbox',{name:'Setup code'}).fill(await orgCreate(s,'browser'));
   await dialog.getByRole('button',{name:'Connect'}).click();
@@ -41,7 +41,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   const kit=await kitBlock.textContent();
   // Dismissing the dialog does not lose an unconfirmed kit: it is offered again.
   await dialog.getByRole('button',{name:'Close remote backup'}).click();await expect(dialog).toBeHidden();
-  await page.getByRole('button',{name:'Remote backup'}).click();
+  await page.getByRole('button',{name:'Remote backup',exact:true}).click();
   await expect(kitBlock).toHaveText(kit);
   await expect(dialog.getByRole('button',{name:'Done'})).toBeDisabled();
   await dialog.getByRole('checkbox',{name:'I have saved my recovery kit somewhere safe'}).check();
@@ -52,7 +52,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   await expect(row).toContainText(/Backed up remotely|Synced/);
   await expect(page.locator('.project-card').filter({hasText:'Backed-up paper'})).toContainText(/Backed up remotely|Synced/);
   // Edits made in the editor back up too, and the editor says so.
-  await page.keyboard.press('Escape');
+  await dialog.getByRole('button',{name:'Close remote backup'}).click();
   await page.locator('.project-card').filter({hasText:'Backed-up paper'}).locator('.card-open').click();
   await expect(page.getByRole('status',{name:'Remote backup'})).toHaveText(/Backed up remotely|Synced/);
   await page.locator('.cm-content').click();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.type('% ORG_LATER_EDIT\n');
@@ -69,7 +69,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   try{
    if(info.project.name==='chromium')await fresh.grantPermissions(['local-network-access']).catch(()=>{});
    const other=await fresh.newPage();await harness(other);await other.goto('/');
-   await other.getByRole('button',{name:'Remote backup'}).click();
+   await other.getByRole('button',{name:'Remote backup',exact:true}).click();
    const restoreDialog=other.getByRole('dialog',{name:'Remote backup'});
    await restoreDialog.getByRole('textbox',{name:'Recovery kit'}).fill(kit);
    await restoreDialog.getByRole('button',{name:'Restore projects'}).click();
