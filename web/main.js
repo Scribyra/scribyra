@@ -1,4 +1,6 @@
 import {directShare} from './direct-share.js';
+import {orgBackup,orgConnected} from './org-backup.js';
+import {orgDialog} from './org-dialog.js';
 import {parseInvite,profileIdentity,requireDirectSupport,deleteProfileIdentity} from './direct-identity.js';
 import {identityAuthorId,earlierRecords} from './direct-provenance.js';
 import {directEnabled,setDirectEnabled,setDirectKeyPresent,legacyAuthorIds,addLegacyAuthorId} from './direct-state.js';
@@ -99,7 +101,7 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // providers stay reachable only behind this test-only switch; production never
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
-const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
+const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', remoteStatus: '', remoteDetail: '', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
 const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
@@ -176,8 +178,18 @@ async function pickFiles(accept, multiple = false, directory = false) {
 }
 async function refreshProjects() {
   allProjects = await storage.listProjects();
-  state.projects = allProjects.filter(p => p.name.toLowerCase().includes(state.filter.toLowerCase())).map(p => ({ ...p, date: new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })); emit();
+  state.projects = allProjects.filter(p => p.name.toLowerCase().includes(state.filter.toLowerCase())).map(p => ({ ...p, backup: orgEngine?.status(p.id)?.label||'', date: new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })); emit();
 }
+// Remote backup exists only after the person connects a service (off means off).
+let orgEngine=null,orgPanel=null,orgRefresh=0;
+function remoteBackup(){
+  orgEngine??=orgBackup({onChange:localId=>{
+    if(localId===projectId){const status=orgEngine.status(localId);state.remoteStatus=status?.label||'';state.remoteDetail=status?.message||'';emit();}
+    orgPanel?.render();clearTimeout(orgRefresh);orgRefresh=setTimeout(()=>{if(!state.current)void refreshProjects().catch(()=>{});},300);
+  }});
+  return orgEngine;
+}
+if(orgConnected())void remoteBackup().start().catch(error=>notice('Remote backup could not start: '+error.message));
 function refreshDoc(openFirst = false) {
   if (!doc) return;
   const meta = doc.getMap('meta');
@@ -297,6 +309,7 @@ async function enableDirectSessions(){
 // key its author ID would be one nobody can sign for, so the profile takes a fresh local ID
 // (kept with the earlier ones as its own here) that a later key can claim.
 async function deleteDirectKey(){
+  if(orgConnected())throw new Error('This browser’s signing key also signs your remote backups. Forget the backup service first (Remote backup → Forget service).');
   await deleteProfileIdentity();setDirectKeyPresent(false);
   const previous=localAgentOwner();addLegacyAuthorId(previous.id);localStorage.setItem('scribyra:author',JSON.stringify({...previous,id:crypto.randomUUID()}));
   if(projectId&&doc&&!transientProject){await openProject(projectId);direct?.show();}
@@ -310,7 +323,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   directAttempt?.signal.throwIfAborted();
   transientProject=!!transientDoc;
   leavingProject=false;projectId = id; revision = 0;localEdits=savedEdits=0;historyPointAt=Date.now();const target=doc;commands=projectCommands({doc,projectId,isActive:()=>doc===target,beforeMutation:uiCommandGuard(()=>collaboration?.review.state.mode)});
-  state.upgradeAvailable=false;state.reviewDraftPending=false;state.current = true; consentDiagnostics?.dismiss(); state.active = ''; state.selected = '';  state.log = '';liveLog.stop();state.buildIssues=[]; state.showLog = false; state.showIssues = false; state.status = 'Ready to compile'; state.saveStatus = transientProject?'In memory · accept TeX link to save':'Saved locally';
+  state.upgradeAvailable=false;state.reviewDraftPending=false;state.current = true; consentDiagnostics?.dismiss(); state.active = ''; state.selected = '';  state.log = '';liveLog.stop();state.buildIssues=[]; state.showLog = false; state.showIssues = false; state.status = 'Ready to compile'; state.saveStatus = transientProject?'In memory · accept TeX link to save':'Saved locally';{const remote=orgEngine?.status(id);state.remoteStatus=remote?.label||'';state.remoteDetail=remote?.message||'';}
   agentOwner=localAgentOwner(transientProject?{getItem:key=>localStorage.getItem(key),setItem:()=>{}}:localStorage);
   collaboration=mountCollaboration({doc:target,projectId,signedMessages:()=>!!state.directActive,legacyAuthorIds,trustLabels:()=>directEnabled()||!!state.directActive,requestDecision:command=>direct.requestDecision(command),canPersistDrafts:()=>!transientProject,canUnload:()=>!!state.upgradeReload,onDraftPending:pending=>{if(doc===target){state.reviewDraftPending=pending;emit();}},author:{...agentOwner,kind:'human'},commands,flushSave,storage,selection:()=>({fileId:mountedFile,...(editor?collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to)||{start:editor.state.selection.main.from,end:editor.state.selection.main.to}:{})}),validateCommentSelection:()=>{if(editor)collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to,true);},activate:activateFile,captureSelection,remount:()=>{editor?.destroy();editor=null;mountedFile=null;mountEditor();},confirm:(title,message)=>modal(title,message),compile:options=>{texLinks.assertAllowed();return builds.run({...options,projectId:id,revision:commands.revision(),isActive:()=>doc===target&&!leavingProject});},onState:patch=>{if(doc===target){Object.assign(state,patch);emit();}},managers:undoManagers,remote:[LOCAL_DURABLE],isActive:()=>doc===target&&!leavingProject});
   direct=directShare({doc:target,initialAttempt:directAttempt,author:{...agentOwner,kind:'human'},initialInvite:initialDirectInvite,notify:notice,
@@ -822,6 +835,11 @@ async function action(name, value = '', detail = {}) {
           current();const last=window.scribyra.lastCompile,revision=client.revision();return{revision,lock:targetDoc.getMap('meta').get('texEnvironment')??null,candidate:last?.success&&last.bytes>0&&last.projectId===projectId&&last.sourceRevision===revision?last.environment:null};
         },setLock:(environment,revision)=>{current();client.run({op:'environment.set',environment},revision);clearTimeout(autoTimer);cancelCompile();}});}
         finally{if(environmentPanel===panel)environmentPanel=null;}break;
+      }
+      case 'remote-backup': {
+        orgPanel?.close();
+        orgPanel=orgDialog({engine:remoteBackup(),anchor:document.activeElement,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
+        break;
       }
       case 'storage': {
         const info = await storage.storageStatus();

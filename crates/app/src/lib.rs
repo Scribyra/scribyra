@@ -3,6 +3,7 @@ mod comments;
 mod reviews;
 mod review_workspace;
 mod history;
+mod orgsync;
 use leptos::prelude::*;
 use leptos::tachys::html::attribute::custom::CustomAttribute;
 use serde::Deserialize;
@@ -64,6 +65,8 @@ struct State {
     busy: bool,
     status: String,
     save_status: String,
+    remote_status: String,
+    remote_detail: String,
     sync_status: String,
     companion_status: String,
     tab_sync_status: String,
@@ -125,6 +128,8 @@ struct Card {
     name: String,
     files: usize,
     date: String,
+    #[serde(default)]
+    backup: String,
 }
 #[derive(Clone, Default, Deserialize)]
 struct File {
@@ -266,7 +271,7 @@ fn App() -> impl IntoView {
                     <button class="icon-button back-button" title="All projects" aria-label="All projects" on:click=move |_| action("home", "")><Icon name="back"/></button>
                     <span class="brand-mark small">"s"</span><span class="header-divider"></span>
                     <button class="project-title" title="Rename project" on:click=move |_| action("rename-project", "")>{move || s.get().name}</button>
-                    <span class="save-indicator">{move || s.get().save_status}</span>
+                    <span class="save-indicator">{move || s.get().save_status}</span><Show when=move || !s.get().remote_status.is_empty()><span class="remote-indicator" role="status" aria-label="Remote backup" title=move || s.get().remote_detail>{move || s.get().remote_status}</span></Show>
                     <div class="header-spacer"></div>
                     <Show when=move || s.get().upgrade_available><button class="button secondary compact" on:click=move |_| action("upgrade-project", "")>"Export before updating"</button></Show>
                     <Show when=move || s.get().recovery_available><button class="button secondary compact recover-button" title="Save recovered copy" on:click=move |_| action("recover-project", "")>"Save recovered copy"</button></Show>
@@ -420,7 +425,7 @@ fn App() -> impl IntoView {
                     <div class="workspace-label">"YOUR WORKSPACE"</div>
                     <button class="nav-item selected" on:click=move |_| action("filter", "")><Icon name="folder"/>"All projects"<span class="nav-count">{move || s.get().projects.len()}</span></button>
                     <button class="nav-item" on:click=move |_| action("diagnostics", "")><Icon name="pulse"/>"Diagnostics"</button>
-                    <div class="sidebar-bottom dashboard-bottom"><div class="local-badge"><span class="tiny-dot"></span>"Local-first. Always yours."</div><p>"A little less friction."<br/>"A little more possibility."</p><button class="nav-item" on:click=move |_| action("storage", "")><Icon name="lock"/>"Storage & backups"</button><button class="nav-item" on:click=move |_| action("report", "")><Icon name="flag"/>"Report a problem"</button><a class="nav-item" href=SOURCE_URL target="_blank" rel="noopener"><Icon name="github"/><span>"Source "<span class="sr-only">"code "</span>"on GitHub"</span></a><div class="sidebar-foot"><span class="sidebar-links"><a href="https://scribyra.com/privacy.html" target="_blank" rel="noopener">"Privacy"</a>" · "<a href="https://scribyra.com/licenses.html" target="_blank" rel="noopener">"Licences"</a></span><button class="icon-button" title="Toggle theme" aria-label="Toggle theme" on:click=move |_| action("theme", "")><Icon name="sun"/></button></div></div>
+                    <div class="sidebar-bottom dashboard-bottom"><div class="local-badge"><span class="tiny-dot"></span>"Local-first. Always yours."</div><p>"A little less friction."<br/>"A little more possibility."</p><button class="nav-item" on:click=move |_| action("storage", "")><Icon name="lock"/>"Storage & backups"</button><button class="nav-item" on:click=move |_| action("remote-backup", "")><Icon name="share"/>"Remote backup"</button><button class="nav-item" on:click=move |_| action("report", "")><Icon name="flag"/>"Report a problem"</button><a class="nav-item" href=SOURCE_URL target="_blank" rel="noopener"><Icon name="github"/><span>"Source "<span class="sr-only">"code "</span>"on GitHub"</span></a><div class="sidebar-foot"><span class="sidebar-links"><a href="https://scribyra.com/privacy.html" target="_blank" rel="noopener">"Privacy"</a>" · "<a href="https://scribyra.com/licenses.html" target="_blank" rel="noopener">"Licences"</a></span><button class="icon-button" title="Toggle theme" aria-label="Toggle theme" on:click=move |_| action("theme", "")><Icon name="sun"/></button></div></div>
                 </aside>
                 <main class="dashboard-main">
                     <header class="dashboard-topbar"><span>"Workspace"<span class="breadcrumb-slash">"/"</span><strong>"All projects"</strong></span><span class="device-label"><span class="tiny-dot"></span>"On this device"</span></header>
@@ -431,7 +436,7 @@ fn App() -> impl IntoView {
                         <div class="project-grid">
                             <For each=move || s.get().projects key=|p| p.id.clone() children=move |p| {
                                 let id = p.id.clone(); let menu = id.clone();
-                                view! { <article class="project-card"><button class="card-open" on:click=move |_| action("open", &id)><div class="document-thumbnail"><div class="mini-paper"><div class="mini-title"></div><div class="mini-author"></div><div class="mini-rule"></div><div class="mini-lines"></div><div class="mini-equation">"∫ f(x) dx"</div><div class="mini-lines short"></div></div><span class="document-type">"LaTeX"</span></div><div class="card-details"><h3>{p.name}</h3><p>{format!("{} {} · {}", p.files, if p.files == 1 { "file" } else { "files" }, p.date)}</p></div></button><button class="card-menu icon-button" aria-haspopup="menu" aria-expanded="false" data-project=p.id.clone() title="Project actions" aria-label="Project actions" on:click=move |_| action("project-menu", &menu)><Icon name="more"/></button></article> }
+                                view! { <article class="project-card"><button class="card-open" on:click=move |_| action("open", &id)><div class="document-thumbnail"><div class="mini-paper"><div class="mini-title"></div><div class="mini-author"></div><div class="mini-rule"></div><div class="mini-lines"></div><div class="mini-equation">"∫ f(x) dx"</div><div class="mini-lines short"></div></div><span class="document-type">"LaTeX"</span></div><div class="card-details"><h3>{p.name}</h3><p>{if p.backup.is_empty() { format!("{} {} · {}", p.files, if p.files == 1 { "file" } else { "files" }, p.date) } else { format!("{} {} · {} · {}", p.files, if p.files == 1 { "file" } else { "files" }, p.date, p.backup) }}</p></div></button><button class="card-menu icon-button" aria-haspopup="menu" aria-expanded="false" data-project=p.id.clone() title="Project actions" aria-label="Project actions" on:click=move |_| action("project-menu", &menu)><Icon name="more"/></button></article> }
                             }/>
                             <button class="new-project-card" on:click=move |_| action("new", "")><span><Icon name="plus"/></span><strong>"A fresh page"</strong><p>"Make room for something new."</p></button>
                         </div>

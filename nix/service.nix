@@ -4,7 +4,7 @@ let
   platform = pkgs.makeRustPlatform { cargo = rust; rustc = rust; };
   service = platform.buildRustPackage {
     pname = "scribyra-sync";
-    version = "0.1.0-s1";
+    version = "0.2.0-pg1";
     src = pkgs.lib.cleanSource ../.;
     cargoLock.lockFile = ../Cargo.lock;
     cargoBuildFlags = [ "-p" "scribyra-sync" "--bin" "scribyra-sync" ];
@@ -18,7 +18,7 @@ in {
   inherit service;
   service-image = pkgs.dockerTools.buildLayeredImage {
     name = "scribyra-sync";
-    tag = "0.1.0-s1";
+    tag = "0.2.0-pg1";
     created = "1970-01-01T00:00:01Z";
     contents = [ service pkgs.cacert ];
     extraCommands = ''mkdir -m 1777 data'';
@@ -28,6 +28,7 @@ in {
       Env = [ "SCRIBYRA_SERVICE_BIND=0.0.0.0:8787" "SCRIBYRA_SERVICE_DATA=/data" ];
       ExposedPorts."8787/tcp" = { };
       Volumes."/data" = { };
+      # Metadata lives in PostgreSQL: set SCRIBYRA_SERVICE_DATABASE_URL_FILE (see compose.yaml).
     };
   };
 }

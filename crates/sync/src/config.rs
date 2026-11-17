@@ -12,11 +12,30 @@ pub struct Principal {
     pub storage: bool,
     pub relay: bool,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BlobBackend {
+    Filesystem,
+    S3,
+}
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub bind: SocketAddr,
+    /// Filesystem blob directory (used when `blob_store` is `filesystem`).
     pub data: PathBuf,
+    /// PostgreSQL URL. Secret: never logged. Exactly one of this and `database_url_file`.
+    pub database_url: Option<String>,
+    pub database_url_file: Option<PathBuf>,
+    /// Pool size; one more dedicated connection holds the single-owner advisory lock.
+    pub database_connections: u32,
+    pub blob_store: BlobBackend,
+    pub s3_endpoint: Option<String>,
+    pub s3_region: Option<String>,
+    pub s3_bucket: Option<String>,
+    pub s3_access_key_id: Option<String>,
+    pub s3_secret_access_key_file: Option<PathBuf>,
+    pub s3_path_style: bool,
     pub origins: Vec<String>,
     pub principals: Vec<Principal>,
     pub object_bytes: usize,
@@ -45,12 +64,31 @@ pub struct Config {
     pub namespace_room_attempts: usize,
     pub frame_bytes: usize,
     pub messages_per_second: u32,
+    /// Exact origin clients use to reach this service (for example https://sync.example.org).
+    /// Signed into every organisation sign-in; organisations are disabled without it.
+    pub public_url: Option<String>,
+    /// Encrypted bytes one organisation may store.
+    pub org_bytes: u64,
+    /// Log entries up to this size live in the database; larger ones in the blob store.
+    pub entry_inline_bytes: usize,
+    /// Signed-in organisation sessions held in memory.
+    pub sessions: usize,
 }
 impl Default for Config {
     fn default() -> Self {
         Self {
             bind: "127.0.0.1:8787".parse().unwrap(),
             data: "service-data".into(),
+            database_url: None,
+            database_url_file: None,
+            database_connections: 10,
+            blob_store: BlobBackend::Filesystem,
+            s3_endpoint: None,
+            s3_region: None,
+            s3_bucket: None,
+            s3_access_key_id: None,
+            s3_secret_access_key_file: None,
+            s3_path_style: false,
             origins: vec![],
             principals: vec![],
             object_bytes: 8 * 1024 * 1024,
@@ -79,6 +117,10 @@ impl Default for Config {
             namespace_room_attempts: 128,
             frame_bytes: 64 * 1024,
             messages_per_second: 60,
+            public_url: None,
+            org_bytes: 1024 * 1024 * 1024,
+            entry_inline_bytes: 64 * 1024,
+            sessions: 10000,
         }
     }
 }
@@ -91,7 +133,8 @@ impl Config {
         }
         for (name, slot) in value.as_object_mut().unwrap() {
             if let Ok(raw) = std::env::var(format!("SCRIBYRA_SERVICE_{}", name.to_uppercase())) {
-                *slot = if slot.is_string() {
+                // Optional fields default to null and are all strings or paths.
+                *slot = if slot.is_string() || slot.is_null() {
                     raw.into()
                 } else {
                     serde_json::from_str(&raw)?
@@ -102,8 +145,73 @@ impl Config {
         config.validate()?;
         Ok(config)
     }
-    fn validate(&self) -> Result<(), &'static str> {
+    /// The database URL, read from `database_url_file` when configured (trailing newline removed).
+    pub fn database_url(&self) -> Result<String, Box<dyn std::error::Error>> {
+        match (&self.database_url, &self.database_url_file) {
+            (Some(url), None) => Ok(url.clone()),
+            (None, Some(path)) => Ok(read_secret(path)?),
+            _ => Err("exactly one of database_url and database_url_file is required".into()),
+        }
+    }
+    /// S3 settings with the secret read from its file; `None` for the filesystem backend.
+    pub fn s3_settings(
+        &self,
+    ) -> Result<Option<crate::blobs::S3Settings>, Box<dyn std::error::Error>> {
+        if self.blob_store != BlobBackend::S3 {
+            return Ok(None);
+        }
+        let field = |v: &Option<String>| v.clone().ok_or("incomplete s3 settings");
+        Ok(Some(crate::blobs::S3Settings {
+            endpoint: field(&self.s3_endpoint)?,
+            region: field(&self.s3_region)?,
+            bucket: field(&self.s3_bucket)?,
+            access_key_id: field(&self.s3_access_key_id)?,
+            secret_access_key: read_secret(
+                self.s3_secret_access_key_file
+                    .as_ref()
+                    .ok_or("incomplete s3 settings")?,
+            )?,
+            path_style: self.s3_path_style,
+        }))
+    }
+    pub fn validate(&self) -> Result<(), &'static str> {
         use scribyra_core::blob::valid_hash;
+        if self.database_url.is_some() == self.database_url_file.is_some() {
+            return Err("exactly one of database_url and database_url_file is required");
+        }
+        if self.org_bytes == 0
+            || self.entry_inline_bytes > 1024 * 1024
+            || self.sessions == 0
+            || self.sessions > 1_000_000
+        {
+            return Err("invalid organisation limits");
+        }
+        if let Some(url) = &self.public_url {
+            let uri: axum::http::Uri = url.parse().map_err(|_| "invalid public_url")?;
+            let loopback = uri.host().is_some_and(|h| h == "127.0.0.1" || h == "localhost" || h == "[::1]");
+            if !(uri.scheme_str() == Some("https") || uri.scheme_str() == Some("http") && loopback)
+                || uri.authority().is_none_or(|a| a.as_str().contains('@'))
+                || uri.path_and_query().is_some_and(|p| p.as_str() != "/")
+                || url.ends_with('/')
+                || url.bytes().any(|b| b.is_ascii_uppercase())
+                || url.ends_with(":443") && uri.scheme_str() == Some("https")
+                || url.ends_with(":80") && uri.scheme_str() == Some("http")
+            {
+                return Err("public_url must be a lowercase https origin (http only on loopback), without a path or default port, exactly as browsers write it");
+            }
+        }
+        if self.database_connections == 0 || self.database_connections > 1000 {
+            return Err("invalid database_connections");
+        }
+        if self.blob_store == BlobBackend::S3
+            && (self.s3_endpoint.is_none()
+                || self.s3_region.as_ref().is_none_or(|r| r.is_empty())
+                || self.s3_bucket.as_ref().is_none_or(|b| b.is_empty())
+                || self.s3_access_key_id.as_ref().is_none_or(|k| k.is_empty())
+                || self.s3_secret_access_key_file.is_none())
+        {
+            return Err("incomplete s3 settings");
+        }
         if self.object_bytes < 16
             || self.object_bytes > 64 * 1024 * 1024
             || self.namespace_bytes < self.object_bytes as u64
@@ -175,4 +283,13 @@ impl Config {
         }
         Ok(())
     }
+}
+
+fn read_secret(path: &std::path::Path) -> Result<String, Box<dyn std::error::Error>> {
+    let text = std::fs::read_to_string(path)?;
+    let text = text.trim_end_matches(['\n', '\r']);
+    if text.is_empty() || text.contains(['\n', '\r']) {
+        return Err("invalid secret file".into());
+    }
+    Ok(text.to_owned())
 }

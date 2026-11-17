@@ -8,10 +8,10 @@ recovery and billing are later milestones. Every feature here is free to host.
 
 ## Install from the pinned source
 
-Use this private checkout, its `flake.lock` and `Cargo.lock`, a local POSIX disk,
-and Nix. No TeX assets or frontend build are needed for the service. Run all
-commands below from the checkout. The smoke installation deliberately uses a
-fresh directory in `tmp/`, so it also works without a container/VM daemon.
+The service is one binary plus PostgreSQL (15 or later; tested with 17). Object
+bytes go either to a local POSIX directory (the default) or to an S3-compatible
+bucket. Use this private checkout, its `flake.lock` and `Cargo.lock`, and Nix.
+No TeX assets or frontend build are needed. Run all commands from the checkout.
 
 ```sh
 nix develop -c cargo build --locked --release -p scribyra-sync --bin scribyra-sync
@@ -21,10 +21,33 @@ mkdir -m 700 "$install_root/data"
 cp target/release/scribyra-sync "$install_root/scribyra-sync"
 ```
 
-Create `service.json` in that directory. For an empty, deny-by-default instance:
+Create a database and a role that owns it. With a local PostgreSQL and peer
+authentication over its unix socket, the role must have the same name as the
+operating-system user running the service:
+
+```sh
+sudo -u postgres createuser "$USER"
+sudo -u postgres createdb -O "$USER" scribyra
+```
+
+Write the database URL into its own file, readable only by the service user. A
+URL with a password is a secret; it never belongs in `service.json`, a command
+line or logs. For peer authentication there is no password:
+
+```sh
+umask 077
+printf '%s\n' "postgres:///scribyra?host=/run/postgresql" > "$install_root/database-url"
+```
+
+For a remote server use `postgres://user:password@host:5432/scribyra?sslmode=verify-full`
+(add `sslrootcert=/path/ca.pem` for a private CA). TLS uses rustls; `sslmode=require`
+encrypts without checking the certificate and is not recommended.
+
+Create `service.json` in the installation directory. For an empty,
+deny-by-default instance with filesystem blobs:
 
 ```json
-{"bind":"127.0.0.1:8787","data":"data","origins":[],"principals":[]}
+{"bind":"127.0.0.1:8787","data":"data","database_url_file":"database-url","origins":[],"principals":[]}
 ```
 
 Run from the installation directory, with restrictive file creation permissions:
@@ -33,33 +56,86 @@ Run from the installation directory, with restrictive file creation permissions:
 (cd "$install_root" && umask 077 && SCRIBYRA_SERVICE_CONFIG=service.json exec ./scribyra-sync)
 ```
 
-It emits a JSON `listening` event; `GET /health` and `GET /ready` return 200.
-`GET /v1` advertises protocol 1. No principal means no storage or relay access.
-For an occupied port choose another or use `127.0.0.1:0` and read the bound
-address. Do not reuse the legacy demo database.
+At startup the service takes ownership of the database (below), applies any
+pending migrations, opens the blob store and checks readiness. It then emits a
+JSON `listening` event; `GET /health` and `GET /ready` return 200. `GET /v1`
+advertises protocol 1. No principal means no storage or relay access. For an
+occupied port choose another or use `127.0.0.1:0` and read the bound address.
 
-For a reproducible disposable installation, exchange, upgrade and restore drill:
+The binary has three commands. All of them read the same configuration:
+
+| Command | Effect |
+| --- | --- |
+| `scribyra-sync` or `scribyra-sync serve` | Run the service |
+| `scribyra-sync verify` | Check every object's presence, size and hash, and the usage totals; print counts; exit 1 on any problem |
+| `scribyra-sync migrate-sqlite <old-data-dir>` | Copy a milestone-S data directory into PostgreSQL and the configured blob store (see [Upgrade from the SQLite store](#upgrade-from-the-sqlite-store)) |
+
+Any other arguments print the usage and exit 2. Every command takes the
+database ownership lock, so `verify` and `migrate-sqlite` run while the service
+is stopped.
+
+For a reproducible disposable installation, exchange, backup, upgrade and
+restore drill:
 
 ```sh
+nix develop -c cargo build --locked --release -p scribyra-sync --bin scribyra-sync
 nix develop -c node scripts/service-smoke.mjs
 ```
 
-This script follows the same install steps with the already-built release
-binary, generates **synthetic disposable** access capabilities, encrypts a test
-document, uploads it, exchanges opaque bytes between two clients, stops, backs
-up, reinstalls, restores into a second clean directory, and verifies the bytes.
-It cleans up both directories and its exact child processes. It needs no real
-credentials and contacts only loopback. This is the clean-directory acceptance
-route when Docker/VMs are unavailable.
+The script starts a private PostgreSQL cluster in `tmp/` (from the dev shell),
+installs the release binary into a fresh directory with a database URL file,
+generates **synthetic disposable** capabilities, encrypts a test document,
+uploads it and exchanges opaque bytes between two relay clients. It then takes
+an online backup (`pg_dump`, then a copy of the blob directory), writes one more
+object, reinstalls, restores into a fresh database and directory, runs `verify`
+and checks the bytes. The object written after the dump is absent from the
+restored metadata, as expected. It cleans up its directories and stops its exact
+child processes. It contacts only loopback.
 
 ## Configuration and access
 
 `SCRIBYRA_SERVICE_CONFIG` points to strict JSON. Missing fields use defaults;
 unknown fields and invalid bounds fail startup. Every field also has an override
-`SCRIBYRA_SERVICE_<UPPERCASE_FIELD>`: strings (`BIND`, `DATA`) are plain text;
-numbers, arrays and objects are JSON. Overrides win over the file. Paths are
-relative to the process working directory; the data directory’s parent must
-already exist. Configuration reload is a restart.
+`SCRIBYRA_SERVICE_<UPPERCASE_FIELD>`: string and path fields (`BIND`, `DATA`,
+`DATABASE_URL_FILE`, `S3_ENDPOINT` and so on) are plain text; numbers, booleans,
+arrays and objects are JSON. Overrides win over the file. Paths are relative to
+the process working directory; the data directory’s parent must already exist.
+Configuration reload is a restart.
+
+### Storage fields
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `database_url` | none | PostgreSQL URL. Contains a password for remote servers, so prefer `database_url_file`. Exactly one of the two is required |
+| `database_url_file` | none | File holding the URL on its first line (a trailing newline is ignored) |
+| `database_connections` | 10 | Connection pool size, 1–1000. One more connection holds the ownership lock |
+| `blob_store` | `"filesystem"` | `"filesystem"` or `"s3"` |
+| `data` | `service-data` | Filesystem blob directory (`objects/<namespace>/<sha256>`), created if missing |
+| `s3_endpoint` | none | Service URL, for example `https://s3.eu-west-1.amazonaws.com` or `https://<account>.r2.cloudflarestorage.com`. `http://` is accepted only for `127.0.0.1`, `::1` or `localhost` |
+| `s3_region` | none | Signing region (`auto` for R2, `garage` or your Garage `s3_region`) |
+| `s3_bucket` | none | Existing bucket; the service never creates or lists buckets |
+| `s3_access_key_id` | none | Access key ID |
+| `s3_secret_access_key_file` | none | File holding the secret access key |
+| `s3_path_style` | `false` | `true` for path-style URLs (Garage, MinIO, IP endpoints); `false` for virtual-host style (AWS, R2) |
+
+All S3 fields are required when `blob_store` is `"s3"`. The S3 key needs only
+object read, write and delete on its bucket, plus `HeadBucket` for readiness.
+HTTPS certificates are checked against the platform trust store
+(`SSL_CERT_FILE` can point to a private CA bundle). Each S3 request has a
+30-second deadline; a timed-out or failed request is never acknowledged.
+
+### Organisation fields
+
+Added with organisation sync; the organisation routes document their use.
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `public_url` | none | The exact `https://` origin clients use for this service. Required to enable organisations |
+| `org_bytes` | 1073741824 | Default stored-bytes quota per organisation (1 GiB) |
+| `entry_inline_bytes` | 65536 | Log entries up to this size are stored inline in PostgreSQL; larger ones go to the blob store |
+| `sessions` | 10000 | Maximum live organisation sessions |
+
+### Access and limits
 
 A principal is `{ "token_hash": "64 lowercase hex", "namespace": "64 lowercase
 hex", "storage": true, "relay": true }`. Generate a random 32-byte bearer
@@ -135,10 +211,13 @@ WebSocket authentication is limited to 1024 bytes and three seconds. HTTP
 handlers time out after 15 seconds. Global overload returns 429 or 503; quota
 returns 507; size returns 413; invalid framing/hash returns 400. Unauthorized
 requests return 401/403. No partial durable success is reported. Quotas count
-payload bytes; reserve extra disk for SQLite, WAL, directory entries, temporary
-writes and backups. This version retains objects indefinitely. An operator can
-export the complete stopped data directory; per-project deletion/GC is not yet
-implemented. A full instance requires backup and administrative migration.
+payload bytes. Usage is kept in a `usage` table, one row per scope (`global`,
+`namespace:<id>`); a write locks the rows it charges in a fixed order (global
+first), checks the limits and inserts the object in the same transaction, so
+concurrent writes never exceed a quota and a retry of an existing object
+charges nothing. Reserve extra disk for PostgreSQL (tables, indexes, WAL),
+directory entries, temporary writes and backups. This version retains objects
+indefinitely; per-project deletion/GC is not yet implemented.
 
 For a small installation, start with **1 GiB RAM and at least 2 GiB writable
 disk** for the service/proxy, excluding backups (planning estimates, not measured
@@ -146,11 +225,21 @@ minimums). Default retained download payloads are bounded to 32 MiB regardless
 of paused-client count. Six uploads contribute up to 48 MiB of accepted bodies;
 allow another 48 MiB for collection copies and up to 8 MiB for duplicate-write
 verification. Twenty full relay queues contribute up to 20 MiB plus active frames.
-SQLite, allocator retention, task/header/TLS buffers, kernel sockets and the proxy
+The database pool, allocator retention, task/header/TLS buffers, kernel sockets and the proxy
 need additional headroom: these payload ceilings are **not a whole-process RSS
 limit**. Use supervisor/container memory limits and observe the actual workload.
 Default durable payloads consume at most 1 GiB; metadata, temporary writes and
 free space need the rest. Raise disk and memory together when increasing limits.
+
+PostgreSQL runs beside the service. A small instance works with its defaults
+plus about 256 MiB of RAM; each pooled connection is a backend process of a few
+MiB, so keep `database_connections` modest (the default 10 suffices because
+writes serialize on quota rows and uploads are capped at `uploads`). Metadata is
+small: about 200 bytes per object row including its index, so 100,000 objects
+take roughly 20 MiB plus WAL (by default up to 1 GiB of WAL is retained between
+checkpoints; plan for it). With filesystem blobs, disk holds payloads, one
+in-flight temporary file per upload and backups. With S3 blobs the service disk
+holds only PostgreSQL, and the bucket holds payloads.
 The regression's 48 MiB RSS-growth bound applies to its stated download probe,
 not every possible combined workload.
 
@@ -266,9 +355,18 @@ specified in its [configuration manual](https://cdn.haproxy.com/documentation/ha
 Structured stdout logs contain fixed event/status fields; startup logs include
 the bind address. No request path/content/room/bearer is logged. Rotate stdout
 through the supervisor; payload quotas exclude logs and backups. Health is only
-liveness; readiness performs a database write-lock and synced filesystem probe.
-Storage errors return failure, never acknowledgement. Startup fails on missing
-or corrupt committed objects. An exclusive directory lock prevents two writers.
+liveness; readiness performs a pooled database round trip, checks the ownership
+connection and probes the blob store (a synced create-and-remove for the
+filesystem, `HeadBucket` for S3). Storage errors return failure, never
+acknowledgement. Startup does not read stored objects (that does not scale to a
+bucket); every GET verifies size and hash and returns 500 for a missing or
+corrupt object, and `scribyra-sync verify` checks the whole store on demand.
+A PostgreSQL advisory lock (`pg_try_advisory_lock`) on a dedicated connection
+makes one process the owner of a database; a second process exits with status
+1. If that connection is lost, the service logs `database_ownership_lost` and
+exits so a supervisor can restart it. Filesystem blobs also take an exclusive
+lock on `<data>/.lock`. The database URL, S3 credentials and secret paths are
+never logged.
 Stop with SIGTERM or SIGINT. Active relays close; HTTP work drains. Give the
 process 30 seconds before a supervisor kills it. Hardware/filesystems must honor
 fsync; abrupt process-kill tests cannot prove power-loss guarantees.
@@ -287,13 +385,22 @@ demo, compiler or frontend. There is no mutable remote base-image tag.
 ```sh
 nix build .#service-image
 docker load < result
-# Create ./service.json with data=/data, bind=0.0.0.0:8787 and explicit grants.
+# Create ./service.json with explicit grants (data and bind come from the image).
+mkdir -m 700 secrets
+openssl rand -hex 32 > secrets/postgres-password
+printf 'postgres://scribyra:%s@postgres:5432/scribyra\n' "$(cat secrets/postgres-password)" > secrets/database-url
+chmod 644 secrets/*   # read by container users; the secrets directory stays 700
 docker compose up -d
 ```
 
-Compose refuses pulls, publishes only loopback, mounts one durable volume and a
-read-only config, and drops capabilities. The image runs as UID/GID 10001 and
-supports a read-only root. Back up the named volume while stopped. Identify an
+[`compose.yaml`](../compose.yaml) runs a `postgres` service (official image
+pinned by version tag; record and compare its digest before first use, then pin
+`tag@sha256:<digest>` as the file explains) with a health check and an
+unpublished port, and starts the sync service only once PostgreSQL is healthy.
+The sync service reads the database URL from a secret file, keeps filesystem
+blobs on the `sync-data` volume, refuses pulls, publishes only loopback, mounts
+a read-only config and drops capabilities. A commented block shows S3 blobs.
+The image runs as UID/GID 10001 and supports a read-only root. Identify an
 installed image by its Docker image ID; retain the previous ID for rollback.
 Do not expose the container port publicly without the TLS proxy policy above.
 
@@ -329,12 +436,25 @@ services.scribyra-sync = {
   enable = true;
   package = scribyra.packages.${pkgs.stdenv.hostPlatform.system}.service;
   configFile = /etc/scribyra/service.json;
+  # Defaults: database.createLocally = true; blobStore.type = "filesystem".
 };
 ```
 
-The module uses a dynamic user, private `/var/lib/scribyra-sync`, restrictive
-umask and systemd hardening. Config contains hashes, never bearer secrets, and must be readable by the service. It
-opens no firewall ports and installs no client program. Configure TLS separately.
+By default the module enables `services.postgresql`, creates database and role
+`scribyra-sync` (`ensureDatabases`, `ensureUsers` with database ownership) and
+connects over `/run/postgresql` with peer authentication, so no password
+exists. The unit runs as the fixed system user `scribyra-sync` (not a dynamic
+user, so peer authentication can map it) and starts after `postgresql.service`
+and `postgresql-setup.service`. For an external server set
+`database.createLocally = false` and `database.urlFile` to a root-only file; for
+S3 set `blobStore.type = "s3"` and `blobStore.s3.{endpoint,region,bucket,accessKeyId,secretAccessKeyFile,pathStyle}`.
+Both secret files reach the unit through `LoadCredential`. Filesystem blobs stay
+in the private `/var/lib/scribyra-sync`. Leave database and blob fields out of
+`configFile`: the module sets them through the environment, and giving both
+`database_url` and `database_url_file` is refused. The unit keeps the restrictive
+umask and systemd hardening. Config contains hashes, never bearer secrets, and
+must be readable by the service. The module opens no firewall ports and installs
+no client program. Configure TLS separately.
 
 The flake includes a booted module test:
 
@@ -342,32 +462,107 @@ The flake includes a booted module test:
 nix build .#checks.x86_64-linux.service-vm --out-link tmp/service-vm
 ```
 
-It enables the actual module, boots NixOS, waits for the unit, checks health and
-readiness, writes and verifies an object, restarts the unit, then checks readiness
-and exact read-back. It permits QEMU software emulation without KVM; the overall
+It enables the actual module with its local PostgreSQL, boots NixOS, waits for
+the units, checks health and readiness, writes and verifies an object, checks
+its database row and blob file, stops the unit and runs `verify` as the service
+user, restarts PostgreSQL and the unit, then checks readiness and exact
+read-back. It permits QEMU software emulation without KVM; the overall
 runtime deadline is ten minutes. It opens no external listener or firewall port.
 
 ## Upgrade, backup and restore
 
-1. Stop the exact process (`kill -TERM <recorded-pid>`), container or systemd
-   unit and wait for exit. Copy **the whole data directory**, including SQLite,
-   WAL/SHM if present, blob directory and lock file; the copied lock has no live
-   owner. Preserve permissions and keep backups private. Never copy a live DB
-   without an atomic filesystem snapshot or SQLite-aware procedure.
-2. Back up the config separately. Retain the old binary/image and record the
-   source commit plus lock files. Copy the new binary/install the new image.
-3. Start with the same config/data. Supported schema upgrades run in a single
-   SQLite transaction; schema 0 (empty) becomes 1. Unknown/future schemas and
-   legacy plaintext DBs fail without migration. Check `/ready` and retrieve a
-   known object. For protocol 1 this preserves all object hashes and bytes.
-4. Restore into an **empty** directory while stopped, copying the entire backup
-   and config. Start the matching version, check readiness and retrieve/hash an
-   object before switching clients. For rollback restore the pre-upgrade backup
-   with the old binary; never run an old binary against a newer schema.
+Objects are immutable and a metadata row is committed only after its blob is
+durable, so every object the database refers to is already in the blob store.
 
-S includes the schema mechanism, not a fictional schema-2 migration. The drill
-reinstalls the same release and restores the stopped backup to a clean directory.
-Future versions must add real migration fixtures before release.
+**Backup** (online, the service may keep running):
+
+1. Dump the database first: `pg_dump --format=custom --file=scribyra.dump "$(cat database-url)"`
+   (or a base backup with WAL archiving).
+2. Then copy the blobs: `cp -a data backup/data` (or `rsync -a`) for the
+   filesystem backend; for S3 use bucket versioning or replication, or copy the
+   bucket with your provider's tools (for example `rclone copy`).
+
+Objects written after the dump are harmless extras in the blob copy. Back up the
+configuration and secret files separately. Keep backups private: they hold
+ciphertext and all metadata.
+
+**Restore** into an empty database and an empty blob directory (or bucket):
+
+```sh
+createdb -O scribyra-sync scribyra_restored
+pg_restore --no-owner --exit-on-error --dbname "$restored_url" scribyra.dump
+cp -a backup/data restored/data
+SCRIBYRA_SERVICE_CONFIG=service.json ./scribyra-sync verify
+```
+
+Point the configuration at the restored database and directory, run `verify`,
+start the service, check `/ready` and retrieve a known object before switching
+clients. Restoring an older backup rolls stored state back; clients that still
+have their data re-upload it.
+
+**Upgrade**: stop the service, keep the previous binary or image and a backup,
+install the new binary, start it. Pending migrations (`crates/sync/migrations`,
+embedded in the binary and recorded in the `_sqlx_migrations` table with
+checksums) run automatically at startup. A database with a migration the binary
+does not know (a newer schema) or an applied migration whose checksum differs
+is refused; startup exits 1. Migrations are append-only. For rollback restore
+the pre-upgrade backup with the old binary; never run an old binary against a
+newer schema.
+
+To erase deleted rows physically, PostgreSQL needs `VACUUM FULL` on the affected
+tables; plain `VACUUM` only marks space reusable.
+
+### Upgrade from the SQLite store
+
+Milestone-S releases stored metadata in `<data>/metadata.sqlite` and blobs in
+`<data>/blobs/<namespace>-<hash>`. Move such an installation once:
+
+1. Stop the old service and back up its whole data directory.
+2. Install the new binary and write a configuration with the new
+   `database_url_file` and a blob store. Use a **different** `data` directory
+   for new filesystem blobs (the old `blobs/` layout is not read by the service).
+3. Run `scribyra-sync migrate-sqlite /path/to/old-data`. It refuses a directory
+   whose old service still holds `service.lock`, a database that is not a
+   milestone-S schema-1 database, or a future schema. It then reads and verifies
+   **every** object (size and SHA-256) before writing anything, and refuses the
+   whole import if any blob is missing or corrupt. Then it copies each object,
+   verifying it again, and charges usage (configured quotas are not enforced
+   for imported data, so nothing acknowledged is dropped). It prints only counts:
+   `{"event":"migrate_sqlite","objects":N,"imported":N,"existing":0}`.
+4. Re-running is safe: objects already present are counted as `existing`.
+5. Run `scribyra-sync verify`, start the service, check `/ready` and retrieve a
+   known object. Keep the old directory until clients have been checked.
+
+Relay and object capabilities stay in the configuration file and need no
+migration.
+
+### Verify
+
+`scribyra-sync verify` (service stopped) reads every object once, one at a time,
+and checks that the blob exists and has the recorded size and hash. It also
+compares the `global` and `namespace:` usage rows with the objects. It prints
+`{"event":"verify","objects":N,"missing":M,"corrupt":C,"usage_mismatch":U}` and
+exits 0 only when all three are zero. It does not print keys or paths. With S3
+blobs it reads the whole bucket, so schedule it with the transfer cost in mind.
+
+## PostgreSQL storage, 10 November 2026
+
+Executed in the `agent/org-sync` worktree on 10 November 2026, with PostgreSQL
+17.11 and Garage 1.3.1 from the dev shell. No deployment, push, real credentials
+or external service.
+
+| Command (from checkout) | Result |
+| --- | --- |
+| `nix develop -c cargo test -p scribyra-sync` | 22 passed, 0 failed: 5 blob-store tests (one conformance suite passed by the filesystem and Garage backends, strict keys, settings), 15 binary tests (object semantics, concurrent quota, SIGKILL during upload, each with filesystem and Garage blobs; advisory lock; future migration and bad config refusal; URL file over a unix socket; `verify` on filesystem and S3; `migrate-sqlite` to both backends, idempotent re-run and refusals), 2 retained demo tests |
+| `nix develop -c node --test tests/service.test.mjs` | 20 passed, 0 failed, against a private PostgreSQL cluster with filesystem blobs; the plaintext search covers the PostgreSQL data directory after a checkpoint |
+| `nix develop -c cargo build --locked --release -p scribyra-sync --bin scribyra-sync` then `nix develop -c node scripts/service-smoke.mjs` | Release build passed; 13/13 install, exchange, online backup, upgrade, restore and verify checks |
+| `nix develop -c node scripts/service-proxy-smoke.mjs` | 20/20 checks with the release binary |
+| `nix eval --raw .#checks.x86_64-linux.service-vm.drvPath` | The VM test with the new module evaluates |
+
+Not run: the booted VM test (`nix build .#checks.x86_64-linux.service-vm`) would
+build 438 derivations and fetch 2.2 GB with about 12 GB of disk free, below a safe
+margin on this host; the Podman container drill (no Podman installed); the
+Compose stack (no Docker daemon).
 
 ## Delivery evidence
 

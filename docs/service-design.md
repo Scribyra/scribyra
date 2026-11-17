@@ -75,20 +75,27 @@ It cannot promise reachability on restricted networks.
 
 ## Durability and operations
 
-SQLite uses WAL and FULL synchronous commits. Blob writes use a temporary file,
-file fsync, atomic rename and directory fsync **before** metadata commit/receipt.
-Startup removes unreferenced crash remnants and checks referenced objects;
-missing/corrupt acknowledged objects prevent readiness. A single process owns
-the database (exclusive filesystem lock). Disk work is off the async reactor.
-The supported storage is a local POSIX filesystem with working fsync/rename;
-network filesystems and multiple replicas are unsupported.
+Updated 10 November 2026: PostgreSQL replaces SQLite for all metadata, and
+bytes go through one blob-store trait (see [org-sync-design.md](org-sync-design.md#4-storage)).
+Migrations are embedded in the binary and applied at startup; unknown (newer)
+migrations refuse startup. The filesystem backend writes a uniquely named
+temporary file, fsyncs it, renames it atomically and fsyncs the directory
+**before** the metadata transaction commits; startup removes leftover temporary
+files only. For the S3-compatible backend a successful PUT response is the
+durability point. Quota rows are locked in a fixed order and charged in the
+object's insert transaction. Startup no longer reads every object (that does not
+scale to a bucket); every read verifies size and hash, and `scribyra-sync
+verify` checks the whole store on demand. A single process owns the database
+through a PostgreSQL advisory lock held on a dedicated connection. Blob I/O is
+off the async reactor. Filesystem blobs need a local POSIX filesystem with
+working fsync/rename; multiple service replicas are unsupported.
 
 Configuration is strict JSON plus explicit environment overrides. Defaults bind
 loopback and admit no browser origins or principals. Health is process liveness;
-readiness probes database and writable blob storage. SIGTERM/SIGINT stops new
-work, closes relays and drains bounded requests. Schema upgrades are transactional
-and automatic only for supported versions; operators take a stopped backup of
-both database and blobs before upgrade. Downgrade uses that backup.
+readiness probes the database, the ownership connection and the blob store. SIGTERM/SIGINT stops new
+work, closes relays and drains bounded requests. Schema upgrades are automatic
+migrations; operators back up the database (`pg_dump` first) and then the blobs
+before upgrade. Downgrade uses that backup.
 
 Bounds cover body/frame size, request rate, concurrent HTTP work and WebSockets,
 room count, five members per room, room lifetime, send deadline, per-connection

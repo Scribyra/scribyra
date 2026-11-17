@@ -34,12 +34,17 @@ test('opaque objects survive SIGKILL, retry and contain no seeded document plain
     }
     assert.equal((await fetch(s.url+'/ready')).status,200);
     await s.stop();
-    const files=await readdir(s.config.data,{recursive:true,withFileTypes:true});
-    for(const entry of files)if(entry.isFile())assert.equal((await readFile(join(entry.parentPath,entry.name))).includes(Buffer.from(marker)),false);
-    assert(!s.logs.includes(marker));assert(!s.logs.includes(s.bearer));assert(!s.logs.includes(s.namespace));assert(!s.logs.includes(hash(bytes)));
-    // Startup recovers an unacknowledged crash remnant without touching durable bytes.
-    await writeFile(join(s.config.data,'blobs','pending'),'unacknowledged');await s.start();
-    assert(!((await readdir(join(s.config.data,'blobs'))).includes('pending')));
+    // Neither the blob directory nor any PostgreSQL file (tables, WAL) holds the plaintext.
+    await s.sql('CHECKPOINT');
+    for(const root of [s.config.data,s.postgres.data]) {
+      const files=await readdir(root,{recursive:true,withFileTypes:true});
+      for(const entry of files)if(entry.isFile())assert.equal((await readFile(join(entry.parentPath,entry.name))).includes(Buffer.from(marker)),false);
+    }
+    assert(!s.logs.includes(marker));assert(!s.logs.includes(s.bearer));assert(!s.logs.includes(s.namespace));assert(!s.logs.includes(hash(bytes)));assert(!s.logs.includes(s.database));
+    // Startup recovers an unacknowledged crash remnant (a temporary file) without touching durable bytes.
+    const objects=join(s.config.data,'objects',s.namespace);
+    await writeFile(join(objects,'.tmp-crash'),'unacknowledged');await s.start();
+    assert.deepEqual(await readdir(objects),[hash(bytes)]);
     assert.equal((await fetch(s.object(bytes),{headers:s.headers})).status,200);
   } finally {await s.close();}
 });
@@ -100,21 +105,23 @@ test('relay bounds rooms, members, messages; shutdown closes active peers',async
   } finally {for(const socket of sockets)socket.terminate();await s.close();}
 });
 
-test('startup refuses corrupted committed objects, future schema and duplicate ownership',async()=>{
+test('corrupted committed objects are never served and fail verify; future schema and duplicate ownership refuse startup',async()=>{
   const s=await service();const bytes=randomBytes(32);
   try {
     assert.equal((await fetch(s.object(bytes),{method:'PUT',headers:s.headers,body:bytes})).status,201);
-    // A separate process cannot acquire the same directory lock.
+    // A separate process cannot take the same database (PostgreSQL advisory lock).
     const {spawn}=await import('node:child_process');
-    const duplicate=spawn('target/debug/scribyra-sync',[],{env:{...process.env,SCRIBYRA_SERVICE_CONFIG:join(s.directory,'config.json')},stdio:'ignore'});
+    const duplicate=spawn('target/debug/scribyra-sync',[],{env:{...process.env,SCRIBYRA_SERVICE_CONFIG:join(s.directory,'config.json'),SCRIBYRA_SERVICE_DATA:join(s.directory,'other')},stdio:'ignore'});
     assert.equal((await once(duplicate,'exit'))[0],1);
-    await writeFile(join(s.config.data,'blobs',s.namespace+'-'+hash(bytes)),'corrupt');
+    await writeFile(s.blob(bytes),'corrupt');
     assert.equal((await fetch(s.object(bytes),{method:'PUT',headers:s.headers,body:bytes})).status,500);
+    assert.equal((await fetch(s.object(bytes),{headers:s.headers})).status,500);
     await s.stop();
-    await assert.rejects(s.start(),/Service exited 1/);
-    await writeFile(join(s.config.data,'blobs',s.namespace+'-'+hash(bytes)),bytes);
-    const {execFileSync}=await import('node:child_process');
-    execFileSync('python3',['-c','import sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute("PRAGMA user_version=2"); c.commit()',join(s.config.data,'metadata.sqlite')]);
+    // Startup no longer reads every object (S3 scale); every read verifies, and verify checks the whole store.
+    assert.equal(await s.command('verify'),1);
+    await writeFile(s.blob(bytes),bytes);
+    assert.equal(await s.command('verify'),0);
+    await s.sql("INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (9999, 'future', true, '\\x00', 0)");
     await assert.rejects(s.start(),/Service exited 1/);
   } finally {await s.close();}
 });
@@ -168,7 +175,7 @@ test('global object quota is shared across independent authenticated namespaces'
 
 test('timed-out disk work retains its slot until the underlying operation finishes',async()=>{
   const {execFileSync}=await import('node:child_process'),{unlink}=await import('node:fs/promises');
-  const s=await service({http_concurrency:1});const bytes=randomBytes(32),path=join(s.config.data,'blobs',s.namespace+'-'+hash(bytes));
+  const s=await service({http_concurrency:1});const bytes=randomBytes(32),path=s.blob(bytes);
   try {
     assert.equal((await fetch(s.object(bytes),{method:'PUT',headers:s.headers,body:bytes})).status,201);
     // A FIFO stalls the actual filesystem read without blocking the async reactor.

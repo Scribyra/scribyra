@@ -1,11 +1,16 @@
-// Documentation acceptance: fresh local install, exchange, stopped backup and restore.
+// Documentation acceptance: fresh local install against PostgreSQL with filesystem blobs,
+// exchange, online backup (pg_dump, then the blob directory), upgrade, restore into a fresh
+// database and directory, and a full verify.
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { once } from 'node:events';
+import { promisify } from 'node:util';
 import { mkdir, mkdtemp, copyFile, cp, writeFile, rm } from 'node:fs/promises';
 import { resolve, join } from 'node:path';
 import { randomBytes, createHash, createCipheriv } from 'node:crypto';
 import WebSocket from 'ws';
+import { database } from '../tests/helpers/service.mjs';
+const run=promisify(execFile);
 const id=()=>randomBytes(32).toString('hex'),hash=b=>createHash('sha256').update(b).digest('hex');
 await mkdir('tmp',{recursive:true});
 const root=await mkdtemp(resolve('tmp/service-install-'));
@@ -20,14 +25,24 @@ async function start(directory){
     child.stdout.on('data',b=>{for(const line of b.toString().split('\n')){try{const event=JSON.parse(line);if(event.event==='listening'){clearTimeout(timer);resolve('http://'+event.address);}}catch{}}});
   });
 }
+async function verify(directory){
+  const process_=spawn(join(directory,'scribyra-sync'),['verify'],{cwd:directory,env:{...process.env,SCRIBYRA_SERVICE_CONFIG:'service.json'},stdio:'ignore'});
+  return (await once(process_,'exit'))[0];
+}
+async function install(directory,url){
+  await mkdir(directory,{mode:0o700});await mkdir(join(directory,'data'),{mode:0o700});
+  await copyFile(resolve('target/release/scribyra-sync'),join(directory,'scribyra-sync'));
+  // The database URL is a secret: kept in its own mode-600 file, never in service.json or logs.
+  await writeFile(join(directory,'database-url'),url+'\n',{mode:0o600});
+}
 const sockets=[];
 try {
-  const install=join(root,'install'),restore=join(root,'restore'),backup=join(root,'backup');
-  await mkdir(install,{mode:0o700});await mkdir(join(install,'data'),{mode:0o700});
-  await copyFile(resolve('target/release/scribyra-sync'),join(install,'scribyra-sync'));
-  const bearer=id(),namespace=id(),config={bind:'127.0.0.1:0',data:'data',origins:[],principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}]};
-  await writeFile(join(install,'service.json'),JSON.stringify(config),{mode:0o600});
-  let url=await start(install);
+  const installed=join(root,'install'),restored=join(root,'restore'),backup=join(root,'backup');
+  const firstDatabase=await database();
+  await install(installed,firstDatabase);
+  const bearer=id(),namespace=id(),config={bind:'127.0.0.1:0',data:'data',database_url_file:'database-url',origins:[],principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}]};
+  await writeFile(join(installed,'service.json'),JSON.stringify(config),{mode:0o600});
+  let url=await start(installed);
   check((await fetch(url+'/health')).status,200);check((await fetch(url+'/ready')).status,200);
   const cipher=createCipheriv('aes-256-gcm',randomBytes(32),randomBytes(12));
   const bytes=Buffer.concat([cipher.update('SYNTHETIC_DOCUMENT_FOR_INSTALL_DRILL'),cipher.final(),cipher.getAuthTag()]);
@@ -39,16 +54,30 @@ try {
     const ready=once(ws,'message');ws.send(JSON.stringify({version:1,bearer,room,connection:id()}));await ready;
   }
   const received=once(sockets[1],'message');sockets[0].send(bytes);check((await received)[0],bytes);
-  for(const socket of sockets)socket.close();await stop();
-  await cp(join(install,'data'),backup,{recursive:true});
-  // Reinstall the pinned release (the supported schema remains 1).
-  await copyFile(resolve('target/release/scribyra-sync'),join(install,'scribyra-sync'));
-  url=await start(install);check((await fetch(url+'/ready')).status,200);
+  for(const socket of sockets)socket.close();
+  // Online backup: database first, then blobs. Objects written after the dump are harmless extras.
+  await mkdir(backup,{mode:0o700});
+  await run('pg_dump',['--format=custom','--file',join(backup,'database.dump'),firstDatabase]);
+  const later=randomBytes(64);
+  check((await fetch(`${url}/v1/objects/${namespace}/${hash(later)}`,{method:'PUT',headers,body:later})).status,201);
+  await cp(join(installed,'data'),join(backup,'data'),{recursive:true});
+  await stop();
+  // Upgrade: stop, replace the binary, start; migrations apply automatically (none pending here).
+  await copyFile(resolve('target/release/scribyra-sync'),join(installed,'scribyra-sync'));
+  url=await start(installed);check((await fetch(url+'/ready')).status,200);
   check(Buffer.from(await (await fetch(url+object,{headers})).arrayBuffer()),bytes);await stop();
-  await mkdir(restore,{mode:0o700});await cp(backup,join(restore,'data'),{recursive:true});
-  await copyFile(join(install,'service.json'),join(restore,'service.json'));await copyFile(join(install,'scribyra-sync'),join(restore,'scribyra-sync'));
-  url=await start(restore);check((await fetch(url+'/ready')).status,200);
+  check(await verify(installed),0);
+  // Restore into a fresh, empty database and a fresh blob directory.
+  const secondDatabase=await database();
+  await install(restored,secondDatabase);
+  await run('pg_restore',['--no-owner','--exit-on-error','--dbname',secondDatabase,join(backup,'database.dump')]);
+  await rm(join(restored,'data'),{recursive:true});await cp(join(backup,'data'),join(restored,'data'),{recursive:true});
+  await copyFile(join(installed,'service.json'),join(restored,'service.json'));
+  check(await verify(restored),0);
+  url=await start(restored);check((await fetch(url+'/ready')).status,200);
   check(Buffer.from(await (await fetch(url+object,{headers})).arrayBuffer()),bytes);
   check((await fetch(url+object,{method:'PUT',headers,body:bytes})).status,204);
-  console.log(JSON.stringify({environment:'fresh directory',checks,passed:checks,failed:0,upgrade:'same release, schema 1',restore:'separate clean directory'}));
+  // The extra written after the dump is not in the restored metadata, so it is not served.
+  check((await fetch(`${url}/v1/objects/${namespace}/${hash(later)}`,{headers})).status,404);
+  console.log(JSON.stringify({environment:'fresh directory and database',checks,passed:checks,failed:0,backup:'pg_dump then blob copy, online',upgrade:'same release, migrations current',restore:'fresh database and directory, verify clean'}));
 } finally {for(const socket of sockets)socket.terminate();await stop();await rm(root,{recursive:true,force:true});}

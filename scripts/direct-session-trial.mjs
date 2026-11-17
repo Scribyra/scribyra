@@ -10,6 +10,7 @@ import {existsSync} from 'node:fs';
 import {tmpdir,homedir} from 'node:os';
 import {dirname,extname,join,normalize,resolve,sep} from 'node:path';
 import {pathToFileURL} from 'node:url';
+import {database} from '../tests/helpers/service.mjs';
 
 const HELP=`Usage: nix develop -c node scripts/direct-session-trial.mjs --mode=smoke --a=HOST --b=HOST [options]
 
@@ -114,7 +115,8 @@ export function serveApp(dist,port){
 export async function startService(binary,port){
  // One relay-only capability per person, as in production. Neither is logged or reported.
  const bearers=[randomBytes(32).toString('hex'),randomBytes(32).toString('hex')],namespace=randomBytes(32).toString('hex'),directory=await mkdtemp(join(tmpdir(),'scribyra-trial-'));
- const config={bind:`127.0.0.1:${port}`,data:join(directory,'data'),origins:[`http://127.0.0.1:${APP_PORT}`],principals:bearers.map(bearer=>({token_hash:createHash('sha256').update(bearer).digest('hex'),namespace,storage:false,relay:true}))};
+ // The service keeps metadata in PostgreSQL: a private disposable cluster from the dev shell.
+ const config={bind:`127.0.0.1:${port}`,data:join(directory,'data'),database_url:await database(),origins:[`http://127.0.0.1:${APP_PORT}`],principals:bearers.map(bearer=>({token_hash:createHash('sha256').update(bearer).digest('hex'),namespace,storage:false,relay:true}))};
  await writeFile(join(directory,'config.json'),JSON.stringify(config),{mode:0o600});
  const child=spawn(binary,[],{env:{...process.env,SCRIBYRA_SERVICE_CONFIG:join(directory,'config.json')},stdio:['ignore','pipe','ignore']});
  const actual=await new Promise((resolve,reject)=>{

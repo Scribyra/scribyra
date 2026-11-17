@@ -5,6 +5,7 @@ import { mkdir,mkdtemp,writeFile,rm } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { resolve,join } from 'node:path';
 import { randomBytes,createHash } from 'node:crypto';
+import { database } from '../tests/helpers/service.mjs';
 const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 await mkdir('tmp',{recursive:true});
 const root=await mkdtemp(resolve('tmp/service-container-'));
@@ -15,17 +16,20 @@ const hostNetwork=process.argv.includes('--host-network');
 let created=false,checks=0;
 try {
   execFileSync('skopeo',['--policy',resolve('deploy/service-image-policy.json'),'copy',
-    `docker-archive:${resolve(process.argv.slice(2).find(arg=>!arg.startsWith('--'))||'result')}`,`containers-storage:[vfs@${store}+${run}]localhost/scribyra-sync:0.1.0-s1`],{stdio:'pipe'});
-  const image=podman('image','inspect','localhost/scribyra-sync:0.1.0-s1','--format','{{.Id}}');checks++;
+    `docker-archive:${resolve(process.argv.slice(2).find(arg=>!arg.startsWith('--'))||'result')}`,`containers-storage:[vfs@${store}+${run}]localhost/scribyra-sync:0.2.0-pg1`],{stdio:'pipe'});
+  const image=podman('image','inspect','localhost/scribyra-sync:0.2.0-pg1','--format','{{.Id}}');checks++;
   const bearer=randomBytes(32).toString('hex'),namespace=randomBytes(32).toString('hex');
   const config=join(root,'service.json');
   const probe=createServer();await new Promise(resolve=>probe.listen(0,'127.0.0.1',resolve));
   const port=probe.address().port;await new Promise(resolve=>probe.close(resolve));
-  await writeFile(config,JSON.stringify({bind:hostNetwork?`127.0.0.1:${port}`:'0.0.0.0:8787',data:'/data',principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}]}),{mode:0o644});
+  // Metadata goes to a disposable PostgreSQL on the host loopback (slirp4netns reaches it as 10.0.2.2).
+  const databaseUrl=join(root,'database-url'),url_=await database();
+  await writeFile(databaseUrl,(hostNetwork?url_:url_.replace('@127.0.0.1:','@10.0.2.2:'))+'\n',{mode:0o644});
+  await writeFile(config,JSON.stringify({database_url_file:'/database-url',bind:hostNetwork?`127.0.0.1:${port}`:'0.0.0.0:8787',data:'/data',principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}]}),{mode:0o644});
   podman('create','--name',name,'--pull=never','--read-only','--cap-drop=ALL',
     '--security-opt=no-new-privileges','--cgroups=disabled','--log-driver=k8s-file',
-    ...(hostNetwork?['--network=host']:['--network=slirp4netns','-p',`127.0.0.1:${port}:8787`]),
-    '-v',`${name}-data:/data`,'-v',`${config}:/config.json:ro`,
+    ...(hostNetwork?['--network=host']:['--network=slirp4netns:allow_host_loopback=true','-p',`127.0.0.1:${port}:8787`]),
+    '-v',`${name}-data:/data`,'-v',`${config}:/config.json:ro`,'-v',`${databaseUrl}:/database-url:ro`,
     '-e','SCRIBYRA_SERVICE_CONFIG=/config.json','-e',`SCRIBYRA_SERVICE_BIND=${hostNetwork?`127.0.0.1:${port}`:'0.0.0.0:8787'}`,image);created=true;
   podman('start',name);
   const base=`http://127.0.0.1:${port}`;

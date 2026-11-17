@@ -82,6 +82,7 @@ pub mod packages;
 pub mod portable;
 
 pub mod exchange;
+pub mod orgsync;
 
 pub mod providers;
 
