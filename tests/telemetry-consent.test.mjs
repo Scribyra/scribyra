@@ -53,6 +53,18 @@ test('anonymous exporter has no authorization header and revocation aborts and d
  }finally{transport.close();}
 });
 
+// docs/telemetry.md and docs/zotero.md: bibliography import and Zotero add no telemetry
+// operation; their file changes are ordinary local-only `command` work.
+test('bibliography and Zotero modules record nothing themselves',async()=>{
+ const {readFile,readdir}=await import('node:fs/promises');
+ const files=(await readdir(new URL('../web/',import.meta.url))).filter(name=>/^zotero.*\.js$/.test(name)||name==='bibtex.js');
+ assert.equal(files.length,6,files.join());
+ for(const name of files){
+  const text=await readFile(new URL('../web/'+name,import.meta.url),'utf8');
+  assert.doesNotMatch(text,/observability|telemetry\.js|observe\(|observed\(|recorder/i,name);
+ }
+});
+
 // docs/telemetry.md: direct sessions add no telemetry operation. Their signalling,
 // identities, rooms and peers stay out of every record; their project changes are
 // ordinary local-only `command` and `storage_commit` work.

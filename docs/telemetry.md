@@ -70,6 +70,12 @@ preserved from a peer is the existing `recovery` failure signal, sent only with 
 failures category and carrying no project, session or peer detail. The telemetry
 session ID (below) is unrelated to direct sessions and never derived from them.
 
+Bibliography import and Zotero links add no operation either. Zotero requests,
+API keys, library IDs, collection names and refresh choices record nothing
+(`tests/telemetry-consent.test.mjs` checks that `web/bibtex.js` and the `web/zotero*`
+modules never call the recorder); the edits a refresh applies are local-only `command`
+and `storage_commit` work. See [Zotero](zotero.md).
+
 Start records are omitted; error outcomes/categories are removed without error
 consent, and measurements are filtered independently. Every sent value is coarse;
 local diagnostics keep exact values.
