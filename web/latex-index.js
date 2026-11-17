@@ -107,17 +107,18 @@ export function latexIndex(doc,{quiet=250,schedule=idle,now=()=>performance.now(
     pending=false;if(closed)return;const started=now();
     if(structureDirty)rebuild();
     for(const id of dirty){dirty.delete(id);parse(id);if(deadline&&dirty.size&&(deadline.timeRemaining()<1||now()-started>6))break;}
-    // One entry per batch of main-thread work, for measurement (docs/autocomplete.md).
+    // One entry per batch of main-thread work, for measurement (docs/roadmap.md, milestone L).
     try{performance.clearMeasures('latex-index-batch');performance.measure('latex-index-batch',{start:started,end:now()});}catch{}
     if(dirty.size||structureDirty)request();
   }
   function request(){if(!pending&&!closed){pending=true;schedule(work);}}
-  function later(){clearTimeout(timer);timer=setTimeout(request,quiet);}
+  function later(wait=quiet){clearTimeout(timer);timer=setTimeout(request,wait);}
   const observer=transaction=>{
     const changed=changedTextFiles(doc,transaction);
     if(changed===null){structureDirty=true;later();return;}
-    let any=false;for(const id of changed){const file=files.get(id);if(file&&(file.kind==='tex'||file.kind==='bib')){dirty.add(id);any=true;}}
-    if(any)later();
+    // Very large files wait longer for a pause: re-reading 3 MiB costs tens of milliseconds.
+    let wait=0;for(const id of changed){const file=files.get(id);if(file&&(file.kind==='tex'||file.kind==='bib')){dirty.add(id);wait=Math.max(wait,quiet+Math.min(3000,doc.getText(`text:${id}`).length/1000));}}
+    if(wait)later(wait);
   };
   doc.on('afterTransaction',observer);request();
   function snapshot(){
