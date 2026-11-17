@@ -193,7 +193,10 @@ function remoteBackup(){
   onMembership:()=>orgPanel?.render()});
   return orgEngine;
 }
-if(orgConnected()||orgJoining())void remoteBackup().start().catch(error=>notice('Remote backup could not start: '+error.message));
+// The organisation engine signs, verifies and seals with the WASM core: nothing of it runs before
+// the module is initialised (an invitation link can be opened, and acted on, before that).
+const wasmReady=init();
+if(orgConnected()||orgJoining())void wasmReady.then(()=>remoteBackup().start()).catch(error=>notice('Remote backup could not start: '+error.message));
 // Organisation links arrive in the fragment (never sent to the app's host): an invitation, a
 // device link, an org's sign-in link, or the return from the org's single sign-on.
 function openOrgPanel(prefill={}){orgPanel?.close();orgPanel=orgDialog({engine:remoteBackup(),anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});}
@@ -206,8 +209,8 @@ function takeOrgFragment(){
   if(kind==='#scribyra-sso='){const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code});return;}
   openOrgPanel({[kind==='#join='?'invite':kind==='#device='?'device':'org']:text});
 }
-window.addEventListener('hashchange',takeOrgFragment);
-setTimeout(takeOrgFragment,0);
+window.addEventListener('hashchange',()=>void wasmReady.then(takeOrgFragment,()=>{}));
+void wasmReady.then(takeOrgFragment,()=>{});
 function refreshDoc(openFirst = false) {
   if (!doc) return;
   const meta = doc.getMap('meta');
@@ -904,7 +907,7 @@ const refreshDashboard=()=>{if(!doc&&document.visibilityState!=='hidden')void re
 window.addEventListener('focus',refreshDashboard);window.addEventListener('pageshow',refreshDashboard);document.addEventListener('visibilitychange',refreshDashboard);
 setInterval(refreshDashboard,5000);
 document.documentElement.dataset.theme = localStorage.getItem('scribyra-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
-await init();
+await wasmReady;
 initializeCollaborationSchema();
 remoteDiagnostics=telemetryExport({identity:typeof __SCRIBYRA_BUILD__==='undefined'?undefined:__SCRIBYRA_BUILD__,originUnixMs:Math.round(Date.now()-(performance.now()-startupAt))});
 window.addEventListener('pagehide',()=>remoteDiagnostics.configure({enabled:false}));

@@ -4,6 +4,8 @@ import {test,expect} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 import {build} from 'esbuild';
 import {service,orgCreate} from '../helpers/service.mjs';
+// The harness is served by routes, which a service worker's fetches would bypass.
+test.use({serviceWorkers:'block'});
 
 async function harness(page){
  const bundle=await build({stdin:{resolveDir:process.cwd(),contents:`import init from './web/pkg/scribyra_app.js';import {initializeCollaborationSchema} from './web/collaboration-schema.js';await init({module_or_path:'/org-harness.wasm'});initializeCollaborationSchema();export * as Y from 'yjs';export * as model from './web/model.js';export * as storage from './web/storage.js';export {registerComments} from './web/comments.js';export {collaborationCommands} from './web/collaboration-commands.js';`},bundle:true,write:false,format:'esm',platform:'browser',loader:{'.css':'empty'}});
@@ -65,7 +67,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   expect(await s.sql("SELECT count(*) FROM entries WHERE position(convert_to('ORG_BACKUP','UTF8') in inline) > 0")).toBe('0');
 
   // A fresh profile restores everything from the kit alone.
-  const fresh=await browser.newContext();
+  const fresh=await browser.newContext({serviceWorkers:'block'});
   try{
    if(info.project.name==='chromium')await fresh.grantPermissions(['local-network-access']).catch(()=>{});
    const other=await fresh.newPage();await harness(other);await other.goto('/');

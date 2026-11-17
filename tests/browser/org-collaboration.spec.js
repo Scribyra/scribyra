@@ -14,7 +14,8 @@ async function harness(page){
  await page.route('**/org-harness.wasm',async r=>r.fulfill({contentType:'application/wasm',body:await readFile('web/pkg/scribyra_app_bg.wasm')}));
 }
 async function profile(browser,info){
- const context=await browser.newContext();
+ // The harness is served by routes, which a service worker's fetches would bypass.
+ const context=await browser.newContext({serviceWorkers:'block'});
  if(info.project.name==='chromium')await context.grantPermissions(['local-network-access']).catch(()=>{});
  const page=await context.newPage();await harness(page);await page.goto('/');
  return{context,page};
