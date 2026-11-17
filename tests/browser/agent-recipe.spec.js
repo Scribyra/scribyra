@@ -83,3 +83,19 @@ test('served suggestion reply route is discoverable, attributed and leaves sourc
  });
  expect(result.operations).toEqual(expect.arrayContaining(['thread.create','thread.reply']));expect(result.after).toBe(result.before);expect(result.thread.thread.suggestionId).toBe(result.suggestionId);expect(result.thread.items.find(i=>i.variants)?.authorName).toContain('(agent)');
 });
+
+test('Reviewing turns agent patches into suggestions the person accepts; Viewing refuses them',async({page})=>{
+ await page.goto(app);await page.getByRole('button',{name:'Start with a sample paper'}).click();await expect(page.getByRole('textbox',{name:'LaTeX source',exact:true})).toBeVisible();
+ const read=()=>page.evaluate(()=>window.scribyra.agent.readSource({path:'main.tex',startLine:1,endLine:200}).value.content);
+ const patch=(find,replace)=>page.evaluate(([find,replace])=>{const a=window.scribyra.agent;return a.patchSource({expectedRevision:a.status().revision,edits:[{path:'main.tex',find,replace}]});},[find,replace]);
+ await page.getByRole('combobox',{name:'Editor mode'}).selectOption('Reviewing');
+ const before=await read(),proposed=await patch('\\author{Your name}','\\author{Agent Example}');
+ expect(proposed.ok,JSON.stringify(proposed.error)).toBe(true);expect(proposed.value.suggested).toBe(1);expect(proposed.value.count).toBe(0);expect(await read()).toBe(before);
+ const card=page.getByRole('article',{name:'Suggestion'});await expect(card).toHaveCount(1);await expect(card).toContainText('Agent Example');
+ await card.getByRole('button',{name:'Accept',exact:true}).click();
+ await expect.poll(read).toContain('\\author{Agent Example}');
+ await page.getByRole('combobox',{name:'Editor mode'}).selectOption('Viewing');
+ expect((await patch('Agent Example','Changed')).error.code).toBe('viewing_mode');expect(await read()).toContain('\\author{Agent Example}');
+ await page.getByRole('combobox',{name:'Editor mode'}).selectOption('Editing');
+ expect((await patch('Agent Example','Edited directly')).value.count).toBe(1);await expect.poll(read).toContain('\\author{Edited directly}');
+});

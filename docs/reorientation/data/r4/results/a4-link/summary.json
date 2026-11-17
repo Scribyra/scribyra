@@ -1,0 +1,27 @@
+{
+ "id": "a4-link",
+ "model": "claude-sonnet-5-5",
+ "exit": 0,
+ "wallSeconds": 28,
+ "subtype": "success",
+ "turns": 9,
+ "toolCalls": 8,
+ "tools": {
+  "mcp__playwright__browser_evaluate": 5,
+  "mcp__playwright__browser_navigate": 1,
+  "mcp__playwright__browser_navigate_back": 1,
+  "mcp__playwright__browser_tabs": 1
+ },
+ "toolErrors": 0,
+ "resultChars": 7806,
+ "largestResult": 2497,
+ "readRecipe": true,
+ "usedAgentApi": true,
+ "inputTokens": 16,
+ "cacheCreation": 6892,
+ "cacheRead": 93665,
+ "outputTokens": 958,
+ "costUsd": 0.046546500000000005,
+ "apiMs": 15013,
+ "answer": "I changed \"12 sites\" to \"14 sites\" in `sections/results.tex`, and the project compiled.\n\n- **Built:** yes. The job succeeded and wasn't stale.\n- **Pages:** 2.\n- **Warnings:** 0. There were also 0 errors.\n\nI briefly sent your Scribyra tab to the agent docs page to read it. I then went back, and the tab is on the coastal-survey project again. The edit is only in the open project (in memory), so it isn't saved anywhere else."
+}

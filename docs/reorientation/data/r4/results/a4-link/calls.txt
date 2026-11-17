@@ -1,0 +1,8 @@
+browser_tabs [284 chars] {"action": "list"}
+browser_navigate [327 chars] {"url": "https://app.scribyra.com/agent.md"}
+browser_evaluate [2497 chars] {"function": "() => document.body.innerText"}
+browser_navigate_back [498 chars] {}
+browser_evaluate [904 chars] {"function": "async () => { const a = window.scribyra.agent; return {s: await a.status(), t: await a.readTree({path:''})}; }"}
+browser_evaluate [1163 chars] {"function": "async () => await window.scribyra.agent.readSource({path:'sections/results.tex'})"}
+browser_evaluate [1509 chars] {"function": "async () => { const a = window.scribyra.agent; const p = await a.patchSource({expectedRevision:'b6b3cbdb-7bee-433b-8dfd-93babd20e1ba:2', requestId:'edit-1', edits:[{path:'sections/results.tex', find:'We visited 12 sites', replace:'We visited 14 sites'}]}); if(!p.ok) return p; const c = await a.compile(); return {p, c}; }"}
+browser_evaluate [624 chars] {"function": "async () => await window.scribyra.agent.poll({jobId:'f1113a85-1b09-4070-bb68-640fd5190346', waitMs:25000})"}

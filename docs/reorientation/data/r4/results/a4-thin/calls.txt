@@ -1,0 +1,6 @@
+browser_tabs [284 chars] {"action": "list"}
+browser_evaluate [2293 chars] {"function": "async () => { const r = await fetch('/agent.md'); return await r.text(); }"}
+browser_evaluate [1999 chars] {"function": "async () => { const a = window.scribyra.agent; return {status: await a.status(), tree: await a.readTree({})}; }"}
+browser_evaluate [1163 chars] {"function": "async () => await window.scribyra.agent.readSource({path:'sections/results.tex'})"}
+browser_evaluate [1523 chars] {"function": "async () => { const a = window.scribyra.agent; const p = await a.patchSource({expectedRevision:'c4b368a8-5011-4da0-99f6-668ffa19ee39:2', requestId:'edit-sites-14', edits:[{path:'sections/results.tex', find:'We visited 12 sites', replace:'We visited 14 sites'}]}); if(!p.ok) return p; const c = await a.compile(); return {p, c}; }"}
+browser_evaluate [1430 chars] {"function": "async () => { const a = window.scribyra.agent; const r = await a.poll({jobId:'76ecd24e-2b08-46f3-9a73-04c99e8e8e70', waitMs:25000}); const d = await a.diagnostics({jobId:'76ecd24e-2b08-46f3-9a73-04c99e8e8e70', limit:10}); return {r, d}; }"}

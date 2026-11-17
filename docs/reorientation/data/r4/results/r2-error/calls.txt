@@ -1,0 +1,18 @@
+browser_tabs [285 chars] {"action": "list"}
+browser_snapshot [8870 chars] {}
+browser_click [378 chars] {"target": "e161"}
+browser_press_key [114 chars] {"key": "End"}
+browser_press_key [128 chars] {"key": "Shift+Home"}
+browser_type [189 chars] {"target": "e155", "text": "\\item Each point was measured \\emph{three} times."}
+browser_snapshot [296 chars] {"target": "e155"}
+browser_press_key [126 chars] {"key": "Control+z"}
+browser_snapshot [771 chars] {"target": "e155"}
+browser_run_code_unsafe [275 chars] {"code": "async (page) => { await page.getByText('Each point was measured').dblclick({position:{x:190,y:8}}); return await page.evaluate(()=>window.getSelection().toString()); }"}
+browser_click [378 chars] {"target": "e233"}
+browser_run_code_unsafe [668 chars] {"code": "async (page) => { const k=page.keyboard; await k.press('End'); for(let i=0;i<14;i++) await k.press('ArrowLeft'); await k.press('Backspace'); await k.press('Backspace'); await k.press('p'); await k.press('h'); return await page.getByRole('textbox',{name:'LaTeX source'}).innerText(); }"}
+browser_click [557 chars] {"target": "e108"}
+browser_find [1126 chars] {"regex": "/Compilation status|Succe|Failed|error/i"}
+browser_wait_for [621 chars] {"textGone": "Compiling on your device", "time": 30}
+browser_find [1155 chars] {"regex": "/Compilation status[\\s\\S]{0,200}/"}
+browser_wait_for [413 chars] {"text": "pages", "time": 30}
+browser_find [881 chars] {"regex": "/Compilation status[\\s\\S]{0,200}/"}
