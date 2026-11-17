@@ -16,6 +16,14 @@ extern "C" {
     fn ready();
     #[wasm_bindgen(js_namespace = scribyra)]
     fn composing() -> bool;
+    #[wasm_bindgen(js_namespace = console, js_name = error)]
+    fn console_error(message: &str);
+}
+/// A zoom level from the PDF viewer. A hidden viewer once reported a negative fitted scale, and
+/// one unreadable field dropped every later state update, freezing the whole interface.
+fn zoom_percent<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<usize, D::Error> {
+    let value = f64::deserialize(deserializer)?;
+    Ok(if value.is_finite() && value >= 1.0 { value.round().min(100_000.0) as usize } else { 100 })
 }
 #[derive(Clone, Default, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -70,6 +78,7 @@ struct State {
     has_pdf: bool,
     pdf_page: usize,
     pdf_pages: usize,
+    #[serde(deserialize_with = "zoom_percent")]
     pdf_scale: usize,
     pdf_find_open: bool,
     pdf_query: String,
@@ -232,11 +241,15 @@ fn App() -> impl IntoView {
     let callback =
         Closure::<dyn Fn(web_sys::CustomEvent)>::new(move |event: web_sys::CustomEvent| {
             if let Some(json) = event.detail().as_string() {
-                if let Ok(state) = serde_json::from_str::<State>(&json) {
-                    if !state.current || state.pdf_pages == 0 {
-                        set_page_editing.set(false);
+                match serde_json::from_str::<State>(&json) {
+                    Ok(state) => {
+                        if !state.current || state.pdf_pages == 0 {
+                            set_page_editing.set(false);
+                        }
+                        set_s.set(state);
                     }
-                    set_s.set(state);
+                    // Never drop an update silently: the interface would keep showing stale state.
+                    Err(error) => console_error(&format!("Scribyra could not display a state update: {error}")),
                 }
             }
         });
