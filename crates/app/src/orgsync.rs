@@ -175,35 +175,33 @@ pub fn org_chain_next(previous: &str, entry_hash: &str) -> Result<String, JsValu
     let e: [u8; 32] = core::unhex(entry_hash, 32).map_err(js)?.try_into().unwrap();
     Ok(core::hex(&core::chain_next(&p, &e)))
 }
-/// Seals one object part; returns `id` (64 hex) followed by the sealed bytes, as JSON-free bytes:
-/// the first 64 bytes are the ASCII ID.
+/// Seals one object part; returns the ASCII ID (64 bytes) followed by the sealed bytes.
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
-pub fn org_seal_object(project_key: &[u8], org: &str, project: &str, epoch: u32, kind: &str, hash: &str, part: u32, parts: u32, plaintext: &[u8]) -> Result<Vec<u8>, JsValue> {
-    let (id, sealed) = core::seal_object(project_key, org, project, epoch, kind, hash, part, parts, plaintext).map_err(js)?;
+pub fn org_seal_object(project_key: &[u8], org: &str, project: &str, epoch: u32, kind: &str, hash: &str, part: u32, parts: u32, variant: u32, plaintext: &[u8]) -> Result<Vec<u8>, JsValue> {
+    let (id, sealed) = core::seal_object(project_key, org, project, epoch, kind, hash, part, parts, variant, plaintext).map_err(js)?;
     Ok([id.into_bytes(), sealed].concat())
 }
 #[wasm_bindgen]
 #[allow(clippy::too_many_arguments)]
-pub fn org_open_object(project_key: &[u8], org: &str, project: &str, epoch: u32, kind: &str, hash: &str, part: u32, parts: u32, sealed: &[u8]) -> Result<Vec<u8>, JsValue> {
-    core::open_object(project_key, org, project, epoch, kind, hash, part, parts, sealed).map_err(js)
+pub fn org_open_object(project_key: &[u8], org: &str, project: &str, epoch: u32, kind: &str, hash: &str, part: u32, parts: u32, variant: u32, sealed: &[u8]) -> Result<Vec<u8>, JsValue> {
+    core::open_object(project_key, org, project, epoch, kind, hash, part, parts, variant, sealed).map_err(js)
 }
 #[wasm_bindgen]
-pub fn org_object_id(project_key: &[u8], kind: &str, hash: &str, part: u32, parts: u32) -> Result<String, JsValue> {
-    core::object_id(project_key, kind, hash, part, parts).map_err(js)
+pub fn org_object_id(project_key: &[u8], kind: &str, hash: &str, part: u32, parts: u32, variant: u32) -> Result<String, JsValue> {
+    core::object_id(project_key, kind, hash, part, parts, variant).map_err(js)
 }
 #[wasm_bindgen]
 pub fn org_object_parts(size: f64) -> u32 {
     core::object_parts(size.max(0.0) as u64)
 }
-/// Checks a `blobref` payload; `keys` is a JSON object of epoch → hex project key the reader holds.
 #[wasm_bindgen]
-pub fn org_check_blobref(payload: &[u8], keys_json: &str) -> Result<String, JsValue> {
-    let hexed: std::collections::BTreeMap<u32, String> = serde_json::from_str(keys_json).map_err(|_| JsValue::from_str("invalid keys"))?;
-    let mut keys = std::collections::BTreeMap::new();
-    for (epoch, key) in hexed {
-        keys.insert(epoch, core::unhex(&key, 32).map_err(js)?);
-    }
-    let list = core::check_blobref(payload, &keys).map_err(js)?;
+pub fn org_object_variants() -> u32 {
+    core::MAX_OBJECT_VARIANTS
+}
+/// Checks a `blobref` payload's shape; returns it as JSON.
+#[wasm_bindgen]
+pub fn org_check_blobref(payload: &[u8]) -> Result<String, JsValue> {
+    let list = core::check_blobref(payload).map_err(js)?;
     Ok(serde_json::to_string(&list).unwrap())
 }

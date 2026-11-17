@@ -10,7 +10,9 @@ import * as storage from '../web/storage.js';
 import {integrationSession} from './helpers/integration-session.mjs';
 import {service,orgCreate} from './helpers/service.mjs';
 import {orgBackup} from '../web/org-backup.js';
-import {parseKit} from '../web/org-crypto.js';
+import {parseKit,blobrefPayload} from '../web/org-crypto.js';
+import {rawMember,inject} from './helpers/org-member.mjs';
+import {org_object_id} from '../web/pkg/scribyra_app.js';
 
 // Node has no localStorage by default; the engine records "connected" there as in a browser.
 if(!globalThis.localStorage){const items=new Map();globalThis.localStorage={getItem:k=>items.has(k)?items.get(k):null,setItem:(k,v)=>items.set(k,String(v)),removeItem:k=>items.delete(k)};}
@@ -165,6 +167,35 @@ test('a file that does not decrypt or match its hash is refused, nothing is save
   assert.deepEqual(again.failures,[]);assert.deepEqual(names(again),['Tampered']);
   const doc=await storage.loadProject(again.restored[0].localId);
   try{const figure=projectNodes(doc).find(f=>f.path==='figure.png');assert.deepEqual(assetBytes(doc,figure.id),image('NEW_IMAGE_MARKER'));}finally{doc.destroy();}
+ }finally{engine?.close();back?.close();await erase();await s.close();}
+});
+
+test('a member who stores junk under a file’s ID, or announces false locations for it, cannot stop it backing up or restoring',async()=>{
+ // Review M2 and M3 of slice 6: object IDs are computable by every editor and blobrefs come from
+ // other members, so neither may decide where this browser uploads or fetches a file.
+ const s=await service({org:true});let engine,back;
+ try{
+  await erase();
+  const p=await localProject('Contested','\\documentclass{article}\\begin{document}CONTESTED\\end{document}');
+  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'contested'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);
+  const [{project}]=await engine.projects();
+  const ben=await rawMember(await engine.createInvite({}),'Ben');
+  await engine.grant(project,ben.person,'editor');
+  const key=await ben.key(project,1),lineage=await ben.lineage(project,key);
+  // Ben knows the figure the owner is about to add: he takes its ID first, and announces it
+  // under another variant and a wrong size.
+  const figure=image('CONTESTED_FIGURE',3000),hash=blob_hash(figure);
+  await ben.client.putObject(project,org_object_id(key,'asset',hash,0,1,0),1,new Uint8Array(200).fill(7));
+  await ben.append({project,epoch:1,key,lineage,kind:'blobref',payload:blobrefPayload([{kind:'asset',hash,size:999999,epoch:1,variant:3}])});
+  await p.edit(doc=>addEntries(doc,[{path:'figure.png',content:figure}]));
+  await engine.push(p.id);await settled(engine,p.id);
+  engine.close();await erase();
+  back=orgBackup({fetchImpl:fetch});
+  const result=await back.restore(kit);
+  assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['Contested']);
+  const doc=await storage.loadProject(result.restored[0].localId);
+  try{assert.deepEqual(assetBytes(doc,projectNodes(doc).find(n=>n.path==='figure.png').id),figure);}finally{doc.destroy();}
  }finally{engine?.close();back?.close();await erase();await s.close();}
 });
 

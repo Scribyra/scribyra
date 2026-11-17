@@ -9,7 +9,7 @@ import {
  org_person_id,org_event_signing_message,org_device_proof_message,org_recovery_proof_message,org_wrap_signing_message,org_wrap_context,org_check_wrap,
  org_entry_signing_message,org_verify_entry,org_entry_hash,org_chain_next,org_apply_events,
  org_invite_message,org_device_request_message,org_wrap_recipients,
- org_seal_object,org_open_object,org_object_parts,org_check_blobref,
+ org_seal_object,org_open_object,org_object_parts,org_object_variants,org_check_blobref,
 } from './pkg/scribyra_app.js';
 
 const encoder=new TextEncoder(),decoder=new TextDecoder();
@@ -310,24 +310,26 @@ export const chainNext=(previous,hash)=>org_chain_next(previous,hash);
 
 /** Number of parts an object of `size` plaintext bytes is sealed in. */
 export const objectParts=size=>org_object_parts(size);
+/** Alternative IDs an object may be stored under when an ID already holds other bytes. */
+export const objectVariants=()=>org_object_variants();
 const PART=4*1024*1024;
-/** Seals a plaintext object in parts under the epoch's blob key; returns [{id,body}] in order. */
-export function sealObject({projectKey,org,project,epoch,kind,hash,bytes}){
+/** Seals a plaintext object in parts under the epoch's blob key; returns [{id,body,plain}] in order.
+ * The bytes must be what `hash` says (checked here and, for one-part objects, in the core). */
+export function sealObject({projectKey,org,project,epoch,kind,hash,bytes,variant=0}){
+ if(sha256Hex(bytes)!==hash)throw Error('A file on this device does not match its reference. It was not uploaded.');
  const parts=org_object_parts(bytes.length),out=[];
  for(let part=0;part<parts;part++){
-  const sealed=org_seal_object(projectKey,org,project,epoch,kind,hash,part,parts,bytes.subarray(part*PART,Math.min(bytes.length,(part+1)*PART)));
-  out.push({id:decoder.decode(sealed.subarray(0,64)),body:sealed.subarray(64)});
+  const plain=bytes.subarray(part*PART,Math.min(bytes.length,(part+1)*PART)),sealed=org_seal_object(projectKey,org,project,epoch,kind,hash,part,parts,variant,plain);
+  out.push({id:decoder.decode(sealed.subarray(0,64)),body:sealed.subarray(64),plain});
  }
  return out;
 }
 /** Opens one fetched part; throws if it was altered or belongs elsewhere. */
-export function openObjectPart({projectKey,org,project,epoch,kind,hash,part,parts,body}){
- try{return org_open_object(projectKey,org,project,epoch,kind,hash,part,parts,body);}
+export function openObjectPart({projectKey,org,project,epoch,kind,hash,part,parts,variant=0,body}){
+ try{return org_open_object(projectKey,org,project,epoch,kind,hash,part,parts,variant,body);}
  catch{throw Error('A file from the service could not be decrypted: it was altered or uses another key.');}
 }
 /** A blobref payload: canonical JSON listing objects uploaded before the entry that uses them. */
 export const blobrefPayload=objects=>encoder.encode(canonical({v:1,objects}));
-/** Checks a received blobref payload against the keys this browser holds ({epoch: key bytes}). */
-export function checkBlobref(payload,keys){
- return JSON.parse(org_check_blobref(payload,JSON.stringify(Object.fromEntries(Object.entries(keys).map(([epoch,key])=>[epoch,hex(key)])))));
-}
+/** Checks a received blobref payload's shape. Its entries are hints where to look, never IDs. */
+export const checkBlobref=payload=>JSON.parse(org_check_blobref(payload));

@@ -24,7 +24,7 @@ import {
  sealName,openName,sealProjectName,openProjectName,wrapRecipients,
  parseInvite,formatInvite,inviteSeed,inviteMessage,formatDeviceLink,parseDeviceLink,linkSeed,deviceRequestMessage,linkCode,
  formatOrgLink,parseOrgLink,newDeviceCode,deviceCodeMac,signInUrl,keyCommit,
- sealObject,openObjectPart,objectParts,blobrefPayload,checkBlobref,
+ sealObject,openObjectPart,objectParts,objectVariants,blobrefPayload,checkBlobref,
 } from './org-crypto.js';
 import {org_ed25519_public,org_ed25519_sign,org_ed25519_verify,org_object_id,blob_hash,history_validate_manifest} from './pkg/scribyra_app.js';
 
@@ -152,7 +152,10 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    // The long poll may refresh the state while this signs: sign and apply against one snapshot.
    const base=connection.state,identity=await deviceIdentity(),prev=base.head,body=await makeBody(prev);
    const raw=await signEvent({org:connection.org,prev,type,body},identity);
-   const state=applyEvents(base,connection.org,[raw]);
+   let state;
+   // Checked against this browser's replay first; a replay that is behind is refreshed once.
+   try{state=applyEvents(base,connection.org,[raw]);}
+   catch(error){if(attempt<3&&await refreshMembership().then(s=>s.count!==base.count,()=>false))continue;throw error;}
    try{
     await authed(()=>client.postEvent(connection.org,raw));
     if(state.count>connection.state.count){connection.state=state;await saveConnection();}
@@ -235,67 +238,123 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  // --- Encrypted objects: binary assets and the history objects behind named versions
 
  const objectRange=(project,kind,hash)=>IDBKeyRange.bound([project,kind,hash,0],[project,kind,hash,Infinity]);
- /** Records objects from a checked blobref (or this browser's own uploads) as present on the service. */
- async function noteObjects(refs,project,store){
-  for(const ref of refs)await store.put({project,kind:ref.kind,hash:ref.hash,epoch:ref.epoch,size:ref.size,ids:ref.ids});
+ /**
+  * Records where objects are. `confirmed` records are ones this browser uploaded or fetched and
+  * opened itself; others come from another member's blobref and are only hints where to look,
+  * so a false announcement can neither stop this browser from uploading a file nor choose IDs.
+  */
+ async function noteObjects(refs,project,store,{confirmed=false}={}){
+  for(const ref of refs){
+   const record={project,kind:ref.kind,hash:ref.hash,epoch:ref.epoch,size:ref.size,variant:ref.variant,...(confirmed?{confirmed:true}:{})};
+   if(!confirmed&&(await store.get([project,ref.kind,ref.hash,ref.epoch]))?.confirmed)continue;
+   await store.put(record);
+  }
  }
+ const confirmedOnService=async(project,kind,hash)=>(await db.getAll('objects',objectRange(project,kind,hash))).some(record=>record.confirmed);
  /**
   * What this browser should upload before its next entry: the project's current assets and,
   * for every named version, its checkpoint manifest, update chunks and the assets it needs
-  * (including files deleted since). Objects already on the service (under any epoch) are skipped.
+  * (including files deleted since). Objects this browser already confirmed on the service are
+  * skipped. A current asset this browser cannot upload stops the upload (review H1): sending an
+  * update that refers to a file nobody can fetch would stall every other member.
   */
  async function wantedObjects(project,doc,read){
-  const known=async(kind,hash)=>(await db.count('objects',objectRange(project,kind,hash)))>0;
   const wanted=[],assets=new Map(read.blobs.map(blob=>[blob.ref.hash,blob.bytes]));
-  for(const ref of blobRefs(doc)){const bytes=assets.get(ref.hash)||knownBlob(doc,ref.hash);if(bytes&&!(await known('asset',ref.hash)))wanted.push({kind:'asset',hash:ref.hash,bytes});}
+  for(const ref of blobRefs(doc)){
+   if(await confirmedOnService(project,'asset',ref.hash))continue;
+   const bytes=assets.get(ref.hash)||knownBlob(doc,ref.hash);
+   if(!bytes)throw fault('This project refers to a file that is missing on this device, so its changes are not sent. Open it on the device that has the file.');
+   wanted.push({kind:'asset',hash:ref.hash,bytes});
+  }
   const versions=[...doc.getMap('versions').values()].map(version=>version?.checkpointRef).filter(isHash);
   if(!versions.length)return wanted;
   const manifests=await storage.readStoredBytes({objects:versions}),chunks=new Set(),extra=new Set();
   for(const [hash,bytes] of manifests.objects){
    let manifest;try{manifest=JSON.parse(new TextDecoder().decode(bytes));}catch{continue;}
-   if(!(await known('history',hash)))wanted.push({kind:'history',hash,bytes});
-   for(const chunk of manifest.updateChunks||[])if(isHash(chunk?.hash)&&!(await known('history',chunk.hash)))chunks.add(chunk.hash);
-   for(const asset of manifest.assets||[])if(isHash(asset?.hash)&&!assets.has(asset.hash)&&!(await known('asset',asset.hash)))extra.add(asset.hash);
+   if(!(await confirmedOnService(project,'history',hash)))wanted.push({kind:'history',hash,bytes});
+   for(const chunk of manifest.updateChunks||[])if(isHash(chunk?.hash)&&!(await confirmedOnService(project,'history',chunk.hash)))chunks.add(chunk.hash);
+   for(const asset of manifest.assets||[])if(isHash(asset?.hash)&&!assets.has(asset.hash)&&!(await confirmedOnService(project,'asset',asset.hash)))extra.add(asset.hash);
   }
   const stored=await storage.readStoredBytes({objects:[...chunks],blobs:[...extra]});
   for(const [hash,bytes] of stored.objects)wanted.push({kind:'history',hash,bytes});
   for(const [hash,bytes] of stored.blobs)wanted.push({kind:'asset',hash,bytes});
-  return wanted;
+  // History objects whose stored bytes no longer match their hash are left out (never sealed).
+  return wanted.filter(object=>object.kind==='asset'||blob_hash(object.bytes)===object.hash);
  }
- /** Seals and uploads objects under `epoch`; returns their blobref records. Identical retries are free. */
+ /** Whether the service already holds exactly this part under its ID (an identical upload, or a race). */
+ async function holds(project,part,open){
+  const body=await authed(()=>client.getObject(project,part.id));
+  if(!body)return false;
+  try{const plain=open(body);return plain.length===part.plain.length&&plain.every((b,i)=>b===part.plain[i]);}catch{return false;}
+ }
+ /**
+  * Seals and uploads objects under `epoch`; returns their blobref records. Identical retries are
+  * free. An ID that already holds other bytes (another member stored them first) moves the
+  * object to its next variant (review M3).
+  */
  async function uploadObjects(project,epoch,key,wanted){
-  const refs=[];
+  const refs=[],variants=objectVariants();
   for(const object of wanted){
-   const parts=sealObject({projectKey:key,org:connection.org,project,epoch,kind:object.kind,hash:object.hash,bytes:object.bytes});
-   for(const part of parts)await authed(()=>client.putObject(project,part.id,epoch,part.body));
-   refs.push({kind:object.kind,hash:object.hash,size:object.bytes.length,epoch,ids:parts.map(part=>part.id)});
+   let placed=null;
+   for(let variant=0;variant<variants&&placed===null;variant++){
+    const parts=sealObject({projectKey:key,org:connection.org,project,epoch,kind:object.kind,hash:object.hash,bytes:object.bytes,variant});
+    let taken=false;
+    for(const [index,part] of parts.entries()){
+     try{await authed(()=>client.putObject(project,part.id,epoch,part.body));}
+     catch(error){
+      if(!(error instanceof ServiceError&&error.status===409&&/different object/.test(error.message)))throw error;
+      const open=body=>openObjectPart({projectKey:key,org:connection.org,project,epoch,kind:object.kind,hash:object.hash,part:index,parts:parts.length,variant,body});
+      if(!(await holds(project,part,open))){taken=true;break;}
+     }
+    }
+    if(!taken)placed=variant;
+   }
+   if(placed===null)throw Error('Another member stored damaged copies of a file under its names on the service, so it cannot be uploaded. Ask an administrator to check the organisation’s members.');
+   refs.push({kind:object.kind,hash:object.hash,size:object.bytes.length,epoch,variant:placed});
   }
   return refs;
  }
  const refused=message=>Object.assign(Error(message),{refused:true});
  /**
-  * Fetches, decrypts and checks one object. It is looked up under the epochs blobrefs named for
-  * it, then under every epoch this browser holds a key for. Bytes that do not decrypt or do not
-  * match their hash are refused (and fetched again on the next attempt), never installed.
+  * Fetches, decrypts and checks one object. It is looked for under the epochs and variants
+  * blobrefs named for it first, then under every epoch this browser holds a key for and every
+  * variant, always with IDs computed here. Bytes that do not decrypt or do not match their hash
+  * are refused (another copy is tried; the next attempt fetches again), never installed.
   */
  async function fetchObject(project,ring,kind,hash,size=null){
   const announced=(await db.getAll('objects',objectRange(project,kind,hash))).sort((a,b)=>b.epoch-a.epoch);
   const epochs=[...new Set([...announced.map(o=>o.epoch),...Array.from({length:connection.state.projects[project]?.epoch||0},(_,i)=>i+1).reverse()])];
+  let refusal=null;
   for(const epoch of epochs){
    const key=await ring.get(epoch);if(!key)continue;
-   const record=announced.find(o=>o.epoch===epoch),length=record?.size??size,parts=length===null?1:objectParts(length),pieces=[];
-   for(let part=0;part<parts;part++){
-    const id=record?.ids?.[part]??org_object_id(key,kind,hash,part,parts),body=await authed(()=>client.getObject(project,id));
-    if(!body){if(part===0)break;throw Error('Part of a file is missing on the service. It is fetched again later.');}
-    try{pieces.push(openObjectPart({projectKey:key,org:connection.org,project,epoch,kind,hash,part,parts,body}));}
-    catch(error){throw refused(error.message+' It was refused and is fetched again later.');}
+   const hint=announced.find(o=>o.epoch===epoch);
+   // A size the caller knows (from the project) wins over another member's announcement.
+   const sizes=[...new Set(size!==null?[size]:[...(Number.isSafeInteger(hint?.size)?[hint.size]:[]),null])];
+   // The announced variant first (a hint: if it is not there, the usual order still runs), then
+   // variants in order until one is missing (a later variant exists only if this one was taken).
+   const hinted=Number.isSafeInteger(hint?.variant)&&hint.variant>0&&hint.variant<objectVariants()?hint.variant:null;
+   const variants=[...(hinted===null?[]:[hinted]),...Array.from({length:objectVariants()},(_,i)=>i)];
+   for(const length of sizes){
+    const parts=length===null?1:objectParts(length);
+    for(const [index,variant] of variants.entries()){
+     const pieces=[];let missing=false;
+     try{
+      for(let part=0;part<parts;part++){
+       const id=org_object_id(key,kind,hash,part,parts,variant),body=await authed(()=>client.getObject(project,id));
+       if(!body){missing=true;break;}
+       pieces.push(openObjectPart({projectKey:key,org:connection.org,project,epoch,kind,hash,part,parts,variant,body}));
+      }
+     }catch(error){if(error instanceof ServiceError)throw error;refusal=error;continue;}
+     if(missing){if(index===0&&hinted!==null)continue;break;}
+     const bytes=new Uint8Array(pieces.reduce((n,p)=>n+p.length,0));let at=0;for(const piece of pieces){bytes.set(piece,at);at+=piece.length;}
+     if(blob_hash(bytes)!==hash||(size!==null&&bytes.length!==size)){refusal=Error('A file from the service does not match what the project refers to.');continue;}
+     const tx=db.transaction('objects','readwrite');await noteObjects([{kind,hash,size:bytes.length,epoch,variant}],project,tx.store,{confirmed:true});await tx.done;
+     return bytes;
+    }
    }
-   if(pieces.length!==parts)continue;
-   const bytes=new Uint8Array(pieces.reduce((n,p)=>n+p.length,0));let at=0;for(const piece of pieces){bytes.set(piece,at);at+=piece.length;}
-   if(blob_hash(bytes)!==hash||(size!==null&&bytes.length!==size))throw refused('A file from the service does not match what the project refers to. It was refused and is fetched again later.');
-   return bytes;
   }
-  throw Error('A file this project refers to is not on the service yet. It is fetched again later.');
+  if(refusal)throw refused(`${refusal.message} It was refused and is fetched again later.`);
+  throw Error('A file another member’s change refers to is not on the service yet. Sync waits for it and tries again.');
  }
  /** Installs into `doc` every asset it refers to that this browser does not store yet. */
  async function fetchAssets(project,ring,doc){
@@ -468,11 +527,9 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   if(payloads.length)onRemote(link.localId);
   return current;
  }
- /** A blobref from another device, checked against the keys this browser holds. */
- async function checkedBlobref(ring,payload){
-  let epochs;try{epochs=[...new Set(JSON.parse(new TextDecoder().decode(payload)).objects.map(o=>o.epoch))];}catch{throw fault('A list of files from another device is malformed. Sync paused.');}
-  const keys={};for(const epoch of epochs.filter(e=>Number.isSafeInteger(e)&&e>0)){const key=await ring.get(epoch);if(key)keys[epoch]=key;}
-  try{return checkBlobref(payload,keys).objects;}catch(error){throw fault(`A list of files from another device is invalid (${error.message||error}). Sync paused.`);}
+ /** A blobref from another device: shape-checked hints where its files are. */
+ async function checkedBlobref(_ring,payload){
+  try{return checkBlobref(payload).objects;}catch(error){throw fault(`A list of files from another device is invalid (${error.message||error}). Sync paused.`);}
  }
  /** Downloads the objects named versions need, quietly: a version that cannot be completed yet stays unavailable. */
  async function syncHistory(link){
@@ -562,7 +619,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     // so a retry after a crash resends identical bytes and never reuses a number.
     const tx=db.transaction(['links','outbox','objects'],'readwrite');
     for(const entry of entries)await tx.objectStore('outbox').put(entry);
-    await noteObjects(refs,link.project,tx.objectStore('objects'));
+    await noteObjects(refs,link.project,tx.objectStore('objects'),{confirmed:true});
     await tx.objectStore('links').put({...link,clientSeq});await tx.done;
     let current={...link,clientSeq};
     for(const entry of entries){

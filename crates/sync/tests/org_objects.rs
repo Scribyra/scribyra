@@ -45,7 +45,7 @@ fn objects(backend: Value, raw: Box<dyn BlobStore>) {
     let project_key = random_bytes(32);
     let marker = b"PLAINTEXT_IMAGE_MARKER: the bytes of a figure";
     let hash = core::hex(&core::sha256(marker));
-    let (id, sealed) = core::seal_object(&project_key, &org.id, &project, 1, "asset", &hash, 0, 1, marker).unwrap();
+    let (id, sealed) = core::seal_object(&project_key, &org.id, &project, 1, "asset", &hash, 0, 1, 0, marker).unwrap();
     // Editors upload under the current epoch; an identical retry is free.
     assert_eq!(put(&org, &token, &project, &id, 1, &sealed).status, 201);
     assert_eq!(put(&org, &token, &project, &id, 1, &sealed).status, 204);
@@ -63,7 +63,7 @@ fn objects(backend: Value, raw: Box<dyn BlobStore>) {
     let reply = get(&org, &ben_token, &project, &id);
     assert_eq!(reply.status, 200);
     assert_eq!(reply.body, sealed);
-    assert_eq!(core::open_object(&project_key, &org.id, &project, 1, "asset", &hash, 0, 1, &reply.body).unwrap(), marker);
+    assert_eq!(core::open_object(&project_key, &org.id, &project, 1, "asset", &hash, 0, 1, 0, &reply.body).unwrap(), marker);
     assert_eq!(get(&org, &cat_token, &project, &id).status, 403);
     assert_eq!(get(&org, &token, &project, &random_hex(32)).status, 404);
     // The plaintext hash and content are nowhere on the service: not in the database...
@@ -108,16 +108,24 @@ fn encrypted_objects_with_garage_blobs() {
 
 #[test]
 fn full_organisation_storage_refuses_objects_with_507_and_keeps_membership_working() {
-    let s = Service::new(org_overrides(json!({"org_bytes": 64 * 1024})));
+    let s = Service::new(org_overrides(json!({"org_bytes": 64 * 1024, "namespace_objects": 3})));
     let mut org = Org::create(&s, &[], json!({}));
     let owner = org.owner.clone();
     let token = org.token(&owner.seed);
     let project = org.create_project(&token, &owner);
     let key = random_bytes(32);
     let big = random_bytes(100 * 1024);
-    let (id, sealed) = core::seal_object(&key, &org.id, &project, 1, "asset", &core::hex(&core::sha256(&big)), 0, 1, &big).unwrap();
+    let (id, sealed) = core::seal_object(&key, &org.id, &project, 1, "asset", &core::hex(&core::sha256(&big)), 0, 1, 0, &big).unwrap();
     assert_eq!(put(&org, &token, &project, &id, 1, &sealed).status, 507);
     assert_eq!(postgres().psql(s.database_url(), "SELECT count(*) FROM project_objects"), "0");
+    // Review M4: every ID counts against the project's object limit, even when its ciphertext
+    // is already stored, so one small ciphertext cannot be mapped under endless IDs.
+    let small = b"tiny";
+    let (_, tiny) = core::seal_object(&key, &org.id, &project, 1, "asset", &core::hex(&core::sha256(small)), 0, 1, 0, small).unwrap();
+    for _ in 0..3 {
+        assert!(matches!(put(&org, &token, &project, &random_hex(32), 1, &tiny).status, 201 | 204));
+    }
+    assert_eq!(put(&org, &token, &project, &random_hex(32), 1, &tiny).status, 507);
     // Membership still works in a full organisation.
     assert_eq!(org.post(Some(&token), "project.create", json!({"project": random_hex(32), "epoch": 1, "keyCommit": random_hex(32)}), &owner.seed).status, 201);
 }

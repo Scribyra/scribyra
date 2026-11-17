@@ -971,6 +971,15 @@ async fn put_object(State(o): State<Shared>, Path((project, id)): Path<(String, 
     if let Some(r) = mapped(existing) {
         return r;
     }
+    // Every ID counts against the project's object limit, also when its ciphertext is already
+    // stored (otherwise one small ciphertext under endless IDs would grow the database for free).
+    let ids: i64 = match sqlx::query_scalar("SELECT count(*) FROM project_objects WHERE project = $1").bind(&project).fetch_one(&o.store.pool).await {
+        Ok(n) => n,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if ids as u64 >= config.namespace_objects {
+        return error(StatusCode::INSUFFICIENT_STORAGE, "quota");
+    }
     let quotas = [
         Quota { scope: GLOBAL_SCOPE.into(), max_bytes: config.total_bytes, max_objects: config.total_objects },
         Quota { scope: org_scope(&session.org), max_bytes: config.org_bytes, max_objects: u64::MAX },
