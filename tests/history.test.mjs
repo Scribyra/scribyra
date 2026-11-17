@@ -130,6 +130,29 @@ test('restore as copy preserves original bytes and restores original identities,
   assert.deepEqual(Y.encodeStateAsUpdate(f.doc),before);assert.equal(inventory(await storage.readHistoryData(result.projectId)).items.length,1);assert.equal(copy.getText('text:'+f.file).toString(),'😀 before\nsecond line\n');assert.deepEqual(assetBytes(copy,f.deleted),oldImage);assert.equal(copy.getMap('messages').get(f.state.messageId).body,'Original comment 😀');assert.notEqual(copy.getMap('meta').get('lineageId'),f.doc.getMap('meta').get('lineageId'));assert.equal((await import('../web/review-commands.js')).projectedRecord(copy,'reviews',f.state.reviewId).acceptanceAuthorityId,copy.getMap('changes').get(result.changeId).authorId);copy.destroy();
  }finally{f.close();}
 });
+// Compiling never writes the project (docs/history.md, "History after compiling"): the History
+// view only looked stale because a hidden PDF viewer froze the interface. The stored side of that
+// sequence: name, edit, then saves of an unchanged document (what a compile leaves behind).
+test('a named version stays listed and restorable, and the current version reports its edit, after edits and saves that change nothing',async()=>{
+ const f=await namedFixture();try{
+  f.doc.getText('text:'+f.file).insert(0,'% after naming\n');const edited=await storage.saveProject(f.projectId,f.doc);Y.applyUpdate(f.doc,edited.update);
+  const db=await openDB('scribyra-v1'),stored=async()=>({project:await db.get('projects',f.projectId),journal:await db.getAllFromIndex('journal','projectId',f.projectId),checkpoints:await db.getAllFromIndex('checkpoints','projectId',f.projectId),catalog:await db.getAllFromIndex('historyCatalog','projectId',f.projectId),pins:await db.getAllFromIndex('projectHistoryObjects','projectId',f.projectId)});
+  const before=await stored();
+  for(let compile=0;compile<2;compile++){const result=await storage.saveProject(f.projectId,f.doc);assert.equal(result.sequence,edited.sequence);assert.equal(result.point,undefined);}
+  assert.deepEqual(await stored(),before);db.close();
+  const data=await storage.readHistoryData(f.projectId),named=(await f.exec({op:'history.list',limit:100})).items.find(item=>item.versionId===f.named.versionId);
+  assert.equal(named.status,'Restorable');assert.equal(named.available,true);assert.equal(named.sequence,f.named.localSequence-1);
+  assert.ok(data.objects.some(object=>object.hash===f.named.checkpointRef));
+  const changed=await f.exec({op:'history.diff',fromCheckpoint:f.named.checkpointRef});assert.deepEqual(changed.changes.filter(change=>change.kind==='text').map(change=>change.fileId),[f.file]);
+  // The History view's own summary of the current version, as it is shown in the list.
+  f.feature.actions['history-toggle']();
+  for(let wait=0;wait<200&&!f.feature.state.details.current;wait++)await new Promise(resolve=>setTimeout(resolve,10));
+  assert.equal(f.feature.state.details.current?.summary,'1 file changed since the last version');
+  assert.equal(f.feature.state.items.find(item=>item.versionId===f.named.versionId)?.status,'Restorable');
+  const plan=await f.exec({op:'history.restorePlan',checkpointRef:f.named.checkpointRef,mode:'current'});await f.exec({op:'history.restore',planId:plan.planId});
+  assert.equal(f.doc.getText('text:'+f.file).toString(),'😀 before\nsecond line\n');
+ }finally{f.close();}
+});
 test('current restore is a new attributed edit with a pinned pre-restore checkpoint and complete ID map',async()=>{
  const f=await namedFixture();try{await mutateFixture(f);const before=Y.encodeStateAsUpdate(f.doc),plan=await f.exec({op:'history.restorePlan',checkpointRef:f.named.checkpointRef,mode:'current'}),result=await f.exec({op:'history.restore',planId:plan.planId});
   assert.equal(f.doc.getText('text:'+f.file).toString(),'😀 before\nsecond line\n');assert.deepEqual(assetBytes(f.doc,f.image),oldImage);const change=f.doc.getMap('changes').get(result.changeId);assert.equal(change.kind,'restore');assert.equal(change.restoreOf,inventory(await storage.readHistoryData(f.projectId)).items.find(v=>v.checkpointRef===f.named.checkpointRef).checkpointId);

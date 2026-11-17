@@ -267,6 +267,34 @@ session (the peer refuses the removed records); nothing is lost. Saves still enc
 document (large-projects bottleneck 5), and maintenance runs on the main thread (about 1–2 s
 per run for a 3.5 MB document).
 
+## History after compiling (November 17, 2026)
+
+Reported from production screenshots: after naming a version, editing and compiling twice,
+History showed the named version as "Not available on this device"; after an edit and one
+compile it showed "Up to date" and "Nothing has changed yet" instead of "1 file changed".
+
+**Cause: display only; no stored data was lost or changed.** Compiling writes nothing to the
+project or its history: IndexedDB dumps before and after each compile (all three engines) had
+identical project records, journal rows, point flags, checkpoints, catalogue rows and history
+objects, and the named version's manifest and chunks stayed present. Opening History hides the
+PDF preview. Its resize handler re-fitted `page-width` to the now zero-width container, pdf.js
+reported a scale of -0.05, and `pdfScale: -5` reached the interface state. The Leptos shell
+parses the whole state as one value (`pdf_scale: usize`) and silently ignored every update it
+could not parse, so the entire interface, History included, kept showing the last state before
+the preview was hidden (stale rows, stale summaries, an empty list or a stale "Not available")
+and stopped responding to History actions, until the PDF was visible again. Without a compiled
+PDF there is no scale event, which is why the same steps worked without compiling. No recovery
+is needed for existing projects; their stored history was never affected.
+
+Fix: `web/pdf.js` does not re-fit while the preview is hidden (the resize observer re-fits once
+it is shown) and only reports finite, positive zoom levels (`scalePercent`); the shell accepts
+any zoom number (invalid ones show as 100%) and logs, instead of silently dropping, a state
+update it cannot parse. Regressions: `tests/history.test.mjs` (named version listed, restorable
+and restored, current version "1 file changed", stored rows unchanged by saves that change
+nothing) and two `History view` cases in `tests/browser/history.spec.js` (name, edit, compile
+twice, restore the named version; edit, compile once, "1 file changed"), each also checking that
+compiling leaves every stored history row unchanged. Both browser cases fail on the previous code.
+
 ## Remaining review findings, November 5, 2026
 
 Deleted `providerToken` canaries now reject export and import in 21 cases: three retention forms
