@@ -7,19 +7,19 @@
 //   node scripts/deploy-staging.mjs .cache/production --production [--dry-run]
 //       GitHub only: the production site (.pages) → the presentation repository that
 //       serves https://scribyra.com/ (app.scribyra.com is the main repository's own
-//       Pages site; see docs/github-move.md)
+//       Pages site; see docs/delivery.md)
 //
-// GitLab (until the move): urundead-labs/scribyra-staging, whose pages job publishes
-// it, because GitLab Free has no cross-project artifact passing.
-// GitHub: SCRIBYRA_PAGES_FORGE=github; the target repository's own workflow deploys
-// public/ with actions/deploy-pages, and a push by a deploy key starts it. That
+// GitHub (SCRIBYRA_PAGES_FORGE=github, what the workflows use): the target
+// repository's own workflow deploys public/ with actions/deploy-pages, and a push by
+// a deploy key starts it. That
 // workflow (ops/staging/github-pages.yml or ops/pages/github-pages.yml) is installed
-// once by a maintainer (docs/github-move.md); deployments keep `.github/` as it is,
+// once by a maintainer (docs/delivery.md); deployments keep `.github/` as it is,
 // so CI never writes workflow files in another repository.
 //
 // The private key arrives base64-encoded, single line: SCRIBYRA_STAGING_DEPLOY_KEY
 // (staging) or SCRIBYRA_SITE_DEPLOY_KEY (--production). SCRIBYRA_STAGING_REPOSITORY /
-// SCRIBYRA_SITE_REPOSITORY override the SSH remote.
+// SCRIBYRA_SITE_REPOSITORY override the SSH remote. The default forge, gitlab, is the
+// former GitLab staging project (urundead-labs/scribyra-staging) and is no longer used.
 import {mkdir,readdir,rm,copyFile,writeFile,mkdtemp,readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';

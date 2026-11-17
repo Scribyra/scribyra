@@ -1,11 +1,11 @@
 # The full suite, shared by pull request checks, staging and production: the
 # production Pages build (which also creates the WASM module the Node suite uses),
-# Rust, JavaScript, and the Pages browser suite in Chromium. It is the GitHub copy of
-# `.suite` in .gitlab-ci.yml. No secret ever reaches this job: it installs packages
-# and runs build scripts, so deploy keys stay in the callers' deploy jobs.
+# Rust, JavaScript, and the Pages browser suite in Chromium. No secret ever reaches
+# this job: it installs packages and runs build scripts, so deploy keys stay in the
+# callers' deploy jobs.
 #
 # Callers name their job `suite`, so the check is "suite / test" on every commit,
-# whichever workflow ran it; the rulesets require that name (docs/github-move.md).
+# whichever workflow ran it; the rulesets require that name (docs/delivery.md).
 name: suite
 on:
   workflow_call:
@@ -55,7 +55,7 @@ jobs:
       CI_PIPELINE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # The image ships about 30 GB of toolchains this job never uses; the job needs
-      # about 12 GB (docs/github-move.md, "Runner disk").
+      # about 12 GB (docs/delivery.md, "Runner disk").
       - name: Free disk space
         run: |
           df -h /

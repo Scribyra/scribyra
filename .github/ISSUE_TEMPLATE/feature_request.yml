@@ -1,0 +1,26 @@
+name: Feature request
+description: Suggest an idea or an improvement.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. The roadmap (docs/roadmap.md) lists what is already planned;
+        if your idea is there, tell us how you would use it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What would you like to do?
+      description: The task or problem, in your own words. What makes it hard today?
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could Scribyra help?
+      description: What you imagine. Rough is fine.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What do you do instead today?
+      description: Other tools or workarounds, if any.

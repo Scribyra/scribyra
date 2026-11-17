@@ -41,7 +41,7 @@ Machine-readable results and exact timing fields are in [measurements/browsers.j
 - Keyboard navigation, Unicode input, theme switching, pane resizing, and explicit storage-failure reporting were exercised. A simulated full disk does not display “Saved locally.” Real OS-level IME composition across input methods and assistive-technology usability still need human testing.
 - The optional synchronization container builds and serves its health endpoint while running as a non-root user with a read-only root filesystem, dropped capabilities, and loopback-only publication.
 
-Rust tests, ZIP/CRDT model tests, browser checks, and the dependency audit are documented in the README. The dependency audit reported no known vulnerabilities at implementation time. This is not a production security review.
+Rust tests, ZIP/CRDT model tests, browser checks, and the dependency audit are documented in [development](development.md#checks). The dependency audit reported no known vulnerabilities at implementation time. This is not a production security review.
 
 ## Next decisions supported by the evidence
 
