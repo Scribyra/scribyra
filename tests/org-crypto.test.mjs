@@ -82,3 +82,18 @@ test('project keys wrap to the device and the recovery key, and entries seal, ve
  assert.throws(()=>openEntry(sealed.body,randomBytes(32)),/decrypted/);
  const h=entryHash(sealed.headerRaw,sealed.ciphertext);assert.match(chainNext(project,h),/^[0-9a-f]{64}$/);
 });
+
+test('a service cannot make the app open a script address or approve a swapped device',async()=>{
+ const {signInUrl,newDeviceCode,deviceCodeMac,newAgreementKey:agreement}=await import('../web/org-crypto.js');
+ // Browser review C1: only https (or http on this computer) sign-in addresses are opened.
+ for(const bad of ['javascript:alert(1)','data:text/html,x','http://idp.example.org/authorize','file:///etc/passwd','not a url'])assert.throws(()=>signInUrl(bad));
+ assert.equal(signInUrl('https://idp.example.org/authorize?x=1'),'https://idp.example.org/authorize?x=1');
+ assert.equal(signInUrl('http://127.0.0.1:9/authorize'),'http://127.0.0.1:9/authorize');
+ // Browser review H1: the code typed on the existing device must match the keys the new browser sent.
+ const code=newDeviceCode(),device=hex(randomBytes(32)),{publicKey}=await agreement(),other=(await agreement()).publicKey;
+ assert.match(code,/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
+ const mac=deviceCodeMac(code,device,publicKey);
+ assert.equal(deviceCodeMac(code.toLowerCase().replaceAll('-',' '),device,publicKey),mac);
+ assert.notEqual(deviceCodeMac(code,device,other),mac);
+ assert.notEqual(deviceCodeMac(newDeviceCode(),device,publicKey),mac);
+});

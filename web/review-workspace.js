@@ -37,7 +37,10 @@ export function reviewWorkspace(context,modules){
   const {doc,author}=context,key=`scribyra:review-mode:${context.projectId}:${author.id}`;
   // A mode chosen under this profile's earlier author ID carries over to its key-derived one.
   let mode='editing';try{const saved=localStorage.getItem(key)??(context.legacyAuthorIds?.()||[]).map(id=>localStorage.getItem(`scribyra:review-mode:${context.projectId}:${id}`)).filter(Boolean).at(-1);if(['editing','reviewing','viewing'].includes(saved))mode=saved;}catch{}
-  const state={mode,open:mode==='reviewing',tab:'file',filter:'open',count:0,cards:[],files:[],active:'',status:'',statusQuiet:true,preview:false};
+  // A project shared through an organisation limits the modes to the person's role on it.
+  const allowed=context.allowedModes?.()||null;
+  if(allowed&&!allowed.includes(mode))mode=allowed[0];
+  const state={mode,allowed:allowed||[],open:mode==='reviewing',tab:'file',filter:'open',count:0,cards:[],files:[],active:'',status:'',statusQuiet:true,preview:false};
   let session,fileId,view,timer,frame,closed=false,refreshing=false,composition=false,authorNames=new Map(),lastPreview='',lastError='',animate=false,observedList=null,revealedAt=0;
   const drafts=reviewDrafts({...context,onError:e=>announce(e.message)});
   const reviewHistory=new Compartment(),histories=new Map();let sourceEpoch=0,sessionEpoch=0;
@@ -218,7 +221,7 @@ export function reviewWorkspace(context,modules){
   const actions={
     'review-status-dismiss'(){state.statusQuiet=true;publish();},
     'review-toggle'(){state.open=!state.open;publish();if(!state.open)document.getElementById('review-toggle')?.focus();},
-    'review-mode'(value){if(!['editing','reviewing','viewing'].includes(value))return;flush();if(composition||view?.composing)throw new Error('Finish composing before changing mode.');context.captureSelection?.();state.mode=value;if(value==='reviewing')state.open=true;try{localStorage.setItem(key,value);}catch{announce('Mode could not be saved on this device.');}context.remount?.();refresh();},
+    'review-mode'(value){if(!['editing','reviewing','viewing'].includes(value))return;if(allowed&&!allowed.includes(value)){announce(`Your role on this project allows ${allowed.map(m=>m[0].toUpperCase()+m.slice(1)).join(' and ')} only.`);refresh();return;}flush();if(composition||view?.composing)throw new Error('Finish composing before changing mode.');context.captureSelection?.();state.mode=value;if(value==='reviewing')state.open=true;try{localStorage.setItem(key,value);}catch{announce('Mode could not be saved on this device.');}context.remount?.();refresh();},
     'review-tab'(value){flush();state.tab=value;refresh();const panel=document.querySelector('.review-panel-scroll');if(panel)panel.scrollTop=0;},
     'review-filter'(value){state.filter=value;refresh();},
     'review-file'(id){flush();state.tab='file';context.activate?.(id);refresh();},

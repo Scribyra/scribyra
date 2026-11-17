@@ -5,6 +5,8 @@ use leptos::prelude::*;
 #[serde(default, rename_all = "camelCase")]
 pub struct State {
     pub mode: String,
+    /// Modes the person's role on a shared project allows; empty means all.
+    allowed: Vec<String>,
     pub open: bool,
     pub count: usize,
     total: usize,
@@ -76,6 +78,10 @@ struct File {
 #[component]
 pub fn Mode(state: Signal<State>) -> impl IntoView {
     let mode = move || state.get().mode;
+    let refused = move |m: &str| {
+        let allowed = state.get().allowed;
+        !allowed.is_empty() && !allowed.iter().any(|a| a == m)
+    };
     view! {
         <label class="review-mode" data-mode=mode title=move || match state.get().mode.as_str() {
             "reviewing" => "Reviewing: your edits become suggestions",
@@ -88,7 +94,7 @@ pub fn Mode(state: Signal<State>) -> impl IntoView {
                 _ => view! { <crate::Icon name="pencil"/> }.into_any(),
             }}
             <select aria-label="Editor mode" title="Choose how you work: Editing, Reviewing or Viewing" prop:value=mode on:change=move |e| crate::action("review-mode", &event_target_value(&e))>
-                <option value="editing" data-icon="pencil" data-hint="Changes apply directly">"Editing"</option><option value="reviewing" data-icon="track" data-hint="Your edits are saved as suggestions">"Reviewing"</option><option value="viewing" data-icon="eye" data-hint="Read only">"Viewing"</option>
+                <option value="editing" data-icon="pencil" data-hint="Changes apply directly" disabled=move || refused("editing")>"Editing"</option><option value="reviewing" data-icon="track" data-hint="Your edits are saved as suggestions" disabled=move || refused("reviewing")>"Reviewing"</option><option value="viewing" data-icon="eye" data-hint="Read only" disabled=move || refused("viewing")>"Viewing"</option>
             </select>
             <crate::Icon name="chevron"/>
         </label>

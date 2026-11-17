@@ -175,6 +175,21 @@ export function parseDeviceLink(text){
  return{service,org:p.org,genesis:p.genesis,person:p.person,link:p.link,secret:unhex(p.secret,32)};
 }
 /** The code both devices show while linking: it depends on the link secret and the new keys. */
+/** A 12-character code (60 bits) the new browser shows when asking through SSO, and the keyed
+ * check over its keys that the existing device verifies after the person types the code. */
+const CROCKFORD='0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+export function newDeviceCode(){const bytes=randomBytes(12);return Array.from(bytes,b=>CROCKFORD[b&31]).join('').replace(/(.{4})(.{4})(.{4})/,'$1-$2-$3');}
+export function deviceCodeMac(code,device,agreement){
+ const normal=String(code||'').toUpperCase().replace(/[^0-9A-Z]/g,'').replace(/O/g,'0').replace(/[IL]/g,'1');
+ return org_sha256_hex(concat(encoder.encode('scribyra-device-sso/1\n'),encoder.encode(normal),unhex(device,32),unhex(agreement,32)));
+}
+/** A service-supplied sign-in address may only be https (or http on this computer). */
+export function signInUrl(text){
+ let url;try{url=new URL(text);}catch{throw Error('The service sent an invalid sign-in address.');}
+ const local=['127.0.0.1','localhost','[::1]'].includes(url.hostname);
+ if(url.protocol!=='https:'&&!(url.protocol==='http:'&&local))throw Error('The service sent a sign-in address that is not https. Nothing was opened.');
+ return url.href;
+}
 /** `https://app/#org=…`: where to sign in with an organisation's SSO (to ask to join, or to add a browser). */
 export function formatOrgLink(origin,{service,org,genesis}){return `${origin}/#org=${b64url(encoder.encode(canonical({v:1,service,org,genesis})))}`;}
 export function parseOrgLink(text){const p=fragmentValue(text,'org'),service=serviceOrigin(p.service);unhex(p.org,32);unhex(p.genesis,32);return{service,org:p.org,genesis:p.genesis};}

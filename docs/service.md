@@ -131,11 +131,28 @@ Added with organisation sync; the organisation routes document their use.
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `public_url` | none | The exact `https://` origin clients use for this service. Required to enable organisations |
+| `service_key_file` | none | A file with exactly 32 random bytes (`head -c 32 /dev/urandom`, mode 0400). With it, `org create` also makes a service key for each organisation, sealed under this file, so its owner can choose organisation-managed encryption. Without it only end-to-end encrypted organisations exist. Losing the file makes the service keys of managed organisations unusable; back it up separately from the database |
 | `org_bytes` | 1073741824 | Default stored-bytes quota per organisation (1 GiB) |
 | `entry_inline_bytes` | 65536 | Log entries up to this size are stored inline in PostgreSQL; larger ones go to the blob store |
 | `sessions` | 10000 | Maximum live organisation sessions |
 | `sso_recheck_tick_seconds` | 60 | How often the single sign-on recheck runs (1–3600) |
 | `sso_jwks_refetch_seconds` | 60 | Minimum interval between key-set refetches caused by an unknown key ID (0–3600) |
+
+### Organisation routes
+
+All bodies are JSON unless noted; every signed event and wrap is checked by the same Rust
+rules the browsers use (`crates/core/src/membership.rs`).
+
+| Route | Who | Purpose |
+| --- | --- | --- |
+| `POST /v1/auth/challenge`, `POST /v1/auth/session` | Anyone with an active device or recovery key | Device sign-in; the session request carries an SSO login token when the org requires SSO |
+| `GET /v1/orgs/{org}/info` | Anyone | Whether the org has a genesis, its log head and length, its sealed name, and the service key for managed mode |
+| `GET`/`POST /v1/orgs/{org}/events` | Members; joins and join requests without a session | The signed membership log (paged, with its length) |
+| `GET`/`PUT /v1/orgs/{org}/keys`, `POST /v1/orgs/{org}/keys/report` | Member devices | Key wraps (one per sender), and reporting a wrap that does not open |
+| `GET /v1/orgs/{org}/pending` | Member devices | Entitled keys that still lack a wrap, for the caller's projects and the directory |
+| `GET /v1/orgs/{org}/heads?since=&wait=` | Member devices | Long-poll notice of membership and project head changes (at most 25 s) |
+| `GET`/`POST /v1/orgs/{org}/device-links`, `POST /v1/orgs/{org}/device-links/{link}`, `POST /v1/orgs/{org}/device-links/sso` | A device of the person; the new browser | One-time device links (15 minutes, four open per person) and SSO device requests |
+| `GET`/`POST /v1/projects/{project}/log` | Project members (append: editors only) | Encrypted log entries, read to the `Scribyra-Log-Head` header |
 
 ### Access and limits
 

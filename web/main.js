@@ -1,5 +1,5 @@
 import {directShare} from './direct-share.js';
-import {orgBackup,orgConnected} from './org-backup.js';
+import {orgBackup,orgConnected,orgJoining} from './org-backup.js';
 import {orgDialog} from './org-dialog.js';
 import {parseInvite,profileIdentity,requireDirectSupport,deleteProfileIdentity} from './direct-identity.js';
 import {identityAuthorId,earlierRecords} from './direct-provenance.js';
@@ -186,10 +186,27 @@ function remoteBackup(){
   orgEngine??=orgBackup({onChange:localId=>{
     if(localId===projectId){const status=orgEngine.status(localId);state.remoteStatus=status?.label||'';state.remoteDetail=status?.message||'';emit();}
     orgPanel?.render();clearTimeout(orgRefresh);orgRefresh=setTimeout(()=>{if(!state.current)void refreshProjects().catch(()=>{});},300);
-  }});
+  },
+  // Another device's changes were merged into the committed project: the open editor merges the new head.
+  onRemote:localId=>{if(localId===projectId)void tabSession?.refresh({force:true});else if(!state.current)void refreshProjects().catch(()=>{});},
+  onMembership:()=>orgPanel?.render()});
   return orgEngine;
 }
-if(orgConnected())void remoteBackup().start().catch(error=>notice('Remote backup could not start: '+error.message));
+if(orgConnected()||orgJoining())void remoteBackup().start().catch(error=>notice('Remote backup could not start: '+error.message));
+// Organisation links arrive in the fragment (never sent to the app's host): an invitation, a
+// device link, an org's sign-in link, or the return from the org's single sign-on.
+function openOrgPanel(prefill={}){orgPanel?.close();orgPanel=orgDialog({engine:remoteBackup(),anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});}
+function takeOrgFragment(){
+  const hash=location.hash;
+  const kind=['#join=','#device=','#org=','#scribyra-sso=','#scribyra-sso-error='].find(prefix=>hash.startsWith(prefix));
+  if(!kind)return;
+  const text=location.href;history.replaceState(null,'',location.pathname+location.search);
+  if(kind==='#scribyra-sso-error=')return void notice('Signing in with your organisation did not work ('+hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')+'). Try again.');
+  if(kind==='#scribyra-sso='){const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code});return;}
+  openOrgPanel({[kind==='#join='?'invite':kind==='#device='?'device':'org']:text});
+}
+window.addEventListener('hashchange',takeOrgFragment);
+setTimeout(takeOrgFragment,0);
 function refreshDoc(openFirst = false) {
   if (!doc) return;
   const meta = doc.getMap('meta');
@@ -321,11 +338,13 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   await leaveProject({save:saveCurrent,directAttempt});directAttempt?.signal.throwIfAborted();
   try { doc = transientDoc || await storage.loadProject(id); } catch (e) { state.current = false; await refreshProjects(); throw e; }
   directAttempt?.signal.throwIfAborted();
+  // A project shared through an organisation offers only the modes of the person's role on it.
+  const roleModes=transientDoc||!orgEngine?.connected?null:await orgEngine.allowedModes(id).catch(()=>null);
   transientProject=!!transientDoc;
   leavingProject=false;projectId = id; revision = 0;localEdits=savedEdits=0;historyPointAt=Date.now();const target=doc;commands=projectCommands({doc,projectId,isActive:()=>doc===target,beforeMutation:uiCommandGuard(()=>collaboration?.review.state.mode)});
   state.upgradeAvailable=false;state.reviewDraftPending=false;state.current = true; consentDiagnostics?.dismiss(); state.active = ''; state.selected = '';  state.log = '';liveLog.stop();state.buildIssues=[]; state.showLog = false; state.showIssues = false; state.status = 'Ready to compile'; state.saveStatus = transientProject?'In memory · accept TeX link to save':'Saved locally';{const remote=orgEngine?.status(id);state.remoteStatus=remote?.label||'';state.remoteDetail=remote?.message||'';}
   agentOwner=localAgentOwner(transientProject?{getItem:key=>localStorage.getItem(key),setItem:()=>{}}:localStorage);
-  collaboration=mountCollaboration({doc:target,projectId,signedMessages:()=>!!state.directActive,legacyAuthorIds,trustLabels:()=>directEnabled()||!!state.directActive,requestDecision:command=>direct.requestDecision(command),canPersistDrafts:()=>!transientProject,canUnload:()=>!!state.upgradeReload,onDraftPending:pending=>{if(doc===target){state.reviewDraftPending=pending;emit();}},author:{...agentOwner,kind:'human'},commands,flushSave,storage,selection:()=>({fileId:mountedFile,...(editor?collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to)||{start:editor.state.selection.main.from,end:editor.state.selection.main.to}:{})}),validateCommentSelection:()=>{if(editor)collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to,true);},activate:activateFile,captureSelection,remount:()=>{editor?.destroy();editor=null;mountedFile=null;mountEditor();},confirm:(title,message)=>modal(title,message),compile:options=>{texLinks.assertAllowed();return builds.run({...options,projectId:id,revision:commands.revision(),isActive:()=>doc===target&&!leavingProject});},onState:patch=>{if(doc===target){Object.assign(state,patch);emit();}},managers:undoManagers,remote:[LOCAL_DURABLE],isActive:()=>doc===target&&!leavingProject});
+  collaboration=mountCollaboration({doc:target,projectId,allowedModes:()=>roleModes,signedMessages:()=>!!state.directActive,legacyAuthorIds,trustLabels:()=>directEnabled()||!!state.directActive,requestDecision:command=>direct.requestDecision(command),canPersistDrafts:()=>!transientProject,canUnload:()=>!!state.upgradeReload,onDraftPending:pending=>{if(doc===target){state.reviewDraftPending=pending;emit();}},author:{...agentOwner,kind:'human'},commands,flushSave,storage,selection:()=>({fileId:mountedFile,...(editor?collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to)||{start:editor.state.selection.main.from,end:editor.state.selection.main.to}:{})}),validateCommentSelection:()=>{if(editor)collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to,true);},activate:activateFile,captureSelection,remount:()=>{editor?.destroy();editor=null;mountedFile=null;mountEditor();},confirm:(title,message)=>modal(title,message),compile:options=>{texLinks.assertAllowed();return builds.run({...options,projectId:id,revision:commands.revision(),isActive:()=>doc===target&&!leavingProject});},onState:patch=>{if(doc===target){Object.assign(state,patch);emit();}},managers:undoManagers,remote:[LOCAL_DURABLE],isActive:()=>doc===target&&!leavingProject});
   direct=directShare({doc:target,initialAttempt:directAttempt,author:{...agentOwner,kind:'human'},initialInvite:initialDirectInvite,notify:notice,
     enable:async({invite}={})=>{if(await enableDirectSessions()&&doc===target){initialDirectInvite=invite||'';await openProject(id);direct?.show();}},deleteKey:deleteDirectKey,earlier:()=>earlierRecords(target,agentOwner.id,legacyAuthorIds()),onActive:active=>{if(state.directActive!==active){state.directActive=active;emit();}},onEnabled:on=>{if(state.directEnabled!==on){state.directEnabled=on;emit();}},flushSave,isComposing:()=>composingSource()||!!document.getElementById('code-editor')?.inert,isActive:()=>doc===target&&!leavingProject,preserve:source=>storage.preserveRecoveryProject(id,source),onRecovery:()=>notice('A competing binary version was preserved in a recovery project.'),
     cleanCopy:async(config,attempt)=>{attempt.signal.throwIfAborted();const entries=importZip(exportZip(target)),fromTexLink=target.getMap('meta').get('texLinkOrigin')==='link';await createProject(state.name+' · shared copy',entries,{fromTexLink,directAttempt:attempt});attempt.signal.throwIfAborted();if(fromTexLink){await flushSave({acceptLink:true});attempt.signal.throwIfAborted();}await direct.start(undefined,config);},
@@ -837,8 +856,7 @@ async function action(name, value = '', detail = {}) {
         finally{if(environmentPanel===panel)environmentPanel=null;}break;
       }
       case 'remote-backup': {
-        orgPanel?.close();
-        orgPanel=orgDialog({engine:remoteBackup(),anchor:document.activeElement,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
+        openOrgPanel();
         break;
       }
       case 'storage': {

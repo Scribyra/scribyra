@@ -40,7 +40,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   await expect(kitBlock).toContainText('scribyra-recovery:1:');
   const kit=await kitBlock.textContent();
   // Dismissing the dialog does not lose an unconfirmed kit: it is offered again.
-  await page.keyboard.press('Escape');await expect(dialog).toBeHidden();
+  await dialog.getByRole('button',{name:'Close remote backup'}).click();await expect(dialog).toBeHidden();
   await page.getByRole('button',{name:'Remote backup'}).click();
   await expect(kitBlock).toHaveText(kit);
   await expect(dialog.getByRole('button',{name:'Done'})).toBeDisabled();
@@ -49,15 +49,15 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   await expect(dialog).toContainText('End-to-end encrypted');
   const row=dialog.getByRole('listitem').filter({hasText:'Backed-up paper'});
   await row.getByRole('button',{name:'Back up'}).click();
-  await expect(row).toContainText('Backed up remotely');
-  await expect(page.locator('.project-card').filter({hasText:'Backed-up paper'})).toContainText('Backed up remotely');
+  await expect(row).toContainText(/Backed up remotely|Synced/);
+  await expect(page.locator('.project-card').filter({hasText:'Backed-up paper'})).toContainText(/Backed up remotely|Synced/);
   // Edits made in the editor back up too, and the editor says so.
   await page.keyboard.press('Escape');
   await page.locator('.project-card').filter({hasText:'Backed-up paper'}).locator('.card-open').click();
-  await expect(page.getByRole('status',{name:'Remote backup'})).toHaveText('Backed up remotely');
+  await expect(page.getByRole('status',{name:'Remote backup'})).toHaveText(/Backed up remotely|Synced/);
   await page.locator('.cm-content').click();await page.keyboard.press('ControlOrMeta+Home');await page.keyboard.type('% ORG_LATER_EDIT\n');
   await expect(page.locator('.save-indicator')).toHaveText('Saved locally');
-  await expect(page.getByRole('status',{name:'Remote backup'})).toHaveText('Backed up remotely',{timeout:20000});
+  await expect(page.getByRole('status',{name:'Remote backup'})).toHaveText(/Backed up remotely|Synced/,{timeout:20000});
   await expect.poll(async()=>Number(await s.sql("SELECT count(*) FROM entries")),{timeout:20000}).toBeGreaterThanOrEqual(2);
   const original=await page.evaluate(snapshot);
   expect(original.files[0][1]).toContain('% ORG_LATER_EDIT');expect(original.messages).toEqual(['ORG_BACKUP_DISCUSSION']);
@@ -74,7 +74,7 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
    await restoreDialog.getByRole('textbox',{name:'Recovery kit'}).fill(kit);
    await restoreDialog.getByRole('button',{name:'Restore projects'}).click();
    await expect(restoreDialog.getByRole('status')).toContainText('Restored 1 project: Backed-up paper.');
-   await expect(other.locator('.project-card').filter({hasText:'Backed-up paper'})).toContainText('Backed up remotely');
+   await expect(other.locator('.project-card').filter({hasText:'Backed-up paper'})).toContainText(/Backed up remotely|Synced/);
    expect(await other.evaluate(snapshot)).toEqual(original);
    // A mistyped kit is caught by its check characters before anything is sent.
    const typo=kit.replace(/(scribyra-recovery:1:[^:]+:[^:]+:[^:]+:)(.)/,(m,a,c)=>a+(c==='A'?'B':'A'));

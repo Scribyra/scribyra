@@ -15,6 +15,7 @@ import {setDirectKeyPresent} from './direct-state.js';
 import {SCHEMA_VERSION,validateProjectState} from './model.js';
 import {blobRefs} from './assets.js';
 import {validateReplica} from './replication.js';
+import {validateRetainedState,MAX_RETAINED_BYTES} from './model.js';
 import {orgClient,ServiceError} from './org-client.js';
 import {
  parseSetupCode,parseKit,formatKit,newRecoveryCode,recoverySecrets,recoveryProof,newAgreementKey,newStorageKey,sealAtRest,openAtRest,
@@ -22,7 +23,7 @@ import {
  sealEntry,openEntry,verifyEntryBody,entryHash,chainNext,randomBytes,hex,unhex,sha256Hex,
  sealName,openName,sealProjectName,openProjectName,wrapRecipients,
  parseInvite,formatInvite,inviteSeed,inviteMessage,formatDeviceLink,parseDeviceLink,linkSeed,deviceRequestMessage,linkCode,
- formatOrgLink,parseOrgLink,
+ formatOrgLink,parseOrgLink,newDeviceCode,deviceCodeMac,signInUrl,keyCommit,
 } from './org-crypto.js';
 import {org_ed25519_public,org_ed25519_sign,org_ed25519_verify} from './pkg/scribyra_app.js';
 
@@ -45,6 +46,7 @@ export const MAX_ENTRY_BYTES=7*1024*1024;
 const RETRY=[2000,10000,30000,120000];
 const WRAP_BATCH=64;
 const INVITE_DAYS=7;
+const LINK_MS=15*60*1000;
 const keyContext=(org,project,epoch)=>`scribyra-org-key/1\n${org}\n${project}\n${epoch}`;
 const kitContext=org=>`scribyra-org-kit/1\n${org}`;
 const SSO_FLOW='scribyra:sso-flow',SSO_LOGIN='scribyra:sso-login';
@@ -72,7 +74,7 @@ function mergeVectors(a,b){
 }
 
 export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},fetchImpl,locks=globalThis.navigator?.locks,appOrigin=globalThis.location?.origin}={}){
- let db,connection,client,closed=false,unwatch,pendingKitText='',following=null,live=false,polling=null;
+ let db,connection,client,closed=false,unwatch,pendingKitText='',following=null,live=false,polling=null,onlineHook=null;
  const statuses=new Map(),timers=new Map(),attempts=new Map(),queues=new Map();
  const setStatus=(localId,state,message='')=>{statuses.set(localId,{state,message,label:STATUS_TEXT[state]});onChange(localId);};
  async function open(){db??=await database();return db;}
@@ -199,10 +201,13 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  async function verifyItem(cursor,item){
   const {header,headerRaw,ciphertext}=verifyEntryBody(item.body),hash=entryHash(headerRaw,ciphertext),chain=chainNext(cursor.chain,hash);
   if(item.seq!==cursor.seq+1||item.chain!==chain)throw fault('The service’s log does not match what this browser verified. Sync paused.');
+  // The device must have written as an editor: current members, and also devices and editors
+  // since removed (their earlier entries stay valid). A state that may be behind is refreshed once.
+  const editorEver=state=>{const p=state.projects[cursor.project],person=state.devices[header.device]?.person??state.formerDevices?.[header.device];
+   return!!p&&header.epoch===p.epoch&&!!person&&(p.members[person]==='editor'||(state.formerEditors?.[cursor.project]||[]).includes(person));};
   let state=connection.state;
-  if(!state.devices[header.device])state=await refreshMembership();
-  const device=state.devices[header.device],project=state.projects[cursor.project];
-  if(header.org!==connection.org||header.project!==cursor.project||!project||header.epoch!==project.epoch||!device||project.members[device.person]!=='editor')
+  if(!editorEver(state))state=await refreshMembership();
+  if(header.org!==connection.org||header.project!==cursor.project||!editorEver(state))
    throw fault('A change was not written by an editor’s device. Sync paused.');
   if(header.clientSeq!==(cursor.devices[header.device]||0)+1)throw fault('A change was replayed or is missing. Sync paused.');
   return{...cursor,seq:item.seq,chain,devices:{...cursor.devices,[header.device]:header.clientSeq},header,hash};
@@ -218,7 +223,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  }
  function openChecked(item,header,key,lineage){
   const opened=openEntry(item.body,key);
-  if(opened.meta.person!==connection.state.devices[header.device].person)throw fault('A change names another author than its device. Sync paused.');
+  if(opened.meta.person!==(connection.state.devices[header.device]?.person??connection.state.formerDevices?.[header.device]))throw fault('A change names another author than its device. Sync paused.');
   if(opened.meta.schema>SCHEMA_VERSION)throw fault('This project was updated by a newer Scribyra. Update Scribyra to see the latest changes.');
   if(lineage&&opened.meta.lineage!==lineage)throw fault('A project’s changes disagree about its identity. Sync paused.');
   return opened;
@@ -257,7 +262,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   */
  async function pull(link,{own,pushed=link.pushedSequence}={}){
   const key=await projectKey(link.project,link.epoch),payloads=[];
-  let cursor={project:link.project,seq:link.seq,chain:link.chain,devices:link.devices||{}},vector=link.vector,ownSeen=!own;
+  let cursor={project:link.project,seq:link.seq,chain:link.chain,devices:link.devices||{}},vector=link.vector,ownSeen=!own,received=0;
   try{
    cursor=await readVerified(cursor,(item,header,hash)=>{
     if(header.device===connection.device){
@@ -265,6 +270,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
      return;
     }
     const opened=openChecked(item,header,key,link.lineage);payloads.push(opened.payload);
+    if((received+=opened.payload.byteLength)>MAX_RETAINED_BYTES)throw fault('Changes from other devices exceed the 96 MiB limit. Sync paused.');
     vector=mergeVectors(vector,Y.encodeStateVectorFromUpdate(opened.payload));
    });
   }finally{key.fill(0);}
@@ -279,7 +285,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     if(doc.getMap('meta').get('lineageId')!==link.lineage)throw fault('This project’s identity changed on this device. Sync paused.');
     for(const payload of payloads)Y.applyUpdate(doc,payload);
     if(doc.store.pendingStructs||doc.store.pendingDs)throw fault('A change from another device is incomplete. Sync paused.');
-    validateReplica(doc);
+    validateRetainedState(doc);validateReplica(doc);
     const saved=await storage.saveProject(link.localId,doc);
     // Nothing local was waiting before the merge: the merged state is all on the service.
     if(read.head.sequence===pushed)pushedSequence=saved.sequence;
@@ -415,6 +421,8 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    if(closed||!hint||hint.kind==='rescan')return;
    void db?.get('links',hint.projectId).then(link=>{if(link)schedule(hint.projectId);}).catch(()=>{});
   });
+  // Changes made offline go out as soon as the browser is back online.
+  if(!onlineHook&&globalThis.addEventListener){onlineHook=()=>{if(closed)return;attempts.clear();void db?.getAll('links').then(links=>{for(const link of links)schedule(link.localId,100);}).catch(()=>{});};globalThis.addEventListener('online',onlineHook);}
  }
  /**
   * Follows the service with a long poll: when the membership log moves, keys are exchanged;
@@ -430,14 +438,17 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
      polling=new AbortController();
      const heads=await authed(()=>client.heads(connection.org,since,since===undefined?0:25,polling.signal));
      if(closed)break;
+     const moved=since!==undefined&&heads.version!==since;
      failures=0;since=heads.version;live=true;
      if(heads.events>connection.state.count){await refreshMembership();await exchangeKeys().catch(()=>{});}
+     else if(moved)onMembership();
      for(const link of await db.getAll('links'))if((heads.heads[link.project]??0)>link.seq)schedule(link.localId,50);
     }catch(error){
      if(closed)break;
      live=false;failures++;
      if(ssoNeeded(error)){onMembership();await new Promise(resolve=>setTimeout(resolve,30000));continue;}
-     await new Promise(resolve=>setTimeout(resolve,Math.min(30000,1000*2**Math.min(failures,5))));
+     // Back off, but wake at once when the browser comes back online.
+     await new Promise(resolve=>{const wake=()=>{clearTimeout(timer);globalThis.removeEventListener?.('online',wake);resolve();};const timer=setTimeout(wake,Math.min(30000,1000*2**Math.min(failures,5)));globalThis.addEventListener?.('online',wake);});
     }
    }
   })().finally(()=>{following=null;live=false;});
@@ -491,6 +502,9 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   if(state.genesis!==genesis)throw Error('This service’s organisation does not match the link you used.');
   if(state.devices[connection.device]?.person!==connection.person)throw Error('This browser was not added to the organisation.');
   delete connection.waiting;delete connection.linkCode;
+  // A directory key that came with an invitation must be the one the genesis committed to.
+  connection.state=state;
+  if(await hasKey(connection.org,1)){const key=await projectKey(connection.org,1);try{if(keyCommit(key)!==state.directoryCommit)await db.delete('keys',[connection.org,1]);}finally{key.fill(0);}}
   await adopt(state);
   await exchangeKeys().catch(()=>{});
   return true;
@@ -508,6 +522,8 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** Joined or linked, and waiting for an admin or another device to let this browser in. */
   get waiting(){return !!(connection&&!connection.ready&&connection.joined);},
   get linkCode(){return connection&&!connection.ready?connection.linkCode||null:null;},
+  /** Connected, but this person has no recovery kit yet (a new member). */
+  get needsKit(){return !!connection?.ready&&!me()?.recoverySigning;},
   status:localId=>statuses.get(localId),
   /** Starts syncing linked projects if this browser was connected before (or resumes a waiting join). */
   async start(){
@@ -636,7 +652,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** Projects this browser can download but has not yet. */
   async unrestored(){if(!orgConnected())return[];await load();return unrestored();},
   async restoreRemaining(){await load();await refreshMembership();await collectKeys().catch(()=>{});return restoreRemaining();},
-  async download(project){await load();await collectKeys().catch(()=>{});const epoch=connection.state.projects[project]?.epoch;if(!epoch)throw Error('Unknown project.');return restoreProject(project,epoch);},
+  async download(project){await load();await refreshMembership();await collectKeys().catch(()=>{});const epoch=connection.state.projects[project]?.epoch;if(!epoch)throw Error('Unknown project.');return restoreProject(project,epoch);},
 
   // --- Organisation: names, members, projects
 
@@ -767,13 +783,15 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** Starts SSO for an org: remembers the verifier in this tab and returns the IdP URL to open. */
   async ssoBegin({service,org,purpose,carry=null}){
    const verifier=randomBytes(32);
-   writeSession(SSO_FLOW,{service,org,purpose,carry,verifier:hex(verifier)});
-   return(await orgClient(service,{fetchImpl}).ssoStart(org,appOrigin,sha256Hex(verifier))).url;
+   const {url}=await orgClient(service,{fetchImpl}).ssoStart(org,appOrigin,sha256Hex(verifier));
+   const checked=signInUrl(url);
+   writeSession(SSO_FLOW,{service,org,purpose,carry,verifier:hex(verifier),started:Date.now()});
+   return checked;
   },
   /** Finishes SSO after the redirect back (`#scribyra-sso=…`). Returns the flow it belonged to. */
   async ssoFinish(code){
    const flow=readSession(SSO_FLOW);writeSession(SSO_FLOW,null);
-   if(!flow)throw Error('This sign-in was not started in this tab. Start it again.');
+   if(!flow||!(Date.now()-flow.started<15*60*1000))throw Error('This sign-in was not started in this tab, or took too long. Start it again.');
    const login=await orgClient(flow.service,{fetchImpl}).ssoRedeem(code,flow.verifier);
    if(login.org!==flow.org)throw Error('The sign-in came back for another organisation.');
    writeSession(SSO_LOGIN,{service:flow.service,org:flow.org,token:login.token,expires:login.expires,subject:login.subject,person:login.person,state:login.state});
@@ -797,34 +815,41 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    const secret=randomBytes(32),seed=linkSeed(secret),link=hex(randomBytes(16));
    try{
     await authed(()=>client.createLink(connection.org,link,org_ed25519_public(seed)));
-    connection.deviceLinks={...(connection.deviceLinks||{}),[link]:{secret:hex(secret),created:Date.now()}};await saveConnection();
+    const now=Date.now(),kept=Object.fromEntries(Object.entries(connection.deviceLinks||{}).filter(([,l])=>now-l.created<LINK_MS));
+    connection.deviceLinks={...kept,[link]:{sealed:await sealAtRest(connection.storageKey,secret,`scribyra-device-link/1\n${link}`),created:now}};await saveConnection();
     return formatDeviceLink(appOrigin,{service:connection.service,org:connection.org,genesis:connection.state.genesis,person:connection.person,link,secret});
    }finally{seed.fill(0);secret.fill(0);}
   },
-  /** New devices (by link or SSO) waiting for this person's approval, with their comparison codes. */
+  /** New devices (by link or SSO) waiting for this person's approval. Link answers come with the
+   * code both screens show; SSO requests need the code the new browser shows typed in here. */
   async deviceRequests(){
    await load();
    const out=[];
    for(const {link,request} of await authed(()=>client.links(connection.org))){
     if(!request)continue;
-    const sso=request.via==='sso',stored=connection.deviceLinks?.[link];
-    if(!sso&&!stored)continue;
-    const secret=sso?new Uint8Array(32):unhex(stored.secret,32);
-    if(!sso){
-     // The link key, known only to both devices, must have signed the new keys.
-     const seed=linkSeed(secret);let ok=false;
-     try{ok=org_ed25519_verify(org_ed25519_public(seed),deviceRequestMessage(connection.org,link,connection.person,request.device,request.agreement),request.sig);}finally{seed.fill(0);}
-     if(!ok)continue;
-    }
-    out.push({link,device:request.device,via:sso?'sso':'link',email:request.email||null,code:linkCode(secret,request.device,request.agreement),agreement:request.agreement,proof:request.proof});
+    if(request.via==='sso'){out.push({link,via:'sso',device:request.device,agreement:request.agreement,proof:request.proof,mac:request.mac,email:request.email||null,code:null});continue;}
+    const stored=connection.deviceLinks?.[link];
+    if(!stored||Date.now()-stored.created>=LINK_MS)continue;
+    const secret=await openAtRest(connection.storageKey,stored.sealed,`scribyra-device-link/1\n${link}`),seed=linkSeed(secret);
+    // The link key, known only to both devices, must have signed the new keys.
+    let ok=false;
+    try{ok=org_ed25519_verify(org_ed25519_public(seed),deviceRequestMessage(connection.org,link,connection.person,request.device,request.agreement),request.sig);
+     if(ok)out.push({link,via:'link',device:request.device,agreement:request.agreement,proof:request.proof,code:linkCode(secret,request.device,request.agreement)});}
+    finally{seed.fill(0);secret.fill(0);}
    }
    return out;
   },
-  async approveDevice(link){
+  /**
+   * Adds exactly the device the person was shown (never whatever the service answers now). An
+   * SSO request also needs the code its browser shows, checked against the keys it asked with.
+   */
+  async approveDevice(shown,{code}={}){
    await load();
-   const request=(await api.deviceRequests()).find(r=>r.link===link);if(!request)throw Error('That device request is gone. Start linking again.');
-   await post('device.add',()=>({person:connection.person,device:request.device,agreement:request.agreement,proof:request.proof,link}));
-   if(connection.deviceLinks){delete connection.deviceLinks[link];await saveConnection();}
+   const request=(await api.deviceRequests()).find(r=>r.link===shown.link);
+   if(!request||request.device!==shown.device||request.agreement!==shown.agreement||request.proof!==shown.proof)throw Error('That device request changed or is gone. Start linking again.');
+   if(request.via==='sso'&&deviceCodeMac(code,request.device,request.agreement)!==request.mac)throw Error('That code does not match the new browser. Check the code it shows and type it again.');
+   await post('device.add',()=>({person:connection.person,device:request.device,agreement:request.agreement,proof:request.proof,link:request.link}));
+   if(connection.deviceLinks?.[request.link]){delete connection.deviceLinks[request.link];await saveConnection();}
    await fulfilPending();
   },
   async removeDevice(device){await load();await post('device.remove',()=>({device}));},
@@ -854,10 +879,10 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    client=orgClient(org.service,{fetchImpl});
    await freshConnection(org.service,org.org,login.person,identity,{genesisExpected:org.genesis,joined:true,ssoToken:login.token});
    const agreement=connection.agreement.publicKey,link=hex(randomBytes(16));
-   const proof=await deviceProof({org:org.org,link,person:login.person,device:identity.publicKey,agreement},identity);
-   await client.ssoDeviceRequest(org.org,{link,device:identity.publicKey,agreement,proof},login.token);
-   connection.linkCode=linkCode(new Uint8Array(32),identity.publicKey,agreement);await saveConnection();
-   return{code:connection.linkCode};
+   const proof=await deviceProof({org:org.org,link,person:login.person,device:identity.publicKey,agreement},identity),code=newDeviceCode();
+   await client.ssoDeviceRequest(org.org,{link,device:identity.publicKey,agreement,proof,mac:deviceCodeMac(code,identity.publicKey,agreement)},login.token);
+   connection.linkCode=code;await saveConnection();
+   return{code};
   },
 
   /** Forgets the service on this browser only. Local projects and the service's copies stay. */
@@ -865,7 +890,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    closed=true;polling?.abort();unwatch?.();for(const t of timers.values())clearTimeout(t);timers.clear();
    db?.close();db=null;connection=null;client=null;pendingKitText='';await deleteDB(DB);markConnected(false);statuses.clear();closed=false;unwatch=null;live=false;
   },
-  close(){closed=true;polling?.abort();unwatch?.();unwatch=null;for(const t of timers.values())clearTimeout(t);timers.clear();db?.close();db=null;},
+  close(){closed=true;polling?.abort();if(onlineHook)globalThis.removeEventListener?.('online',onlineHook);onlineHook=null;unwatch?.();unwatch=null;for(const t of timers.values())clearTimeout(t);timers.clear();db?.close();db=null;},
   push,
   /** Pulls and pushes one linked project now. */
   sync:push,

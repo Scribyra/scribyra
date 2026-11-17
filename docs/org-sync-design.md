@@ -652,6 +652,15 @@ Re-planned 17 November 2026 after Paul's new requirements: SSO and invitations c
 | 15 | **Hosting mode** (was 13). | Postgres and storage trait. | The full suite passes with filesystem blobs and with MinIO; an org exported from hosting runs unchanged self-hosted. |
 | 16 | **Online compile**, after Paul decides (section 10). | — | — |
 
+**Delivered on `feature/org-sync-v2` (17 November 2026).** Slices 1–5, each with Rust tests against real PostgreSQL (filesystem and Garage blobs), Node engine tests, browser tests in Chromium, Firefox and WebKit, and an independent adversarial review of authentication, SSO, invitations and key distribution (no Critical; one High and three Medium findings, all fixed with regression tests: quadratic log replay, invitations outliving their creator's authority, overwritable wraps, and SSO linking that was too permissive). Known limits until later slices:
+
+- Removing a person or a device closes their sessions at once, but their keys rotate only with slice 7; the members list says so beside the Remove buttons.
+- Reviewers and viewers read through the service; what they write (comments, suggestions) stays on their device until slice 8.
+- Entries from other people are checked for signature, chain, role and project structure (`validateReplica`); D's per-record provenance check for other people's records joins in slice 7.
+- A join request through SSO carries no readable name (the joiner has no directory key yet); admins see "Asked to join with single sign-on" until they approve. Showing the IdP's name and email to admins needs an admin route on the service.
+- Organisation-managed orgs are created with the service key and every key is wrapped to it; the service does not yet use it (admin reads through the service, re-enrolment and mode switches are slice 13).
+- Group-to-role suggestions and an interoperability run against Dex or Keycloak are not done yet.
+
 Slices 1–5 give organisations what Paul asked for on 17 November: SSO, invitations with roles, and device sync. Until slice 7, removing someone blocks them on the service at once but cannot take back keys they already hold; the app says so in the removal dialog. Slices 1–7 complete milestone 10; 8–11 complete milestone 11's recovery and revocation gate, after which the independent security review should happen before any public claim.
 
 ## 9. Decisions (Paul, 10 November 2026)

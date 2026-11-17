@@ -101,7 +101,7 @@ fn sso_joins_linking_required_sessions_blocking_and_device_requests() {
     let proof = laptop.sign(&core::device_proof_message(&org.id, &core::link_binding(&link), &alice_person, &laptop.key, &laptop.agreement));
     let url = org.url(&format!("/v1/orgs/{}/device-links/sso", org.id));
     let laptop_login = sso.login("alice");
-    let mut response = orgs::agent().post(&url).header("Content-Type", "application/json").header("Authorization", &sso_header(&token_of(&laptop_login))).send(json!({"link":link,"device":laptop.key,"agreement":laptop.agreement,"proof":proof}).to_string().as_bytes()).unwrap();
+    let mut response = orgs::agent().post(&url).header("Content-Type", "application/json").header("Authorization", &sso_header(&token_of(&laptop_login))).send(json!({"link":link,"device":laptop.key,"agreement":laptop.agreement,"proof":proof,"mac":random_hex(32)}).to_string().as_bytes()).unwrap();
     assert_eq!(response.status().as_u16(), 202, "{}", response.body_mut().read_to_string().unwrap());
     let listed = send("GET", &org.url(&format!("/v1/orgs/{}/device-links", org.id)), Some(&alice_token), "", b"").json();
     let waiting = &listed["links"][0]["request"];

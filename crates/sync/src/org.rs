@@ -1117,12 +1117,15 @@ struct SsoLinkRequest {
     device: String,
     agreement: String,
     proof: String,
+    /// A keyed check over the new keys under a code only the new browser shows; the existing
+    /// device asks the person to type that code, so the service cannot swap the keys.
+    mac: String,
 }
 /// A new browser signed in with the org's SSO as an existing member asks to become one of
 /// their devices. It waits, like a link answer, until one of that person's devices compares a
 /// code and signs device.add; the service alone cannot add it.
 async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap, Json(request): Json<SsoLinkRequest>) -> Response {
-    if !core::is_hex(&request.link, 16) || !core::is_hex(&request.device, 32) || !core::valid_agreement_key(&request.agreement) {
+    if !core::is_hex(&request.link, 16) || !core::is_hex(&request.device, 32) || !core::valid_agreement_key(&request.agreement) || !core::is_hex(&request.mac, 32) {
         return error(StatusCode::BAD_REQUEST, "invalid device request");
     }
     let login = match o.sso_login(&headers, &org).await {
@@ -1140,7 +1143,7 @@ async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, head
     if !core::ed25519_verify(&request.device, &proof, &request.proof) {
         return error(StatusCode::FORBIDDEN, "the new device did not prove possession of its key");
     }
-    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "via": "sso", "email": login.email});
+    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "mac": request.mac, "via": "sso", "email": login.email});
     let result = async {
         let mut tx = o.store.pool.begin().await?;
         sqlx::query("DELETE FROM device_links WHERE org = $1 AND expires < now()").bind(&org).execute(&mut *tx).await?;

@@ -234,6 +234,11 @@ pub struct OrgState {
     /// Every key ever registered (device, agreement, recovery, invitation and service keys,
     /// including retired ones): a key can be registered once, and the check stays O(log n).
     pub keys: BTreeSet<String>,
+    /// Removed devices and the person they belonged to, so entries they wrote while they were
+    /// members can still be checked after they are gone.
+    pub former_devices: BTreeMap<String, String>,
+    /// Everyone who was ever an editor of a project (for the same reason).
+    pub former_editors: BTreeMap<String, BTreeSet<String>>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyRole {
@@ -401,8 +406,23 @@ impl OrgState {
     fn active_owners(&self) -> usize {
         self.persons.values().filter(|p| p.state == "active" && p.role == "owner").count()
     }
+    /// Whether this device wrote for a person who is, or once was, an editor of the project:
+    /// how a reader checks entries that were appended before a removal or role change.
+    pub fn editor_device_ever(&self, device: &str, project: &str) -> bool {
+        let person = self.devices.get(device).map(|d| &d.person).or_else(|| self.former_devices.get(device));
+        person.is_some_and(|p| self.projects.get(project).is_some_and(|pr| pr.members.get(p).map(String::as_str) == Some("editor")) || self.former_editors.get(project).is_some_and(|e| e.contains(p)))
+    }
+    fn note_editors(&mut self, project: &str) {
+        if let Some(p) = self.projects.get(project) {
+            let editors: Vec<String> = p.members.iter().filter(|(_, r)| *r == "editor").map(|(person, _)| person.clone()).collect();
+            self.former_editors.entry(project.to_string()).or_default().extend(editors);
+        }
+    }
     fn retire_person_keys(&mut self, person: &str) {
         // Their keys stay in `keys`, so they can never be registered again.
+        for (key, d) in self.devices.iter().filter(|(_, d)| d.person == person) {
+            self.former_devices.insert(key.clone(), d.person.clone());
+        }
         self.devices.retain(|_, d| d.person != person);
         if let Some(p) = self.persons.get_mut(person) {
             p.recovery_signing = None;
@@ -584,7 +604,7 @@ impl OrgState {
                 if remover != device.person && !self.may_manage(&remover, &device.person) {
                     return Err(fail("only the same person or an admin can remove a device"));
                 }
-                let _ = device;
+                self.former_devices.insert(b.device.clone(), device.person);
                 self.devices.remove(&b.device);
             }
             "invite.create" => {
@@ -719,6 +739,10 @@ impl OrgState {
                 }
                 self.retire_person_keys(&b.person);
                 self.persons.get_mut(&b.person).unwrap().state = "removed".into();
+                let projects: Vec<String> = self.projects.keys().cloned().collect();
+                for project in &projects {
+                    self.note_editors(project);
+                }
                 for project in self.projects.values_mut() {
                     project.members.remove(&b.person);
                 }
@@ -756,6 +780,7 @@ impl OrgState {
                 if project.members.get(&b.person).map(String::as_str) == Some("editor") && b.role != "editor" && self.active_editors(project) <= 1 {
                     return Err(fail("a project always keeps at least one editor"));
                 }
+                self.note_editors(&b.project);
                 self.projects.get_mut(&b.project).unwrap().members.insert(b.person, b.role);
             }
             "project.revoke" => {
@@ -769,6 +794,7 @@ impl OrgState {
                 if role == "editor" && self.active(&b.person) && self.active_editors(project) <= 1 {
                     return Err(fail("a project always keeps at least one editor"));
                 }
+                self.note_editors(&b.project);
                 self.projects.get_mut(&b.project).unwrap().members.remove(&b.person);
             }
             _ => return Err(fail("unsupported membership event type")),
@@ -1083,6 +1109,28 @@ mod tests {
         o.apply("project.grant", json!({"project":project,"person":o.person(&owner),"role":"editor"}), &ana.seed).unwrap();
         o.apply("project.revoke", json!({"project":project,"person":o.person(&ana)}), &ana.seed).unwrap();
         assert!(o.join(&dev(6), &open, &open_seed).is_err());
+    }
+
+    #[test]
+    fn entries_written_before_a_removal_or_role_change_stay_checkable() {
+        // Browser review H2: readers check old entries against who was an editor, not only who is.
+        let (mut o, owner) = org("e2ee", true);
+        let (invite, seed) = o.invite(&owner, 2, "member", false, None).unwrap();
+        let ben = dev(2);
+        o.join(&ben, &invite, &seed).unwrap();
+        let project = o.project(&owner, 30);
+        o.apply("project.grant", json!({"project":project,"person":o.person(&ben),"role":"editor"}), &owner.seed).unwrap();
+        o.apply("project.grant", json!({"project":project,"person":o.person(&ben),"role":"viewer"}), &owner.seed).unwrap();
+        assert!(o.state.editor_device_ever(&ben.key, &project));
+        o.apply("person.remove", json!({"person":o.person(&ben)}), &owner.seed).unwrap();
+        assert!(o.state.editor_device_ever(&ben.key, &project));
+        assert!(o.state.editor_device_ever(&owner.key, &project));
+        // Never an editor, never accepted.
+        let (invite, seed) = o.invite(&owner, 3, "member", false, None).unwrap();
+        let cat = dev(3);
+        o.join(&cat, &invite, &seed).unwrap();
+        o.apply("project.grant", json!({"project":project,"person":o.person(&cat),"role":"reviewer"}), &owner.seed).unwrap();
+        assert!(!o.state.editor_device_ever(&cat.key, &project));
     }
 
     #[test]
