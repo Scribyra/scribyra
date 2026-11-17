@@ -19,7 +19,7 @@ export function backMergeTitle(subject){return`Back-merge main into dev: ${subje
 export function backMergeDescription(commits,pipelineUrl=null){
  return['Automatic back-merge so production fixes reach the next release.','',
   ...(commits.length?['Commits on `main` that `dev` does not have yet:','',...commits.map(line=>`- ${line}`),'']:[]),
-  'Merge with a merge commit; do not delete `main`. If this has conflicts, resolve them on a branch made from `dev` (see docs/delivery.md, "Hotfix").',
+  'Merge with a merge commit; do not delete `main`. If this has conflicts, resolve them on a branch made from `dev` (see docs/delivery.md, "A hotfix").',
   ...(pipelineUrl?['',`Opened by ${pipelineUrl}`]:[])].join('\n');
 }
 // The request body for POST /projects/:id/merge_requests.
@@ -49,7 +49,7 @@ async function runGithub({env,head,commits,subject,fetcher,log}){
  if(existing.length){log(`A back-merge is already open and now includes this commit: ${existing[0].html_url}`);return 0;}
  const runUrl=env.GITHUB_RUN_ID?`${env.GITHUB_SERVER_URL||'https://github.com'}/${repository}/actions/runs/${env.GITHUB_RUN_ID}`:null;
  const created=await fetcher(`${api}/pulls`,{method:'POST',headers,body:JSON.stringify(githubPullRequest({subject,commits,runUrl}))});
- if(created.status===403){log(`GitHub refused to let this workflow open a pull request (HTTP 403). Turn on "Allow GitHub Actions to create and approve pull requests" (docs/github-move.md), or open it by hand:\n  ${manualCommand('github')}`);return MISSING_TOKEN_EXIT;}
+ if(created.status===403){log(`GitHub refused to let this workflow open a pull request (HTTP 403). Turn on "Allow GitHub Actions to create and approve pull requests" (docs/delivery.md, "Repository settings"), or open it by hand:\n  ${manualCommand('github')}`);return MISSING_TOKEN_EXIT;}
  if(!created.ok)throw Error(`Creating the back-merge failed: HTTP ${created.status}; response details suppressed`);
  const pull=await created.json();
  // Best effort: a missing label or assignee must not hide the pull request itself.

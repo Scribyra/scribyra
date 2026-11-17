@@ -1,6 +1,6 @@
 # Installed once, by a maintainer, as .github/workflows/pages.yml in the staging
 # repository (scribyra/scribyra-staging, custom domain dev.scribyra.com); see
-# docs/github-move.md. The main repository's staging workflow pushes the staging site
+# docs/delivery.md. The main repository's staging workflow pushes the staging site
 # as public/ with a deploy key; this publishes it unchanged. CI never writes this file.
 name: pages
 on:

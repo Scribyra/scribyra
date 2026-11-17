@@ -1,6 +1,6 @@
 # Installed once, by a maintainer, as .github/workflows/pages.yml in the presentation
 # repository (scribyra/scribyra-site, custom domain scribyra.com); see
-# docs/github-move.md. The main repository's production workflow pushes the deployed
+# docs/delivery.md. The main repository's production workflow pushes the deployed
 # release as public/ with a deploy key; this publishes it unchanged. CI never writes
 # this file.
 name: pages
