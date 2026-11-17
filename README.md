@@ -149,9 +149,9 @@ Everything else, including setup without Nix, tests, measurements, self-hosting 
 
 ## Roadmap
 
-- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, and comments, reviews and history.
+- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, comments, reviews and history, and bibliographies imported from `.bib` files or linked to a Zotero library.
 - 🧪 **Experimental:** an AI working in your tab, and direct sessions on a shared network (off by default).
-- 🗺️ **Planned:** remote and local Git, plugins including Zotero, remote backup, sync and collaboration, end-to-end encryption, and managed hosting.
+- 🗺️ **Planned:** remote and local Git, plugins, remote backup, sync and collaboration, end-to-end encryption, and managed hosting.
 
 The [full roadmap](docs/roadmap.md) has the milestones, their state and the evidence behind them.
 

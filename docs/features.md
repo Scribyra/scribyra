@@ -23,6 +23,7 @@ and screenshots; the [roadmap](roadmap.md) has what comes next.
 - Resumable verified downloads for compiler assets, metadata and TeX archives. Device cache limits and interrupted-download controls are in **TeX environment**; zero disables caching while online compilation remains available.
 - Offline application shell and cached compiler packages after first preparation. Browser storage remains subject to user deletion; persistent-storage requests and source ZIP backups are available.
 - Project imports are limited to 64 MiB expanded, 512 files and 1024 total file/folder entries. Recoverable deleted contents also count toward the project byte limit. Traversal, absolute paths, encrypted archives, symlinks, and malformed ZIP metadata are rejected.
+- Bibliographies: **Import bibliography…** checks BibTeX/BibLaTeX files (Zotero and Better BibTeX exports too) and reports malformed entries by line before importing them unchanged. **Link to Zotero…** creates a `.bib` file from a Zotero library or collection through the Zotero Web API with a read-only key kept only on this device; **Refresh from Zotero** keeps cited citation keys stable and shows a per-entry diff before changing anything edited locally. `\cite{` completion shows author, year and title from every `.bib` file. [Bibliographies and Zotero](zotero.md).
 
 ## Keyboard shortcuts
 

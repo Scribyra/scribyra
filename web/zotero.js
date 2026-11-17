@@ -152,8 +152,11 @@ export function zoteroController({context,notify,activate,onLinks=()=>{},fetcher
     const keys=await zoteroStore.keys().catch(()=>[]);
     await zoteroPanel({links:list,keys:keys.map(({apiKey,...rest})=>rest),blocked:refreshBlocked(),onLink:()=>void link().catch(error=>notify(error.message)),onRefresh:id=>void refresh(id).catch(error=>notify(error.message)),onUnlink:unlink,onRemoveKey:id=>zoteroStore.removeKey(id)});
   }
+  // Failures are explained to the person here and never reach the app's exception
+  // reporting, so Zotero problems leave no telemetry record (docs/zotero.md).
+  const quiet=run=>async(...args)=>{try{return await run(...args);}catch(error){if(error?.name!=='AbortError')notify(error?.message||String(error));}};
   return {
-    load,checkImport,link,refresh,unlink,panel,
+    load,checkImport,link:quiet(link),refresh:quiet(refresh),unlink,panel:quiet(panel),
     linked:fileId=>links.get(fileId)||null,
     get refreshing(){return !!refreshing;},
     close(){links=new Map();loadedFor=null;},
