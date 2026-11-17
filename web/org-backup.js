@@ -126,8 +126,14 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  const me=()=>connection.state.persons[connection.person];
  async function refreshMembership(){
   const before=connection.state.count;
-  const events=await authed(()=>client.events(connection.org,connection.state.count));
-  if(events.length){connection.state=applyEvents(connection.state,connection.org,events);await saveConnection();}
+  // The long poll, a push and a dialog can refresh at the same time: events read after one count
+  // are applied only to a state still at that count, or read again from where the state now is.
+  for(;;){
+   const from=connection.state.count,events=await authed(()=>client.events(connection.org,from));
+   if(connection.state.count!==from)continue;
+   if(events.length){connection.state=applyEvents(connection.state,connection.org,events);await saveConnection();}
+   break;
+  }
   if(connection.state.count!==before)onMembership();
   return connection.state;
  }
