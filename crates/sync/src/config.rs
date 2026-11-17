@@ -67,6 +67,9 @@ pub struct Config {
     /// Exact origin clients use to reach this service (for example https://sync.example.org).
     /// Signed into every organisation sign-in; organisations are disabled without it.
     pub public_url: Option<String>,
+    /// A file holding 32 random bytes that seal each organisation's service key. Without it the
+    /// service offers only end-to-end encrypted organisations (no organisation-managed mode).
+    pub service_key_file: Option<std::path::PathBuf>,
     /// Encrypted bytes one organisation may store.
     pub org_bytes: u64,
     /// Log entries up to this size live in the database; larger ones in the blob store.
@@ -118,6 +121,7 @@ impl Default for Config {
             frame_bytes: 64 * 1024,
             messages_per_second: 60,
             public_url: None,
+            service_key_file: None,
             org_bytes: 1024 * 1024 * 1024,
             entry_inline_bytes: 64 * 1024,
             sessions: 10000,
@@ -125,6 +129,13 @@ impl Default for Config {
     }
 }
 impl Config {
+    /// The operator's master key that seals organisation service keys, if configured.
+    pub fn master_key(&self) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error>> {
+        let Some(path) = &self.service_key_file else { return Ok(None) };
+        let bytes = std::fs::read(path).map_err(|e| format!("service_key_file: {e}"))?;
+        let key: [u8; 32] = bytes.as_slice().try_into().map_err(|_| "service_key_file must hold exactly 32 bytes")?;
+        Ok(Some(key))
+    }
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
         let mut value = serde_json::to_value(Self::default())?;
         if let Ok(path) = std::env::var("SCRIBYRA_SERVICE_CONFIG") {

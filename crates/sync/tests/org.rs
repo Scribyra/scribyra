@@ -71,7 +71,7 @@ fn org_log(backend: Value) {
     let agreement = core::hex(&core::x25519_public(&random_bytes(32)).unwrap());
     let enrol_seed = core::enrol_seed(&secret).unwrap();
     let person = core::person_id(&org, &device).unwrap();
-    let mut body = json!({"person":person,"device":device,"agreement":agreement,"enrol":core::hex(&core::ed25519_public(&enrol_seed).unwrap()),"enrolSig":"","mode":"e2ee","adminRead":true});
+    let mut body = json!({"person":person,"device":device,"agreement":agreement,"enrol":core::hex(&core::ed25519_public(&enrol_seed).unwrap()),"enrolSig":"","mode":"e2ee","adminRead":true,"name":random_hex(60),"directoryCommit":random_hex(32),"ownerName":random_hex(60)});
     let parsed: core::GenesisBody = serde_json::from_value(body.clone()).unwrap();
     body["enrolSig"] = json!(core::hex(&core::ed25519_sign(&enrol_seed, &core::enrol_message(&org, &parsed)).unwrap()));
     let genesis = sign_event(&org, &org, "genesis", body, &device_seed);

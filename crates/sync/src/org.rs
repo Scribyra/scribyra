@@ -39,6 +39,8 @@ pub struct Orgs {
     challenges: Mutex<HashMap<String, (String, Instant)>>,
     sessions: Mutex<HashMap<String, Session>>,
     states: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<OrgState>>>>>,
+    /// Per-organisation change counter for the long-poll heads notice.
+    changes: Mutex<HashMap<String, tokio::sync::watch::Sender<u64>>>,
 }
 #[derive(Clone)]
 struct Session {
@@ -65,6 +67,20 @@ fn random_hex() -> String {
     getrandom::fill(&mut bytes).expect("operating system randomness");
     core::hex(&bytes)
 }
+fn unix_now() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
+}
+/// Associated data that binds a sealed service key to its organisation.
+pub fn service_key_context(org: &str) -> String {
+    format!("scribyra-service-key/1\n{org}")
+}
+/// Opens an organisation's sealed service key (`nonce ‖ ciphertext`) with the master key.
+pub fn unseal_service_key(master: &[u8; 32], org: &str, sealed: &[u8]) -> Result<Vec<u8>, core::Error> {
+    if sealed.len() < 24 {
+        return Err(core::Error("sealed service key is too short"));
+    }
+    core::open(master, &sealed[..24], service_key_context(org).as_bytes(), &sealed[24..])
+}
 pub fn org_scope(org: &str) -> String {
     format!("org:{org}")
 }
@@ -75,7 +91,20 @@ pub fn entry_key(project: &str, hash: &str) -> Result<BlobKey, StoreError> {
 impl Orgs {
     pub fn new(store: Arc<Store>) -> Shared {
         let public_url = store.config.public_url.clone();
-        Arc::new(Self { store, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default() })
+        Arc::new(Self { store, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default() })
+    }
+    fn changes(&self, org: &str) -> tokio::sync::watch::Receiver<u64> {
+        let mut changes = self.changes.lock().unwrap();
+        if changes.len() >= MAX_CACHED_ORGS {
+            changes.retain(|_, tx| tx.receiver_count() > 0);
+        }
+        changes.entry(org.to_string()).or_insert_with(|| tokio::sync::watch::channel(0).0).subscribe()
+    }
+    /// Wakes every long poll of an organisation (a project or the membership log moved).
+    fn changed(&self, org: &str) {
+        if let Some(tx) = self.changes.lock().unwrap().get(org) {
+            tx.send_modify(|n| *n += 1);
+        }
     }
     /// The per-organisation state slot. Only existing organisations get one, and the cache
     /// drops idle entries (no handler holds them) once it is full.
@@ -138,6 +167,11 @@ impl Orgs {
             }
             None => Err(error(StatusCode::UNAUTHORIZED, "sign in required")),
         }
+    }
+    /// Single sign-on checks for joins. Organisations get SSO in a later step; until then an
+    /// invitation or join request that needs it is refused.
+    async fn sso_gate(&self, _headers: &HeaderMap, _org: &str, _email_hash: Option<&str>) -> Result<(), Response> {
+        Err(error(StatusCode::FORBIDDEN, "single sign-on is required"))
     }
     /// The session's current role in its org; refuses keys that are no longer active.
     fn role(state: &OrgState, session: &Session) -> Result<KeyRole, Response> {
@@ -289,17 +323,51 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         if kind != "genesis" {
             return error(StatusCode::CONFLICT, "the organisation has no genesis yet");
         }
+        // Organisation-managed mode names this service's own key for the org, or nothing works.
+        let stored: Option<String> = match sqlx::query_scalar("SELECT service_key FROM orgs WHERE org = $1").bind(&org).fetch_one(&o.store.pool).await {
+            Ok(key) => key,
+            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        };
+        let requested = value["body"]["serviceKey"].as_str();
+        if value["body"]["mode"] == "managed" && (stored.is_none() || requested != stored.as_deref()) {
+            return error(StatusCode::BAD_REQUEST, "this service does not hold that organisation key (organisation-managed mode needs the service key)");
+        }
     } else {
-        let session = match o.session(&headers) {
-            Ok(s) => s,
-            Err(r) => return r,
-        };
-        let role = match Orgs::role(state, &session) {
-            Ok(r) => r,
-            Err(r) => return r,
-        };
-        if session.org != org || session.key != signer || (matches!(role, KeyRole::Recovery { .. }) && kind != "device.add") {
-            return error(StatusCode::FORBIDDEN, "this session cannot sign that event");
+        match kind.as_str() {
+            // A join is authenticated by its invitation; the service adds what only it can
+            // check: the invitation's expiry against its clock, and single sign-on if required.
+            "person.join" => {
+                let invite = value["body"]["invite"].as_str().and_then(|i| state.invites.get(i));
+                if let Some(invite) = invite {
+                    if invite.expires <= unix_now() {
+                        return error(StatusCode::GONE, "the invitation expired");
+                    }
+                    if invite.sso
+                        && let Err(r) = o.sso_gate(&headers, &org, invite.email_hash.as_deref()).await
+                    {
+                        return r;
+                    }
+                }
+            }
+            // Asking to join without an invitation needs the org's single sign-on.
+            "person.request" => {
+                if let Err(r) = o.sso_gate(&headers, &org, None).await {
+                    return r;
+                }
+            }
+            _ => {
+                let session = match o.session(&headers) {
+                    Ok(s) => s,
+                    Err(r) => return r,
+                };
+                let role = match Orgs::role(state, &session) {
+                    Ok(r) => r,
+                    Err(r) => return r,
+                };
+                if session.org != org || session.key != signer || (matches!(role, KeyRole::Recovery { .. }) && kind != "device.add") {
+                    return error(StatusCode::FORBIDDEN, "this session cannot sign that event");
+                }
+            }
         }
     }
     let mut next = state.clone();
@@ -341,7 +409,15 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     let seq = next.count;
+    // Removed people and devices lose their sessions at once.
+    o.sessions.lock().unwrap().retain(|_, s| s.org != org || next.key_role(&s.key).is_some());
+    if kind == "device.add"
+        && let Some(link) = value["body"]["link"].as_str()
+    {
+        let _ = sqlx::query("DELETE FROM device_links WHERE org = $1 AND link = $2").bind(&org).bind(link).execute(&o.store.pool).await;
+    }
     *guard = Some(next);
+    o.changed(&org);
     (StatusCode::CREATED, Json(serde_json::json!({"seq": seq, "hash": hash}))).into_response()
 }
 
@@ -447,8 +523,9 @@ async fn get_wraps(State(o): State<Shared>, Path(org): Path<String>, headers: He
     }
 }
 
-/// Checks the session may use this project's log; returns its org and current epoch.
-async fn project_access(o: &Orgs, session: &Session, project: &str) -> Result<u32, Response> {
+/// Checks the session may read (or, with `write`, append to) this project's log; returns the
+/// project's current epoch.
+async fn project_access(o: &Orgs, session: &Session, project: &str, write: bool) -> Result<u32, Response> {
     let slot = o.slot(&session.org).await?;
     let mut guard = slot.lock().await;
     let state = o.state(&mut guard, &session.org).await?;
@@ -457,6 +534,9 @@ async fn project_access(o: &Orgs, session: &Session, project: &str) -> Result<u3
     };
     if !state.can_access(&person, project) {
         return Err(error(StatusCode::FORBIDDEN, "not a member of this project"));
+    }
+    if write && !state.can_write(&person, project) {
+        return Err(error(StatusCode::FORBIDDEN, "only editors can change this project"));
     }
     Ok(state.projects[project].epoch)
 }
@@ -468,7 +548,7 @@ async fn append(State(o): State<Shared>, Path(project): Path<String>, headers: H
     if !core::is_hex(&project, 32) {
         return error(StatusCode::BAD_REQUEST, "invalid project");
     }
-    let epoch = match project_access(&o, &session, &project).await {
+    let epoch = match project_access(&o, &session, &project, true).await {
         Ok(e) => e,
         Err(r) => return r,
     };
@@ -491,7 +571,10 @@ async fn append(State(o): State<Shared>, Path(project): Path<String>, headers: H
     }
     let hash = core::hex(&core::entry_hash(raw, ciphertext));
     match record(&o, &session.org, &project, &header, &hash, Bytes::from(bytes.to_vec())).await {
-        Ok((status, seq, chain)) => (status, Json(serde_json::json!({"seq": seq, "chain": chain}))).into_response(),
+        Ok((status, seq, chain)) => {
+            o.changed(&session.org);
+            (status, Json(serde_json::json!({"seq": seq, "chain": chain}))).into_response()
+        }
         Err(r) => r,
     }
 }
@@ -607,7 +690,7 @@ async fn read_log(State(o): State<Shared>, Path(project): Path<String>, Query(q)
     if !core::is_hex(&project, 32) || q.after < 0 {
         return error(StatusCode::BAD_REQUEST, "invalid request");
     }
-    if let Err(r) = project_access(&o, &session, &project).await {
+    if let Err(r) = project_access(&o, &session, &project, false).await {
         return r;
     }
     // The head is read first: a page never reaches past it, and clients read on until they reach it.
@@ -655,12 +738,254 @@ async fn read_log(State(o): State<Shared>, Path(project): Path<String>, Query(q)
     ([(header::CONTENT_TYPE, "application/octet-stream".to_string()), (header::CACHE_CONTROL, "no-store".to_string()), (header::HeaderName::from_static("scribyra-log-head"), head.to_string())], out).into_response()
 }
 
+/// What a browser needs before it signs anything: whether the org exists and has a genesis,
+/// and the service's own key for organisation-managed mode (if the operator enabled it).
+async fn info(State(o): State<Shared>, Path(org): Path<String>) -> Response {
+    let slot = match o.slot(&org).await {
+        Ok(slot) => slot,
+        Err(r) => return r,
+    };
+    let genesis = {
+        let mut guard = slot.lock().await;
+        match o.state(&mut guard, &org).await {
+            Ok(state) => state.genesis.is_some(),
+            Err(r) => return r,
+        }
+    };
+    let key: Option<String> = match sqlx::query_scalar("SELECT service_key FROM orgs WHERE org = $1").bind(&org).fetch_one(&o.store.pool).await {
+        Ok(key) => key,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    Json(serde_json::json!({"genesis": genesis, "serviceKey": key})).into_response()
+}
+/// Keys this device's person could hand out but has not yet: for every project the person can
+/// open (and the org directory), the entitled X25519 keys that have no wrap for the current
+/// epoch. Any member's app fulfils these, so new devices and new members get keys as soon as
+/// someone who holds them is online.
+async fn pending(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if session.org != org {
+        return error(StatusCode::FORBIDDEN, "wrong organisation");
+    }
+    let wanted: Vec<(String, u32, std::collections::BTreeSet<String>)> = {
+        let slot = match o.slot(&org).await {
+            Ok(slot) => slot,
+            Err(r) => return r,
+        };
+        let mut guard = slot.lock().await;
+        let state = match o.state(&mut guard, &org).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        let Ok(KeyRole::Device { person }) = Orgs::role(state, &session) else {
+            return error(StatusCode::FORBIDDEN, "only a device can hand out keys");
+        };
+        std::iter::once(org.clone())
+            .chain(state.projects.keys().cloned())
+            .filter(|project| state.may_wrap(&person, project))
+            .filter_map(|project| state.key_epoch(&project).map(|epoch| (project.clone(), epoch, state.wrap_recipients(&project))))
+            .collect()
+    };
+    let rows = match sqlx::query("SELECT project, epoch, recipient FROM wraps WHERE org = $1").bind(&org).fetch_all(&o.store.pool).await {
+        Ok(rows) => rows,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let have: std::collections::HashSet<(String, i32, String)> = rows.iter().map(|r| (r.get(0), r.get(1), r.get(2))).collect();
+    let mut out = Vec::new();
+    for (project, epoch, recipients) in wanted {
+        let missing: Vec<String> = recipients.into_iter().filter(|r| !have.contains(&(project.clone(), epoch as i32, r.clone()))).collect();
+        if !missing.is_empty() {
+            out.push(serde_json::json!({"project": project, "epoch": epoch, "recipients": missing}));
+        }
+    }
+    Json(serde_json::json!({"pending": out})).into_response()
+}
+
+#[derive(Deserialize)]
+struct Heads {
+    #[serde(default)]
+    since: Option<u64>,
+    #[serde(default)]
+    wait: u64,
+}
+/// A notice, not a delivery: the membership log's length and the head of every project this
+/// device's person can read. With `since` equal to the current change counter it waits (up to
+/// `wait` seconds, at most 25) for the next change. Clients read the logs themselves afterwards.
+async fn heads(State(o): State<Shared>, Path(org): Path<String>, Query(q): Query<Heads>, headers: HeaderMap) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if session.org != org {
+        return error(StatusCode::FORBIDDEN, "wrong organisation");
+    }
+    let mut rx = o.changes(&org);
+    if q.since == Some(*rx.borrow_and_update()) && q.wait > 0 {
+        let _ = tokio::time::timeout(Duration::from_secs(q.wait.min(25)), rx.changed()).await;
+    }
+    let version = *rx.borrow();
+    let slot = match o.slot(&org).await {
+        Ok(slot) => slot,
+        Err(r) => return r,
+    };
+    let (count, readable) = {
+        let mut guard = slot.lock().await;
+        let state = match o.state(&mut guard, &org).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        let Ok(KeyRole::Device { person }) = Orgs::role(state, &session) else {
+            return error(StatusCode::FORBIDDEN, "only a device can follow projects");
+        };
+        let readable: std::collections::HashSet<String> = state.projects.keys().filter(|p| state.can_access(&person, p)).cloned().collect();
+        (state.count, readable)
+    };
+    let rows = match sqlx::query("SELECT project, head_seq FROM projects WHERE org = $1").bind(&org).fetch_all(&o.store.pool).await {
+        Ok(rows) => rows,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let heads: serde_json::Map<String, serde_json::Value> = rows.iter().filter(|r| readable.contains(&r.get::<String, _>(0))).map(|r| (r.get::<String, _>(0), r.get::<i64, _>(1).into())).collect();
+    Json(serde_json::json!({"version": version, "events": count, "heads": heads})).into_response()
+}
+
+const LINK_SECONDS: i64 = 15 * 60;
+const MAX_LINKS_PER_PERSON: i64 = 4;
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewLink {
+    link: String,
+    key: String,
+}
+/// An existing device opens a one-time link for a new device of the same person.
+async fn create_link(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap, Json(request): Json<NewLink>) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if session.org != org || !core::is_hex(&request.link, 16) || !core::is_hex(&request.key, 32) {
+        return error(StatusCode::BAD_REQUEST, "invalid device link");
+    }
+    let person = {
+        let slot = match o.slot(&org).await {
+            Ok(slot) => slot,
+            Err(r) => return r,
+        };
+        let mut guard = slot.lock().await;
+        let state = match o.state(&mut guard, &org).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        match Orgs::role(state, &session) {
+            Ok(KeyRole::Device { person }) if !state.links.contains(&request.link) => person,
+            Ok(_) => return error(StatusCode::FORBIDDEN, "only a device can link another"),
+            Err(r) => return r,
+        }
+    };
+    let result = async {
+        let mut tx = o.store.pool.begin().await?;
+        sqlx::query("DELETE FROM device_links WHERE org = $1 AND expires < now()").bind(&org).execute(&mut *tx).await?;
+        let open: i64 = sqlx::query_scalar("SELECT count(*) FROM device_links WHERE org = $1 AND person = $2").bind(&org).bind(&person).fetch_one(&mut *tx).await?;
+        if open >= MAX_LINKS_PER_PERSON {
+            return Ok(false);
+        }
+        sqlx::query("INSERT INTO device_links (org, link, person, link_key, expires) VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5)) ON CONFLICT DO NOTHING")
+            .bind(&org)
+            .bind(&request.link)
+            .bind(&person)
+            .bind(&request.key)
+            .bind(LINK_SECONDS as f64)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(true)
+    }
+    .await;
+    match result {
+        Ok(true) => (StatusCode::CREATED, Json(serde_json::json!({"person": person, "expires": LINK_SECONDS}))).into_response(),
+        Ok(false) => error(StatusCode::TOO_MANY_REQUESTS, "too many open device links"),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LinkRequest {
+    device: String,
+    agreement: String,
+    proof: String,
+    sig: String,
+}
+/// The new device answers a link: its keys, its own possession proof (bound to the link) and
+/// the link key's signature over them. Only the first answer is kept.
+async fn request_link(State(o): State<Shared>, Path((org, link)): Path<(String, String)>, Json(request): Json<LinkRequest>) -> Response {
+    if !core::is_hex(&org, 32) || !core::is_hex(&link, 16) || !core::is_hex(&request.device, 32) || !core::valid_agreement_key(&request.agreement) {
+        return error(StatusCode::BAD_REQUEST, "invalid device link request");
+    }
+    let row = match sqlx::query("SELECT person, link_key FROM device_links WHERE org = $1 AND link = $2 AND expires > now() AND request IS NULL").bind(&org).bind(&link).fetch_optional(&o.store.pool).await {
+        Ok(Some(row)) => row,
+        Ok(None) => return error(StatusCode::NOT_FOUND, "unknown, used or expired device link"),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let (person, key): (String, String) = (row.get(0), row.get(1));
+    let signed = core::device_request_message(&org, &link, &person, &request.device, &request.agreement);
+    let proof = core::device_proof_message(&org, &core::link_binding(&link), &person, &request.device, &request.agreement);
+    if !core::ed25519_verify(&key, &signed, &request.sig) || !core::ed25519_verify(&request.device, &proof, &request.proof) {
+        return error(StatusCode::FORBIDDEN, "the link request is not signed with this link");
+    }
+    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "sig": request.sig});
+    match sqlx::query("UPDATE device_links SET request = $3 WHERE org = $1 AND link = $2 AND request IS NULL").bind(&org).bind(&link).bind(&stored).execute(&o.store.pool).await {
+        Ok(done) if done.rows_affected() == 1 => {
+            o.changed(&org);
+            (StatusCode::ACCEPTED, Json(serde_json::json!({"person": person}))).into_response()
+        }
+        Ok(_) => error(StatusCode::CONFLICT, "this device link was already answered"),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+/// The open links of this device's person, with any answer waiting for approval.
+async fn list_links(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if session.org != org {
+        return error(StatusCode::FORBIDDEN, "wrong organisation");
+    }
+    let person = {
+        let slot = match o.slot(&org).await {
+            Ok(slot) => slot,
+            Err(r) => return r,
+        };
+        let mut guard = slot.lock().await;
+        let state = match o.state(&mut guard, &org).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        match Orgs::role(state, &session) {
+            Ok(KeyRole::Device { person }) => person,
+            Ok(_) => return error(StatusCode::FORBIDDEN, "only a device can link another"),
+            Err(r) => return r,
+        }
+    };
+    match sqlx::query("SELECT link, request FROM device_links WHERE org = $1 AND person = $2 AND expires > now() ORDER BY expires").bind(&org).bind(&person).fetch_all(&o.store.pool).await {
+        Ok(rows) => Json(serde_json::json!({"links": rows.iter().map(|r| serde_json::json!({"link": r.get::<String, _>(0), "request": r.get::<Option<serde_json::Value>, _>(1)})).collect::<Vec<_>>()})).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 pub fn routes(o: Shared) -> Router {
     Router::new()
         .route("/v1/auth/challenge", post(challenge))
         .route("/v1/auth/session", post(session))
         .route("/v1/orgs/{org}/events", get(events).post(append_event))
         .route("/v1/orgs/{org}/keys", get(get_wraps).put(put_wraps))
+        .route("/v1/orgs/{org}/info", get(info))
+        .route("/v1/orgs/{org}/pending", get(pending))
+        .route("/v1/orgs/{org}/heads", get(heads))
+        .route("/v1/orgs/{org}/device-links", get(list_links).post(create_link))
+        .route("/v1/orgs/{org}/device-links/{link}", post(request_link))
         .route("/v1/projects/{project}/log", get(read_log).post(append))
         .with_state(o)
 }
@@ -675,7 +1000,7 @@ pub async fn create_org(config: &crate::config::Config, label: &str) -> Result<(
     }
     let options: sqlx::postgres::PgConnectOptions = config.database_url().map_err(|e| e.to_string())?.parse()?;
     let mut db = sqlx::PgConnection::connect_with(&options.application_name("scribyra-sync-admin")).await?;
-    let migrated: Option<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 2 AND success")
+    let migrated: Option<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 3 AND success")
         .fetch_optional(&mut db)
         .await
         .unwrap_or(None);
@@ -686,10 +1011,27 @@ pub async fn create_org(config: &crate::config::Config, label: &str) -> Result<(
     let mut secret = [0u8; 32];
     getrandom::fill(&mut secret)?;
     let enrol = core::hex(&core::ed25519_public(&core::enrol_seed(&secret)?)?);
-    sqlx::query("INSERT INTO orgs (org, label, enrol) VALUES ($1, $2, $3)")
+    // With a master key, the org also gets a service key, used only if its owner chooses
+    // organisation-managed encryption.
+    let (service_key, sealed) = match config.master_key().map_err(|e| e.to_string())? {
+        Some(master) => {
+            let (mut key, mut nonce) = ([0u8; 32], [0u8; 24]);
+            getrandom::fill(&mut key)?;
+            getrandom::fill(&mut nonce)?;
+            let public = core::hex(&core::x25519_public(&key)?);
+            let mut sealed = nonce.to_vec();
+            sealed.extend(core::seal(&master, &nonce, service_key_context(&org).as_bytes(), &key)?);
+            key.fill(0);
+            (Some(public), Some(sealed))
+        }
+        None => (None, None),
+    };
+    sqlx::query("INSERT INTO orgs (org, label, enrol, service_key, service_key_sealed) VALUES ($1, $2, $3, $4, $5)")
         .bind(&org)
         .bind(label)
         .bind(&enrol)
+        .bind(&service_key)
+        .bind(&sealed)
         .execute(&mut db)
         .await?;
     let setup = format!("scribyra-setup:1:{}:{org}:{}", base64url(public_url.as_bytes()), base64url(&secret));

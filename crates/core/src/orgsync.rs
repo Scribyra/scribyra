@@ -15,11 +15,8 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::fmt;
 
-pub const MAX_EVENTS: usize = 100_000;
-pub const MAX_EVENT_BYTES: usize = 16 * 1024;
 pub const MAX_HEADER_BYTES: usize = 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,7 +27,7 @@ impl fmt::Display for Error {
     }
 }
 impl std::error::Error for Error {}
-type Result<T> = std::result::Result<T, Error>;
+pub(crate) type Result<T> = std::result::Result<T, Error>;
 const fn fail(message: &'static str) -> Error {
     Error(message)
 }
@@ -243,12 +240,12 @@ pub fn enrol_seed(secret: &[u8]) -> Result<Vec<u8>> {
     }
     hkdf_sha256(secret, b"scribyra-enrol/1", b"signing", 32)
 }
+/// What the setup code's key signs: every genesis field except its own signature, so the
+/// operator's setup code vouches for the owner's keys, the mode, admin read access, the
+/// service key and the encrypted names exactly as the owner chose them.
 pub fn enrol_message(org: &str, body: &GenesisBody) -> Vec<u8> {
-    format!(
-        "scribyra-org-enrol/1\n{org}\n{}\n{}\n{}\n{}\n{}",
-        body.device, body.agreement, body.person, body.mode, body.admin_read
-    )
-    .into_bytes()
+    let value = without(&serde_json::to_value(body).expect("genesis body serialises"), "enrolSig");
+    format!("scribyra-org-enrol/2\n{org}\n{}", canonical(&value).expect("genesis body is canonical JSON")).into_bytes()
 }
 /// Ed25519 seed and X25519 secret derived from a 32-byte recovery code.
 pub fn recovery_secrets(code: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
@@ -338,281 +335,9 @@ pub fn project_subkey(project_key: &[u8], purpose: &str) -> Result<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------
-// The membership log
+// The membership log lives in `crate::membership`; re-exported here so callers keep one path.
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Event {
-    pub v: u32,
-    pub org: String,
-    pub prev: String,
-    #[serde(rename = "type")]
-    pub kind: String,
-    pub body: Value,
-    pub signer: String,
-    pub sig: String,
-}
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-pub struct GenesisBody {
-    pub person: String,
-    pub device: String,
-    pub agreement: String,
-    pub enrol: String,
-    pub enrol_sig: String,
-    pub mode: String,
-    pub admin_read: bool,
-}
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct RecoveryBody {
-    person: String,
-    signing: String,
-    agreement: String,
-    proof: String,
-}
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct DeviceBody {
-    person: String,
-    device: String,
-    agreement: String,
-    proof: String,
-}
-#[derive(Clone, Debug, Deserialize)]
-#[serde(deny_unknown_fields, rename_all = "camelCase")]
-struct ProjectBody {
-    project: String,
-    epoch: u32,
-    key_commit: String,
-}
-
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Person {
-    pub role: String,
-    pub recovery_signing: Option<String>,
-    pub recovery_agreement: Option<String>,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Device {
-    pub person: String,
-    pub agreement: String,
-}
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct Project {
-    pub creator: String,
-    pub epoch: u32,
-    pub key_commit: String,
-    pub editors: Vec<String>,
-}
-#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct OrgState {
-    pub org: String,
-    /// Hash of the last applied event; the next event's `prev`. The org ID before genesis.
-    pub head: String,
-    pub count: u64,
-    pub genesis: Option<String>,
-    pub mode: Option<String>,
-    pub admin_read: bool,
-    pub enrol: Option<String>,
-    pub persons: BTreeMap<String, Person>,
-    pub devices: BTreeMap<String, Device>,
-    pub projects: BTreeMap<String, Project>,
-}
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum KeyRole {
-    Device { person: String },
-    Recovery { person: String },
-}
-
-pub fn event_signing_message(event: &Value) -> Result<Vec<u8>> {
-    Ok(format!("scribyra-org-event/1\n{}", canonical(&without(event, "sig"))?).into_bytes())
-}
-pub fn event_hash(event: &Value) -> Result<String> {
-    Ok(hex(&sha256(canonical(event)?.as_bytes())))
-}
-/// Signed by a new device's own key: binds it to its person, agreement key and the log
-/// position it joins at, so a proof cannot be replayed later.
-pub fn device_proof_message(org: &str, prev: &str, person: &str, device: &str, agreement: &str) -> Vec<u8> {
-    format!("scribyra-device-proof/1\n{org}\n{prev}\n{person}\n{device}\n{agreement}").into_bytes()
-}
-/// Signed by a recovery signing key: proves the person who registers it holds the code.
-pub fn recovery_proof_message(org: &str, prev: &str, person: &str, signing: &str, agreement: &str) -> Vec<u8> {
-    format!("scribyra-recovery-proof/1\n{org}\n{prev}\n{person}\n{signing}\n{agreement}").into_bytes()
-}
-
-impl OrgState {
-    pub fn new(org: &str) -> Result<Self> {
-        if !is_hex(org, 32) {
-            return Err(fail("invalid organisation ID"));
-        }
-        Ok(Self { org: org.into(), head: org.into(), ..Default::default() })
-    }
-    pub fn key_role(&self, key: &str) -> Option<KeyRole> {
-        if let Some(device) = self.devices.get(key) {
-            return Some(KeyRole::Device { person: device.person.clone() });
-        }
-        self.persons
-            .iter()
-            .find(|(_, p)| p.recovery_signing.as_deref() == Some(key))
-            .map(|(id, _)| KeyRole::Recovery { person: id.clone() })
-    }
-    pub fn device_person(&self, key: &str) -> Option<&str> {
-        self.devices.get(key).map(|d| d.person.as_str())
-    }
-    /// Whether this person may read and append to the project's log.
-    pub fn can_access(&self, person: &str, project: &str) -> bool {
-        self.projects.get(project).is_some_and(|p| p.editors.iter().any(|e| e == person))
-    }
-    /// X25519 keys allowed to receive the project's key: member devices and their recovery keys.
-    pub fn wrap_recipients(&self, project: &str) -> Vec<String> {
-        let Some(p) = self.projects.get(project) else { return vec![] };
-        let mut out = Vec::new();
-        for editor in &p.editors {
-            out.extend(self.devices.values().filter(|d| &d.person == editor).map(|d| d.agreement.clone()));
-            if let Some(r) = self.persons.get(editor).and_then(|p| p.recovery_agreement.clone()) {
-                out.push(r);
-            }
-        }
-        out
-    }
-    /// Every X25519 key that may currently receive wraps: device and recovery agreement keys.
-    pub fn agreement_keys(&self) -> std::collections::BTreeSet<String> {
-        let mut keys: std::collections::BTreeSet<String> = self.devices.values().map(|d| d.agreement.clone()).collect();
-        keys.extend(self.persons.values().filter_map(|p| p.recovery_agreement.clone()));
-        keys
-    }
-    fn known_key(&self, key: &str) -> bool {
-        self.devices.contains_key(key)
-            || self.devices.values().any(|d| d.agreement == key)
-            || self.persons.values().any(|p| {
-                p.recovery_signing.as_deref() == Some(key) || p.recovery_agreement.as_deref() == Some(key)
-            })
-    }
-
-    /// Validate and apply one event. `expected_enrol`, when given, is the enrolment
-    /// key the verifier already trusts (the server's stored key, or the key the
-    /// owner derived from their setup code); genesis must match it.
-    pub fn apply(&mut self, raw: &str, expected_enrol: Option<&str>) -> Result<String> {
-        if raw.len() > MAX_EVENT_BYTES {
-            return Err(fail("membership event is too large"));
-        }
-        if self.count as usize >= MAX_EVENTS {
-            return Err(fail("membership log is full"));
-        }
-        let value: Value = serde_json::from_str(raw).map_err(|_| fail("membership event is not JSON"))?;
-        if canonical(&value)? != raw {
-            return Err(fail("membership event is not in canonical form"));
-        }
-        let event: Event = serde_json::from_value(value.clone()).map_err(|_| fail("invalid membership event"))?;
-        if event.v != 1 || event.org != self.org {
-            return Err(fail("membership event belongs to another organisation or version"));
-        }
-        if event.prev != self.head {
-            return Err(fail("membership event does not follow the current head"));
-        }
-        if !ed25519_verify(&event.signer, &event_signing_message(&value)?, &event.sig) {
-            return Err(fail("membership event signature is invalid"));
-        }
-        let hash = event_hash(&value)?;
-        let body = event.body.clone();
-        let parse_error = |_| fail("invalid membership event body");
-        match (event.kind.as_str(), self.genesis.is_some()) {
-            ("genesis", false) => {
-                let b: GenesisBody = serde_json::from_value(body).map_err(parse_error)?;
-                if ![&b.device, &b.agreement, &b.enrol].iter().all(|k| is_hex(k, 32)) || !is_hex(&b.enrol_sig, 64) || !valid_agreement_key(&b.agreement) {
-                    return Err(fail("invalid genesis keys"));
-                }
-                if b.mode != "e2ee" {
-                    return Err(fail("only end-to-end encrypted organisations are supported in this version"));
-                }
-                if event.signer != b.device || b.person != person_id(&self.org, &b.device)? {
-                    return Err(fail("genesis must be signed by the owner's first device"));
-                }
-                if expected_enrol.is_some_and(|k| k != b.enrol) {
-                    return Err(fail("genesis does not match the setup code"));
-                }
-                if !ed25519_verify(&b.enrol, &enrol_message(&self.org, &b), &b.enrol_sig) {
-                    return Err(fail("genesis enrolment signature is invalid"));
-                }
-                if b.device == b.agreement || b.device == b.enrol {
-                    return Err(fail("genesis keys must be distinct"));
-                }
-                self.persons.insert(b.person.clone(), Person { role: "owner".into(), ..Default::default() });
-                self.devices.insert(b.device.clone(), Device { person: b.person, agreement: b.agreement });
-                self.mode = Some(b.mode);
-                self.admin_read = b.admin_read;
-                self.enrol = Some(b.enrol);
-                self.genesis = Some(hash.clone());
-            }
-            (_, false) => return Err(fail("the membership log must start with genesis")),
-            ("genesis", true) => return Err(fail("the organisation already has a genesis")),
-            ("recovery.set", true) => {
-                let b: RecoveryBody = serde_json::from_value(body).map_err(parse_error)?;
-                if !is_hex(&b.signing, 32) || !valid_agreement_key(&b.agreement) || b.signing == b.agreement {
-                    return Err(fail("invalid recovery keys"));
-                }
-                if self.device_person(&event.signer) != Some(b.person.as_str()) {
-                    return Err(fail("only the person's own device can set their recovery key"));
-                }
-                if self.known_key(&b.signing) || self.known_key(&b.agreement) {
-                    return Err(fail("recovery keys must be new"));
-                }
-                if !ed25519_verify(&b.signing, &recovery_proof_message(&self.org, &event.prev, &b.person, &b.signing, &b.agreement), &b.proof) {
-                    return Err(fail("the recovery key was not proven"));
-                }
-                let person = self.persons.get_mut(&b.person).ok_or(fail("unknown person"))?;
-                person.recovery_signing = Some(b.signing);
-                person.recovery_agreement = Some(b.agreement);
-            }
-            ("device.add", true) => {
-                let b: DeviceBody = serde_json::from_value(body).map_err(parse_error)?;
-                if !is_hex(&b.device, 32) || !valid_agreement_key(&b.agreement) || b.device == b.agreement {
-                    return Err(fail("invalid device keys"));
-                }
-                let certifier = match self.key_role(&event.signer) {
-                    Some(KeyRole::Device { person } | KeyRole::Recovery { person }) => person,
-                    None => return Err(fail("unknown certifier")),
-                };
-                if certifier != b.person || !self.persons.contains_key(&b.person) {
-                    return Err(fail("a device can only be added by the same person"));
-                }
-                // A device of the same person may come back with a new agreement key (its
-                // browser lost the old one); its signing key stays. Anything else must be new.
-                let rekey = self.devices.get(&b.device).is_some_and(|d| d.person == b.person);
-                if self.devices.contains_key(&b.device) && !rekey {
-                    return Err(fail("device keys must be new"));
-                }
-                if (!rekey && self.known_key(&b.device)) || self.known_key(&b.agreement) {
-                    return Err(fail("device keys must be new"));
-                }
-                if !ed25519_verify(&b.device, &device_proof_message(&self.org, &event.prev, &b.person, &b.device, &b.agreement), &b.proof) {
-                    return Err(fail("the new device did not prove possession of its key"));
-                }
-                self.devices.insert(b.device, Device { person: b.person, agreement: b.agreement });
-            }
-            ("project.create", true) => {
-                let b: ProjectBody = serde_json::from_value(body).map_err(parse_error)?;
-                if !is_hex(&b.project, 32) || !is_hex(&b.key_commit, 32) || b.epoch != 1 {
-                    return Err(fail("invalid project"));
-                }
-                let person = self.device_person(&event.signer).ok_or(fail("only a device can create a project"))?.to_string();
-                if self.projects.contains_key(&b.project) {
-                    return Err(fail("project already exists"));
-                }
-                self.projects.insert(b.project, Project { creator: person.clone(), epoch: 1, key_commit: b.key_commit, editors: vec![person] });
-            }
-            _ => return Err(fail("unsupported membership event type")),
-        }
-        self.head = hash.clone();
-        self.count += 1;
-        Ok(hash)
-    }
-}
+pub use crate::membership::*;
 
 // ---------------------------------------------------------------------------
 // Key wraps
@@ -636,6 +361,29 @@ pub const MAX_WRAP_BYTES: usize = 1024;
 pub fn wrap_context(wrap: &Wrap) -> Result<String> {
     canonical(&serde_json::json!({"v": wrap.v, "org": wrap.org, "project": wrap.project, "epoch": wrap.epoch, "recipient": wrap.recipient, "enc": wrap.enc, "sender": wrap.sender}))
 }
+fn wrap_key(shared: &[u8], wrap: &Wrap, context: &str) -> Result<Vec<u8>> {
+    let mut salt = unhex(&wrap.enc, 32)?;
+    salt.extend(unhex(&wrap.recipient, 32)?);
+    hkdf_sha256(shared, &salt, format!("scribyra-wrap/1{context}").as_bytes(), 32)
+}
+/// Opens a wrap with the recipient's X25519 secret (the browser does the same with WebCrypto).
+/// Only the shape is checked here; callers check the wrap against the membership state and
+/// the key against the epoch's commitment.
+pub fn open_wrap(wrap: &Wrap, recipient_secret: &[u8]) -> Result<Vec<u8>> {
+    let context = wrap_context(wrap)?;
+    let shared = x25519_shared(recipient_secret, &unhex(&wrap.enc, 32)?)?;
+    let key = wrap_key(&shared, wrap, &context)?;
+    open(&key, &unhex(&wrap.nonce, 24)?, context.as_bytes(), &unhex(&wrap.ct, 48)?).map_err(|_| fail("the key wrap could not be opened"))
+}
+/// Seals a 32-byte key to a recipient (an ephemeral X25519 key per wrap); the caller signs it.
+pub fn seal_wrap(wrap: &mut Wrap, ephemeral_secret: &[u8], nonce: &[u8; 24], key: &[u8]) -> Result<()> {
+    wrap.enc = hex(&x25519_public(ephemeral_secret)?);
+    wrap.nonce = hex(nonce);
+    let context = wrap_context(wrap)?;
+    let shared = x25519_shared(ephemeral_secret, &unhex(&wrap.recipient, 32)?)?;
+    wrap.ct = hex(&seal(&wrap_key(&shared, wrap, &context)?, nonce, context.as_bytes(), key)?);
+    Ok(())
+}
 pub fn wrap_signing_message(value: &Value) -> Result<Vec<u8>> {
     Ok(format!("scribyra-wrap/1\n{}", canonical(&without(value, "sig"))?).into_bytes())
 }
@@ -653,15 +401,16 @@ pub fn check_wrap(state: &OrgState, raw: &str) -> Result<Wrap> {
     if wrap.v != 1 || wrap.org != state.org || !is_hex(&wrap.enc, 32) || !is_hex(&wrap.nonce, 24) || !is_hex(&wrap.ct, 48) {
         return Err(fail("invalid key wrap"));
     }
-    let project = state.projects.get(&wrap.project).ok_or(fail("key wrap for an unknown project"))?;
-    if wrap.epoch == 0 || wrap.epoch > project.epoch {
+    // The target is a project, or the organisation's directory (project = org ID).
+    let epoch = state.key_epoch(&wrap.project).ok_or(fail("key wrap for an unknown project"))?;
+    if wrap.epoch == 0 || wrap.epoch > epoch {
         return Err(fail("key wrap for an unknown epoch"));
     }
     let sender = match state.key_role(&wrap.sender) {
         Some(KeyRole::Device { person }) => person,
         _ => return Err(fail("key wraps must come from a member device")),
     };
-    if !state.can_access(&sender, &wrap.project) || !state.wrap_recipients(&wrap.project).contains(&wrap.recipient) {
+    if !state.may_wrap(&sender, &wrap.project) || !state.wrap_recipients(&wrap.project).contains(&wrap.recipient) {
         return Err(fail("key wrap sender or recipient is not a project member"));
     }
     if !ed25519_verify(&wrap.sender, &wrap_signing_message(&value)?, &wrap.sig) {
@@ -782,9 +531,10 @@ mod tests {
         let device = hex(&ed25519_public(&device_seed).unwrap());
         let agreement = hex(&x25519_public(&[2u8; 32]).unwrap());
         let person = person_id(&org, &device).unwrap();
-        let mut body = GenesisBody { person: person.clone(), device: device.clone(), agreement, enrol: hex(&ed25519_public(&enrol).unwrap()), enrol_sig: String::new(), mode: "e2ee".into(), admin_read: true };
+        let name = hex(&[0x4e; 60]);
+        let mut body = GenesisBody { person: person.clone(), device: device.clone(), agreement, enrol: hex(&ed25519_public(&enrol).unwrap()), enrol_sig: String::new(), mode: "e2ee".into(), admin_read: true, name: name.clone(), directory_commit: hex(&[0x44; 32]), owner_name: name, service_key: None };
         body.enrol_sig = sign(&enrol, &enrol_message(&org, &body));
-        let raw = event(&org, &org, "genesis", json!({"person":body.person,"device":body.device,"agreement":body.agreement,"enrol":body.enrol,"enrolSig":body.enrol_sig,"mode":"e2ee","adminRead":true}), &device_seed);
+        let raw = event(&org, &org, "genesis", serde_json::to_value(&body).unwrap(), &device_seed);
         let mut state = OrgState::new(&org).unwrap();
         state.apply(&raw, Some(&body.enrol)).unwrap();
         Fixture { org, state, device_seed, person }

@@ -94,6 +94,7 @@ pub fn entry(org: &str, project: &str, seed: &[u8], client_seq: u64, epoch: u32,
 
 /// One organisation on a running service, with a local replay of its membership log.
 pub struct Org {
+    pub setup_secret: Vec<u8>,
     pub base: String,
     pub public: String,
     pub id: String,
@@ -125,9 +126,13 @@ impl Org {
         let owner = Device::new();
         let enrol_seed = core::enrol_seed(&secret).unwrap();
         let person = core::person_id(&id, &owner.key).unwrap();
-        let mut body = json!({"person":person,"device":owner.key,"agreement":owner.agreement,"enrol":core::hex(&core::ed25519_public(&enrol_seed).unwrap()),"enrolSig":"","mode":"e2ee","adminRead":true});
+        let mut body = json!({"person":person,"device":owner.key,"agreement":owner.agreement,"enrol":core::hex(&core::ed25519_public(&enrol_seed).unwrap()),"enrolSig":"","mode":"e2ee","adminRead":true,"name":random_hex(60),"directoryCommit":random_hex(32),"ownerName":random_hex(60)});
         for (k, v) in genesis_extra.as_object().unwrap() {
             body[k] = v.clone();
+        }
+        if body["mode"] == "managed" && body.get("serviceKey").is_none() {
+            let info = send("GET", &format!("{}/v1/orgs/{id}/info", s.url), None, "", b"").json();
+            body["serviceKey"] = info["serviceKey"].clone();
         }
         let parsed: core::GenesisBody = serde_json::from_value(body.clone()).unwrap();
         body["enrolSig"] = json!(core::hex(&core::ed25519_sign(&enrol_seed, &core::enrol_message(&id, &parsed)).unwrap()));
@@ -136,7 +141,7 @@ impl Org {
         assert_eq!(reply.status, 201, "{}", String::from_utf8_lossy(&reply.body));
         let mut state = core::OrgState::new(&id).unwrap();
         state.apply(&genesis, None).unwrap();
-        Org { base: s.url.clone(), public, id, state, owner, owner_person: person }
+        Org { setup_secret: secret, base: s.url.clone(), public, id, state, owner, owner_person: person }
     }
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
@@ -180,6 +185,30 @@ impl Org {
     pub fn device_body(&self, person: &str, device: &Device) -> Value {
         let proof = device.sign(&core::device_proof_message(&self.id, &self.state.head, person, &device.key, &device.agreement));
         json!({"person":person,"device":device.key,"agreement":device.agreement,"proof":proof})
+    }
+    /// Creates an invitation signed by `by`; returns (invite id, invitation seed).
+    pub fn invite(&mut self, token: &str, by: &Device, body: Value) -> (Reply, String, Vec<u8>) {
+        let (invite, seed) = (random_hex(16), random_bytes(32));
+        let mut full = json!({"invite":invite,"inviteKey":core::hex(&core::ed25519_public(&seed).unwrap()),"role":"member","expires":4_000_000_000u64,"approval":false,"sso":false});
+        for (k, v) in body.as_object().unwrap() {
+            full[k] = v.clone();
+        }
+        let reply = self.post(Some(token), "invite.create", full, &by.seed);
+        (reply, invite, seed)
+    }
+    pub fn join_body(&self, device: &Device, invite: &str, invite_seed: &[u8]) -> Value {
+        let person = core::person_id(&self.id, &device.key).unwrap();
+        let proof = device.sign(&core::device_proof_message(&self.id, &self.state.head, &person, &device.key, &device.agreement));
+        let invite_sig = core::hex(&core::ed25519_sign(invite_seed, &core::invite_message(&self.id, &self.state.head, invite, &person, &device.key, &device.agreement)).unwrap());
+        json!({"invite":invite,"person":person,"device":device.key,"agreement":device.agreement,"proof":proof,"inviteSig":invite_sig,"name":random_hex(60)})
+    }
+    /// Joins with an invitation (no session: the invitation authenticates the event).
+    pub fn join(&mut self, device: &Device, invite: &str, invite_seed: &[u8]) -> Reply {
+        let body = self.join_body(device, invite, invite_seed);
+        self.post(None, "person.join", body, &device.seed)
+    }
+    pub fn person(&self, device: &Device) -> String {
+        core::person_id(&self.id, &device.key).unwrap()
     }
     /// A wrap whose content is arbitrary (the service cannot open wraps anyway).
     pub fn wrap(&self, project: &str, epoch: u32, recipient: &str, sender: &Device) -> String {
