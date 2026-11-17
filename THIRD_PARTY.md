@@ -6,7 +6,7 @@ Scribyra's application code is AGPL-3.0-only. Dependencies retain their own lice
 | --- | --- | --- |
 | Leptos | Rust DOM UI | MIT |
 | wasm-bindgen | Rust/browser bindings | MIT OR Apache-2.0 |
-| CodeMirror 6 and bindings | Source editor | MIT |
+| CodeMirror 6 and bindings (including @codemirror/autocomplete 6.20.4) | Source editor and LaTeX autocomplete | MIT |
 | Yjs / y-codemirror.next | CRDT and editor binding | MIT |
 | Yrs | Rust CRDT implementation | MIT |
 | unicode-normalization | Portable project name comparison | (MIT OR Apache-2.0) AND Unicode-3.0 |
