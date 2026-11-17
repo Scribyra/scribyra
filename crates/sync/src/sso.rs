@@ -490,6 +490,10 @@ impl Sso {
     /// that subject and blocks its link; any other 4xx revokes that login only; network and
     /// server errors keep the login and retry on the next pass.
     pub async fn recheck(&self) {
+        // Expired or revoked logins are kept a week for operators, then deleted.
+        let _ = sqlx::query("DELETE FROM sso_logins WHERE expires < now() - interval '7 days' OR (revoked AND created < now() - interval '7 days')")
+            .execute(&self.store.pool)
+            .await;
         let rows = sqlx::query(
             "SELECT l.token_hash, l.org, l.issuer, l.subject, l.refresh_token
              FROM sso_logins l JOIN org_sso s ON s.org = l.org AND s.issuer = l.issuer
@@ -535,7 +539,8 @@ impl Sso {
                         .map(|_| ())
                         .map_err(StoreError::from)
                 }
-                Ok((status, body)) if (400..500).contains(&status) => {
+                // 408 and 429 are transient: keep the login and retry on the next pass.
+                Ok((status, body)) if (400..500).contains(&status) && status != 408 && status != 429 => {
                     revoked += 1;
                     let invalid_grant = serde_json::from_slice::<Value>(&body).ok().is_some_and(|v| v.get("error").and_then(Value::as_str) == Some("invalid_grant"));
                     if invalid_grant {
@@ -897,6 +902,11 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
         Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).collect(),
         _ => vec![],
     };
+    // Only configured issuers are ever contacted: an unknown `iss` must not make the service
+    // fetch an attacker-chosen URL.
+    if rows.is_empty() {
+        return refuse();
+    }
     let Ok(provider) = s.provider(issuer).await else { return refuse() };
     let mut matched = false;
     for row in rows {

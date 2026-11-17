@@ -232,6 +232,15 @@ fn backchannel_logout_revokes_logins() {
     let reply = agent().post(&c.url("/v1/sso/backchannel")).send_form([("logout_token", forged.as_str())]).unwrap();
     assert_eq!(reply.status().as_u16(), 400);
     assert_eq!(c.me(&bob).status, 200);
+    // A logout token naming an unconfigured issuer is refused without contacting it.
+    let trap = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    trap.set_nonblocking(true).unwrap();
+    let iss = format!("http://{}", trap.local_addr().unwrap());
+    let probe = format!("{}.{}.{}", b64(&json!({"alg":"RS256","kid":"rsa-1"})), b64(&json!({"iss": iss, "aud": CLIENT_ID, "iat": 0, "jti": "j", "sub": "sub-bob"})), "AAAA");
+    let reply = agent().post(&c.url("/v1/sso/backchannel")).send_form([("logout_token", probe.as_str())]).unwrap();
+    assert_eq!(reply.status().as_u16(), 400);
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(trap.accept().is_err_and(|e| e.kind() == std::io::ErrorKind::WouldBlock), "the service contacted an unconfigured issuer");
 }
 fn b64(value: &Value) -> String {
     use base64::Engine;

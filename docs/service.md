@@ -134,6 +134,8 @@ Added with organisation sync; the organisation routes document their use.
 | `org_bytes` | 1073741824 | Default stored-bytes quota per organisation (1 GiB) |
 | `entry_inline_bytes` | 65536 | Log entries up to this size are stored inline in PostgreSQL; larger ones go to the blob store |
 | `sessions` | 10000 | Maximum live organisation sessions |
+| `sso_recheck_tick_seconds` | 60 | How often the single sign-on recheck runs (1–3600) |
+| `sso_jwks_refetch_seconds` | 60 | Minimum interval between key-set refetches caused by an unknown key ID (0–3600) |
 
 ### Access and limits
 
@@ -277,6 +279,110 @@ D will supply UI, persistent identity, signed membership and project replication
 The retained browser test demonstrates normal immediate local descriptions and
 trickled ICE in **both** directions, with no deferred answer and no ICE servers.
 Its direct data-channel traffic never passes through the service.
+
+## Single sign-on (OIDC)
+
+Each organisation can use its own OpenID Connect identity provider. The service is a
+confidential relying party (authorization code flow, PKCE S256, `client_secret_basic`).
+An SSO login proves who someone is at the provider; it grants no project keys, and
+linking a provider account to an organisation member is the organisation's business.
+`public_url` and `origins` must be set: the app's origin must be in `origins`, because
+the service only ever redirects back to a configured origin.
+
+**Register the service at the provider** as a confidential web client with:
+
+- redirect URI `<public_url>/v1/sso/callback` (exactly; `org sso` prints it),
+- grant types authorization code and refresh token,
+- optionally the back-channel logout URI `<public_url>/v1/sso/backchannel`.
+
+**Configure an organisation** (beside the running service, like `org create`):
+
+```sh
+scribyra-sync org sso --org <org-id> --issuer https://idp.example.org/realms/lab \
+  --client-id scribyra --client-secret-file /run/secrets/scribyra-oidc \
+  [--required] [--email-domain example.org] [--groups-claim groups] \
+  [--session-hours 12] [--recheck-minutes 10] [--offline-access]
+scribyra-sync org sso --org <org-id> --off
+```
+
+The secret is read from a file (one line) and never printed or logged. The issuer must
+be `https://` (`http://` only on loopback) and must equal the `issuer` in the provider's
+`/.well-known/openid-configuration` character for character, including any trailing
+slash; a mismatch refuses sign-in. Running the command again replaces the settings.
+`--off` removes them and ends every SSO login of that organisation.
+`--required` is published to the app (`GET /v1/orgs/<org>/sso`); enforcing it at
+organisation sign-in belongs to the organisation routes, which do not yet consult it. `--email-domain` admits only ID tokens with `email_verified: true`
+and an email in exactly that domain (and, when the token has a Google `hd` claim, `hd`
+equal to the domain). `--groups-claim` names a claim holding an array of group names
+(at most 256 kept, longer than 256 bytes dropped). `--offline-access` adds the
+`offline_access` scope, which some providers require before they issue refresh tokens.
+
+**What is stored.** In PostgreSQL: the provider settings **including the client secret
+in plain text** (table `org_sso`), each login's subject, email, name, groups and
+provider session ID, the SHA-256 of the login token (never the token), and the
+provider's **refresh token in plain text** (table `sso_logins`), plus the links between
+provider subjects and members (`sso_links`). Protect database access and backups
+accordingly. Expired and revoked logins are deleted after a week. Discovery documents
+and key sets are cached in memory for an hour; an unknown key ID refetches the key set
+at most once per `sso_jwks_refetch_seconds`, so key rotation needs no restart.
+
+**Accepted tokens.** ID tokens must be signed with `RS256` (2048-bit or larger keys),
+`ES256` or `EdDSA` by a key in the provider's key set, matching the key's type and
+`alg`; `none` and `HS*` are always refused. `iss` must match exactly, `aud` must
+contain the client ID (with several audiences, `azp` must be the client ID), `exp` must
+not have passed (two minutes of clock skew allowed), `iat` must not be more than five
+minutes ahead, and `nonce` must match the sign-in. Keep the service's clock synchronised.
+
+**Recheck and blocking.** Every `sso_recheck_tick_seconds`, logins that hold a refresh
+token and were last checked more than `--recheck-minutes` ago are refreshed at the
+provider (rotated refresh tokens are stored). If the provider answers `invalid_grant`
+(account disabled or deleted, consent or session revoked), every login of that person in
+the organisation is revoked and their link is **blocked**: they can sign in at the
+provider again, but stay blocked until an organisation admin unlinks them. Any other
+client error (except 408 and 429) revokes only that login without blocking, so a
+wrong client secret does not block everyone. Network and server errors keep the login
+and retry on the next pass; the service logs only counters
+(`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
+simply expire after `--session-hours`. Each revocation of a linked member's login is
+published in-process (`Sso::revocations`) so the organisation module can close their
+device sessions; that wiring is not part of this change.
+
+**Back-channel logout** (OpenID Connect Back-Channel Logout 1.0) is accepted at
+`/v1/sso/backchannel`: a logout token signed like an ID token, with the back-channel
+logout event, no `nonce`, and `sub` and/or `sid`, revokes the matching logins. Only
+configured issuers are contacted to verify it.
+
+**Logging.** The service never logs tokens, codes, client secrets, ID tokens, emails or
+provider error text; failures are logged as fixed reason codes
+(`{"event":"sso_refused","reason":"claim_aud"}`) and the app receives a short code in
+the redirect fragment (`#scribyra-sso-error=id_token`).
+
+**Provider notes.**
+
+- *Microsoft Entra ID*: use the tenant-specific issuer
+  `https://login.microsoftonline.com/<tenant-id>/v2.0`, never `common` or
+  `organizations` (their discovery `issuer` is a template and will not match). Use
+  `--offline-access` to receive refresh tokens. The `email` claim may be missing or not
+  verified for many accounts, so `--email-domain` can refuse legitimate users; test it
+  with your tenant before relying on it. Group claims are object IDs by default, and a
+  user in too many groups gets an overage indicator instead of the list, so the groups
+  the service sees can be incomplete.
+- *Google Workspace*: issuer `https://accounts.google.com`. Use `--email-domain` with
+  your Workspace domain: the `hd` claim is checked too. Google sends no groups claim.
+  Google issues refresh tokens only for offline access requests, which this service
+  does not make, so Google logins are not rechecked and last for `--session-hours`.
+- *Okta*: use a custom authorization server's issuer
+  (`https://<org>.okta.com/oauth2/<server-id>`, or `/oauth2/default`). Groups appear
+  only after you add a groups claim to that authorization server; name it with
+  `--groups-claim`. Use `--offline-access` for refresh tokens.
+- *Keycloak*: issuer `https://<host>/realms/<realm>`. Add a "Group Membership" mapper
+  to the client to get a groups claim. Keycloak issues refresh tokens without
+  `offline_access` and supports back-channel logout (set the client's back-channel
+  logout URL).
+
+For local trials and the tests there is a minimal provider,
+`cargo run -p scribyra-sync --example test-idp -- --config idp.json`; see the comment
+at the top of `crates/sync/examples/test-idp.rs`. It is not for production use.
 
 ## TLS, logging and supervision
 
