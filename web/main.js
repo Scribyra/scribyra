@@ -320,7 +320,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
     decide:command=>collaboration.commands.execute({version:2,requestId:crypto.randomUUID(),projectId:id,expectedRevision:collaboration.commands.revision(),command},undefined,{uiGuard:uiCollaborationGuard(()=>collaboration.review.state.mode)})});
   initialDirectInvite='';
   Object.assign(state,collaboration.state);
-  agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
+  agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,mode:()=>collaboration?.review.state.mode,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
   window.scribyra.agent=agent.api;
   loadWorkspace();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');

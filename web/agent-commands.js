@@ -14,7 +14,7 @@ const jsonBytes=value=>new TextEncoder().encode(JSON.stringify(value)).length;
 export {localAuthor as localAgentOwner} from './local-author.js';
 // Installed by the trusted workspace, on its internal v2 dispatcher. Closing the
 // project also revokes retained references, pending jobs and successful retries.
-export function agentCommands({doc,projectId,commands,owner,ensureUndo=()=>{},compile,isBusy,getState,getPdf,download,isActive=()=>true,build=null}){
+export function agentCommands({doc,projectId,commands,owner,ensureUndo=()=>{},compile,isBusy,getState,getPdf,download,isActive=()=>true,build=null,mode=()=>'editing'}){
  // With sessions on, the agent's ID derives from its owner and session so peers can check the
  // delegation. Off, it is a random ID drawn exactly as before direct sessions existed.
  const limits=Object.freeze(JSON.parse(agent_limits())),drawn=directEnabled()?null:crypto.randomUUID(),sessionId=crypto.randomUUID(),authorId=drawn||delegatedAuthorId(owner.id,sessionId),jobs=new Map(),unregister=[];
@@ -56,6 +56,21 @@ export function agentCommands({doc,projectId,commands,owner,ensureUndo=()=>{},co
   }).catch(error=>{job.status=job.controller.signal.aborted||error.name==='AbortError'?'cancelled':'failed';job.error={code:typeof error.code==='string'?error.code:'operation_failed',message:boundedText(error.message,512)};}).finally(()=>wake(job));
   return summary(job);
  };
+ // One review per agent session collects its suggestions; a closed review gets a successor.
+ let suggestionReview=null;
+ const call=command=>{
+  const result=commands.execute({version:2,requestId:crypto.randomUUID(),projectId,expectedRevision:revision(),command},undefined,{actor});
+  if(!result.ok)throw failure(result.error.code,result.error.message);return result.value;
+ };
+ const suggestEdits=edits=>{
+  const propose=edit=>call({op:'suggestion.propose',reviewId:suggestionReview,fileId:edit.fileId,start:edit.start,end:edit.end,before:edit.before,after:edit.after});
+  suggestionReview??=call({op:'review.create',title:'Agent suggestions'}).reviewId;
+  const suggestionIds=edits.map((edit,i)=>{
+   try{return propose(edit).suggestionId;}
+   catch(error){if(i||error.code!=='decision_conflict')throw error;suggestionReview=call({op:'review.create',title:'Agent suggestions'}).reviewId;return propose(edit).suggestionId;}
+  });
+  return value({count:0,suggested:suggestionIds.length,suggestionIds,reviewId:suggestionReview,activationRequired:false});
+ };
  const handlers={
   status:{capabilities:['read'],prepare:()=>null,commit:()=>{
    const state=getState(),file=projectNode(doc,state.active);
@@ -93,6 +108,10 @@ export function agentCommands({doc,projectId,commands,owner,ensureUndo=()=>{},co
    });
    const sources=Object.fromEntries([...new Set(edits.map(e=>e.fileId))].filter(id=>{const file=projectNode(doc,id);return file&&!file.folder&&!file.binary;}).map(id=>[id,doc.getText(`text:${id}`).toString()]));
    try{validate_source_patch(JSON.stringify(edits),JSON.stringify(sources),projectBytes(doc));}catch(error){throw commandError(error);}
+   // The person's mode is their choice for every change, the agent's included: Reviewing turns
+   // the patch into suggestions they accept or reject, and Viewing refuses it.
+   if(mode()==='viewing')throw failure('viewing_mode','The person chose Viewing mode; ask them to switch to Editing or Reviewing.');
+   if(mode()==='reviewing')return{edits,suggest:true};
    const changeId=crypto.randomUUID(),createdAt=Date.now(),base={version:1,authorId,changeId,createdAt},records={
     authors:{[owner.id]:{...base,id:owner.id,authorId:owner.id,kind:'human',displayName:owner.displayName,ownerAuthorId:null},[authorId]:{...base,id:authorId,kind:'agent',displayName:'Agent',ownerAuthorId:owner.id}},
     changes:{[changeId]:{...base,id:changeId,actorKind:'agent',sessionId,kind:'agent.patchSource',fileIds:[...new Set(edits.map(e=>e.fileId))],suggestionId:null,proposedBy:null,undoOf:null,restoreOf:null}},
@@ -101,7 +120,8 @@ export function agentCommands({doc,projectId,commands,owner,ensureUndo=()=>{},co
    for(const [root,entries]of Object.entries(records))for(const [id,record]of Object.entries(entries))if(root!=='authors'||!doc.getMap(root).has(id))state[root][id]=record;
    validate_collaboration_state(JSON.stringify(state));
    return{edits,records,changeId};
-  },commit:({edits,records,changeId})=>{
+  },commit:({edits,records,changeId,suggest})=>{
+   if(suggest)return suggestEdits(edits);
    for(const id of new Set(edits.map(edit=>edit.fileId)))ensureUndo(id);
    let count;doc.transact(()=>{
     count=applySourceEdits(doc,edits).count;

@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import {addFile} from '../web/model.js';
 import {collaborationCommands} from '../web/collaboration-commands.js';
+import {agentCommands} from '../web/agent-commands.js';
 const request=(host,op,overrides={})=>({version:2,requestId:crypto.randomUUID(),projectId:'p',expectedRevision:host.revision(),command:{op},...overrides});
 test('v2 stubs advertise nothing, enforce independent rights, scope, revisions and closed hosts',()=>{
  const doc=new Y.Doc();addFile(doc,'main.tex','source');let active=true;
@@ -173,4 +174,22 @@ test('isolated preview permits comment edits and retains its snapshot without a 
   f.host.register('history.name',{isolated:true,prepare:()=>null,commit:()=>({valueVersion:1})});
   assert.equal((await f.call({op:'history.name',label:'Invalid isolated write'})).error.code,'invalid_request');
  }finally{comments.close();coordinator.close();await f.close();}
+});
+
+test('agent patches follow the person\'s mode: Reviewing proposes attributed suggestions, Viewing refuses',async()=>{
+ const f=await reviewFixture();let mode='reviewing';
+ const agent=agentCommands({doc:f.doc,projectId:f.projectId,commands:f.host,owner:{id:f.author.id,displayName:'Reviewer'},mode:()=>mode,compile:()=>new Promise(()=>{}),isBusy:()=>false,getState:()=>({}),getPdf:()=>null,download:()=>{}});
+ const patch=(requestId,find,replace)=>agent.api.patchSource({expectedRevision:f.host.revision(),requestId,edits:[{path:'main.tex',find,replace}]});
+ try{
+  const base=f.host.revision(),proposed=patch('suggest',' bravo',' BRAVO');assert.equal(proposed.ok,true,JSON.stringify(proposed.error));
+  assert.equal(proposed.value.count,0);assert.equal(proposed.value.suggested,1);assert.equal(f.source(),'alpha bravo charlie');
+  const suggestion=f.doc.getMap('suggestions').get(proposed.value.suggestionIds[0]);assert.deepEqual([suggestion.before,suggestion.after],[' bravo',' BRAVO']);
+  assert.equal(f.doc.getMap('authors').get(suggestion.authorId).kind,'agent');assert.equal(f.doc.getMap('reviews').get(proposed.value.reviewId).title,'Agent suggestions');
+  assert.deepEqual(agent.api.execute({version:2,requestId:'suggest',projectId:f.projectId,expectedRevision:base,command:{op:'agent.patchSource',edits:[{path:'main.tex',find:' bravo',replace:' BRAVO'}]}}).value.suggestionIds,proposed.value.suggestionIds);
+  assert.equal(f.doc.getMap('suggestions').size,1);
+  const second=patch('suggest-2','charlie','CHARLIE');assert.equal(second.value.reviewId,proposed.value.reviewId);
+  const accepted=await f.accept([proposed.value.suggestionIds[0]]);assert.equal(accepted.ok,true,JSON.stringify(accepted.error));assert.equal(f.source(),'alpha BRAVO charlie');
+  mode='viewing';const refused=patch('view','alpha','ALPHA');assert.equal(refused.error.code,'viewing_mode');assert.equal(f.source(),'alpha BRAVO charlie');
+  mode='editing';assert.equal(patch('edit','alpha','ALPHA').value.count,1);assert.equal(f.source(),'ALPHA BRAVO charlie');
+ }finally{agent.close();await f.close();}
 });
