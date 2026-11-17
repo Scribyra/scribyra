@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Email contact@scribyra.com
+    url: mailto:contact@scribyra.com
+    about: Questions, private reports and security problems.
+  - name: What works today
+    url: https://github.com/Scribyra/scribyra/blob/main/docs/features.md
+    about: The complete feature list, with known limits.
+  - name: Roadmap
+    url: https://github.com/Scribyra/scribyra/blob/main/docs/roadmap.md
+    about: What is planned and in what order.
