@@ -61,6 +61,7 @@ test('authentication, namespace, version, origin, hash and object bounds fail cl
     assert.equal((await fetch(s.object(bytes),{method:'PUT',headers:s.headers,body:randomBytes(257)})).status,413);
     const cors=await fetch(s.object(bytes),{method:'OPTIONS',headers:{Origin:s.config.origins[0],'Access-Control-Request-Method':'PUT','Access-Control-Request-Headers':'authorization,content-type'}});
     assert.equal(cors.headers.get('access-control-allow-origin'),s.config.origins[0]);
+    assert.equal(cors.headers.get('access-control-max-age'),'3600');
     assert.equal((await fetch(s.object(bytes),{method:'PUT',headers:s.headers,body:bytes})).status,201);
   } finally {await s.close();}
 });
@@ -78,7 +79,12 @@ test('serialized quotas bound concurrent writes and idempotent retries consume n
 
 test('health has bounded capacity independent of ordinary request admission',async()=>{
   const s=await service({requests_per_second:2});
-  try { const statuses=await Promise.all(Array.from({length:8},()=>fetch(s.url+'/health').then(r=>r.status)));assert(statuses.includes(429));assert(statuses.filter(x=>x===200).length<=2); }
+  try {
+    const statuses=await Promise.all(Array.from({length:8},()=>fetch(s.url+'/health').then(r=>r.status)));assert(statuses.includes(429));assert(statuses.filter(x=>x===200).length<=2);
+    // A refusal is readable by an allowed page: it carries the CORS headers, so the browser sees 429, not a network error.
+    const refused=(await Promise.all(Array.from({length:8},()=>fetch(s.url+'/v1',{headers:{Origin:s.config.origins[0]}})))).filter(r=>r.status===429);
+    assert(refused.length>0);for(const r of refused)assert.equal(r.headers.get('access-control-allow-origin'),s.config.origins[0]);
+  }
   finally {await s.close();}
 });
 

@@ -974,6 +974,8 @@ async fn pending(State(o): State<Shared>, Path(org): Path<String>, headers: Head
     Json(serde_json::json!({"pending": out})).into_response()
 }
 
+/// The longest a heads long poll waits for a change.
+pub const MAX_HEADS_WAIT_SECS: u64 = 25;
 #[derive(Deserialize)]
 struct Heads {
     #[serde(default)]
@@ -994,7 +996,7 @@ async fn heads(State(o): State<Shared>, Path(org): Path<String>, Query(q): Query
     }
     let mut rx = o.changes(&org);
     if q.since == Some(*rx.borrow_and_update()) && q.wait > 0 {
-        let _ = tokio::time::timeout(Duration::from_secs(q.wait.min(25)), rx.changed()).await;
+        let _ = tokio::time::timeout(Duration::from_secs(q.wait.min(MAX_HEADS_WAIT_SECS)), rx.changed()).await;
     }
     let version = *rx.borrow();
     let slot = match o.slot(&org).await {

@@ -213,8 +213,16 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
             return StatusCode::FORBIDDEN.into_response();
         }
     }
+    // The heads long poll waits up to its own bound before it answers; every other request
+    // gets the ordinary deadline. Cutting the long poll short would answer every idle poll 408.
+    let path = request.uri().path();
+    let deadline = if request.method() == Method::GET && path.starts_with("/v1/orgs/") && path.ends_with("/heads") {
+        Duration::from_secs(crate::org::MAX_HEADS_WAIT_SECS + 15)
+    } else {
+        Duration::from_secs(15)
+    };
     let mut observation = telemetry::native::global().begin(Operation::SyncHttp, None);
-    let response = tokio::time::timeout(Duration::from_secs(15), next.run(request))
+    let response = tokio::time::timeout(deadline, next.run(request))
         .await
         .unwrap_or_else(|_| StatusCode::REQUEST_TIMEOUT.into_response());
     if response.status().is_success() {
@@ -560,14 +568,19 @@ pub fn router(s: Shared) -> Router {
         .with_state(s.clone())
         .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone(), s.sso.clone())))
         .merge(crate::sso::routes(s.sso.clone()))
+        .layer(middleware::from_fn_with_state(s, guard))
+        // Outermost, so the guard's refusals (429, 503, 403) reach the page as statuses rather
+        // than as opaque network errors, and preflights are answered without spending the
+        // caller's request budget. Browsers that do not cache a preflight without a max-age
+        // (Firefox) would otherwise send two requests for every authenticated one.
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
                 .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::POST, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
-                .expose_headers([header::HeaderName::from_static("scribyra-log-head")]),
+                .expose_headers([header::HeaderName::from_static("scribyra-log-head")])
+                .max_age(Duration::from_secs(3600)),
         )
-        .layer(middleware::from_fn_with_state(s, guard))
 }
 /// Serve until SIGTERM/SIGINT. Exits the process if the database ownership lock is lost.
 pub async fn serve(store: Store) -> Result<(), store::Error> {

@@ -126,3 +126,17 @@ test('sessions are bound to the service address and challenges are single-use',a
   await assert.rejects(anonymous.wraps(o.org),e=>e.status===401);
  }finally{await s.close();}
 });
+
+test('the heads long poll waits past the ordinary request deadline and wakes on a change',async()=>{
+ const s=await service({org:true});
+ try{
+  const o=await owner(s),first=await o.client.heads(o.org,undefined,0);
+  // An idle poll answers after its wait (longer than the 15 s request deadline), not 408.
+  let started=Date.now(),idle=await o.client.heads(o.org,first.version,17);
+  assert.equal(idle.version,first.version);assert(Date.now()-started>=16000);
+  // A change wakes a waiting poll at once.
+  started=Date.now();const waiting=o.client.heads(o.org,first.version,25);
+  await new Promise(resolve=>setTimeout(resolve,500));await project(o);
+  assert.notEqual((await waiting).version,first.version);assert(Date.now()-started<10000);
+ }finally{await s.close();}
+});
