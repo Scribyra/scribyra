@@ -134,6 +134,7 @@ for(const theme of ['light','dark'])test(`${theme} popups pass axe and are captu
 const large=process.env.SCRIBYRA_LARGE_PROJECTS;
 for(const project of ['thesis','long-file'])test(`${project}: opening and filtering stay within a frame`,async({page,browserName})=>{
   test.skip(!large||!existsSync(join(large||'',`${project}.zip`)),'set SCRIBYRA_LARGE_PROJECTS to the generated projects');test.setTimeout(600000);
+  await page.addInitScript(()=>{window.__indexBatches=[];new PerformanceObserver(list=>{for(const entry of list.getEntries())if(entry.name==='latex-index-batch')window.__indexBatches.push(entry.duration);}).observe({entryTypes:['measure']});});
   await page.goto('/');const chooser=page.waitForEvent('filechooser');await page.getByRole('button',{name:'Import ZIP',exact:true}).click();
   await (await chooser).setFiles({name:`${project}.zip`,mimeType:'application/zip',buffer:readFileSync(join(large,`${project}.zip`))});await expect(page.locator('.cm-content')).toBeVisible({timeout:120000});
   if(project==='thesis'){await page.getByRole('treeitem').filter({hasText:/^chapters$/}).first().click().catch(()=>{});const chapter=page.getByRole('treeitem',{name:/chapter\.tex$|\.tex$/}).nth(3);await chapter.click();}
@@ -157,5 +158,6 @@ for(const project of ['thesis','long-file'])test(`${project}: opening and filter
     const sorted=[...builds].filter(Number.isFinite).sort((a,b)=>a-b);results[name]={buildMaxMs:+sorted.at(-1).toFixed(2),buildMedianMs:+sorted[sorted.length>>1].toFixed(2),keyToFrameMs:times.map(t=>+t.toFixed(1))};
     expect(sorted.at(-1)).toBeLessThan(16);
   }
+  const batches=await page.evaluate(()=>window.__indexBatches);results.indexBatches={count:batches.length,maxMs:+Math.max(...batches).toFixed(1),totalMs:+batches.reduce((a,b)=>a+b,0).toFixed(1)};
   console.log(`autocomplete-performance ${browserName} ${project} ${JSON.stringify(results)}`);
 });

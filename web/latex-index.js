@@ -104,9 +104,11 @@ export function latexIndex(doc,{quiet=250,schedule=idle,now=()=>performance.now(
     parseTime+=now()-started;version++;cache=null;
   }
   function work(deadline){
-    pending=false;if(closed)return;
+    pending=false;if(closed)return;const started=now();
     if(structureDirty)rebuild();
-    for(const id of dirty){dirty.delete(id);parse(id);if(deadline&&deadline.timeRemaining()<1&&dirty.size)break;}
+    for(const id of dirty){dirty.delete(id);parse(id);if(deadline&&dirty.size&&(deadline.timeRemaining()<1||now()-started>6))break;}
+    // One entry per batch of main-thread work, for measurement (docs/autocomplete.md).
+    try{performance.clearMeasures('latex-index-batch');performance.measure('latex-index-batch',{start:started,end:now()});}catch{}
     if(dirty.size||structureDirty)request();
   }
   function request(){if(!pending&&!closed){pending=true;schedule(work);}}

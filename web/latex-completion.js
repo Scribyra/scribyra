@@ -108,7 +108,7 @@ export function environmentTemplate(name,args,body){return `\\begin{${name}}${ar
 const escapeName=name=>name.replace(/[{}]/g,'\\$&');
 
 // ---- Data -----------------------------------------------------------------------------------
-let catalogPromise=null;
+let catalogPromise=null,loadedCatalog=null;
 export function buildCatalog({COMMANDS,ENVIRONMENTS,CLASSES,BIBSTYLES},packageNames=[]){
   const commands=COMMANDS.map(([name,template,description,pkg,rank])=>({label:'\\'+name,match:name,name,template,detail:shapeOf(template),description,source:pkg||'LaTeX',rank,usageKey:'\\'+name+template}));
   // Packages the curated data mentions, and a few more that most documents load, rank first.
@@ -207,19 +207,23 @@ const EMPTY_INDEX={labels:[],citations:[],commands:[],environments:[],paths:{tex
  * names the open file. Read-only editors (Viewing) get no completions at all.
  */
 export function latexCompletion({index=()=>null,currentPath=()=>''}={}){
-  const source=async context=>{
-    const {state}=context;
-    if(state.readOnly||context.view?.composing)return null;
-    const latex=latexContext(state.doc,context.pos);if(!latex)return null;
-    // Typing ordinary words never opens it; `\`, an argument brace or Ctrl+Space do.
-    const catalog=await loadCompletionCatalog();
-    if(context.aborted)return null;
-    const started=performance.now(),project=index();
-    const options=completionOptions(latex,catalog,project?.snapshot()||EMPTY_INDEX,{usage:readUsage(),currentPath:currentPath(),nextChar:state.sliceDoc(latex.to,latex.to+1)});
+  const build=(context,latex,started)=>{
+    const {state}=context,project=index();
+    const options=completionOptions(latex,loadedCatalog,project?.snapshot()||EMPTY_INDEX,{usage:readUsage(),currentPath:currentPath(),nextChar:state.sliceDoc(latex.to,latex.to+1)});
     // Measured per request; read with performance.getEntriesByName('latex-completion').
     try{performance.clearMeasures('latex-completion');performance.measure('latex-completion',{start:started,end:performance.now()});}catch{}
     if(!options.length)return null;
     return {from:latex.from,to:latex.to,options,filter:false,getMatch:option=>option.ranges};
+  };
+  // Synchronous once the data is loaded, so the list follows each keystroke in the same update.
+  const source=context=>{
+    const {state}=context;
+    if(state.readOnly||context.view?.composing)return null;
+    const started=performance.now(),latex=latexContext(state.doc,context.pos);
+    // Typing ordinary words never opens it; `\`, an argument brace or Ctrl+Space do.
+    if(!latex)return null;
+    if(loadedCatalog)return build(context,latex,started);
+    return loadCompletionCatalog().then(catalog=>{loadedCatalog=catalog;return context.aborted?null:build(context,latex,performance.now());});
   };
   const render=(className,field)=>({position:className==='cm-completionSource'?85:90,render(option){
     if(!option[field])return null;const span=document.createElement('span');span.className=className;
