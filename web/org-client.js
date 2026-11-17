@@ -78,6 +78,13 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
    if(!Array.isArray(result?.wraps)||!result.wraps.every(w=>typeof w==='string'))throw new ServiceError(0,'The service sent invalid key wraps.');
    return result.wraps;
   },
+  /** Uploads one encrypted object part under its keyed ID (idempotent: same bytes, same ID). */
+  async putObject(project,id,epoch,body){await request(`/v1/projects/${project}/objects/${id}?epoch=${epoch}`,{method:'PUT',type:'application/octet-stream',body,timeout:Math.max(timeoutMs,120000)});},
+  /** Fetches one encrypted object part; null when the service has no object under that ID. */
+  async getObject(project,id){
+   try{return new Uint8Array(await (await request(`/v1/projects/${project}/objects/${id}`,{timeout:Math.max(timeoutMs,120000)})).arrayBuffer());}
+   catch(error){if(error instanceof ServiceError&&error.status===404)return null;throw error;}
+  },
   /** Appends one entry. Resolves to {seq, chain, repeated}. */
   async append(project,body){
    const response=await request(`/v1/projects/${project}/log`,{method:'POST',type:'application/octet-stream',body});

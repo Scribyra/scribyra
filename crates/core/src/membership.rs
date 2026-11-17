@@ -327,6 +327,11 @@ impl OrgState {
     pub fn can_write(&self, person: &str, project: &str) -> bool {
         self.project_role(person, project) == Some("editor")
     }
+    /// Encrypted objects (assets, history objects) of a project: editors upload them before the
+    /// entry that references them; every member may fetch them. Same rule as the log.
+    pub fn object_access(&self, person: &str, project: &str, write: bool) -> bool {
+        if write { self.can_write(person, project) } else { self.can_access(person, project) }
+    }
     fn person_keys(&self, person: &str, out: &mut BTreeSet<String>) {
         if !self.active(person) {
             return;
@@ -1187,5 +1192,21 @@ mod tests {
         let before = o.state.clone();
         assert!(o.apply("person.approve", json!({"person":person,"role":"superuser"}), &owner.seed).is_err());
         assert_eq!(o.state, before);
+    }
+
+    #[test]
+    fn objects_follow_project_roles() {
+        let (mut o, owner) = org("e2ee", false);
+        let (invite, seed) = o.invite(&owner, 2, "member", false, None).unwrap();
+        let ben = dev(2);
+        o.join(&ben, &invite, &seed).unwrap();
+        let project = o.project(&owner, 40);
+        let (owner_p, ben_p) = (o.person(&owner), o.person(&ben));
+        assert!(o.state.object_access(&owner_p, &project, true));
+        assert!(!o.state.object_access(&ben_p, &project, false));
+        o.apply("project.grant", json!({"project":project,"person":ben_p,"role":"viewer"}), &owner.seed).unwrap();
+        assert!(o.state.object_access(&ben_p, &project, false) && !o.state.object_access(&ben_p, &project, true));
+        o.apply("person.remove", json!({"person":ben_p}), &owner.seed).unwrap();
+        assert!(!o.state.object_access(&ben_p, &project, false));
     }
 }

@@ -420,6 +420,129 @@ pub fn check_wrap(state: &OrgState, raw: &str) -> Result<Wrap> {
 }
 
 // ---------------------------------------------------------------------------
+// Encrypted objects: binary assets and history checkpoint objects (design slice 6)
+//
+// An object is identified on the service by a keyed ID, `HMAC(K_objid[e], kind ‖ plaintext
+// hash ‖ part)`, so the service never sees a plaintext hash and cannot tell whether two
+// projects (or two epochs) hold the same file. Plaintexts larger than one part are split into
+// `OBJECT_PART_BYTES` parts, each sealed on its own. The nonce is derived from `K_blob[e]` and
+// the ID, so the same plaintext part always seals to the same bytes under one epoch: two
+// devices uploading the same image write identical objects (an idempotent PUT), and since the
+// ID is bound to the plaintext hash, one nonce never seals two different plaintexts.
+
+pub const OBJECT_KINDS: &[&str] = &["asset", "history"];
+/// Plaintext bytes per object part; with the 40-byte overhead it fits the service's default
+/// 8 MiB object limit, and history chunks (at most 4 MiB) are always one part.
+pub const OBJECT_PART_BYTES: usize = 4 * 1024 * 1024;
+/// The largest plaintext object: binary assets are bounded at 64 MiB in the app.
+pub const MAX_OBJECT_BYTES: u64 = 64 * 1024 * 1024;
+/// At most this many objects are listed in one `blobref` entry.
+pub const MAX_BLOBREF_OBJECTS: usize = 512;
+
+/// Parts a plaintext of `size` bytes is split into (an empty object is one empty part).
+pub fn object_parts(size: u64) -> u32 {
+    size.div_ceil(OBJECT_PART_BYTES as u64).max(1) as u32
+}
+fn object_check(kind: &str, hash: &str, part: u32, parts: u32) -> Result<()> {
+    if !OBJECT_KINDS.contains(&kind) || !is_hex(hash, 32) || parts == 0 || part >= parts || parts > object_parts(MAX_OBJECT_BYTES) {
+        return Err(fail("invalid object reference"));
+    }
+    Ok(())
+}
+/// The keyed object ID the service stores a part under.
+pub fn object_id(project_key: &[u8], kind: &str, hash: &str, part: u32, parts: u32) -> Result<String> {
+    object_check(kind, hash, part, parts)?;
+    let key = project_subkey(project_key, "object-id")?;
+    Ok(hex(&hmac_sha256(&key, format!("scribyra-object-id/1\n{kind}\n{hash}\n{part}\n{parts}").as_bytes())))
+}
+/// Associated data of an object part: everything that identifies it, so a part moved to another
+/// project, epoch, ID, kind or position does not open.
+pub fn object_context(org: &str, project: &str, epoch: u32, id: &str, kind: &str, hash: &str, part: u32, parts: u32) -> Result<String> {
+    canonical(&serde_json::json!({"v": 1, "org": org, "project": project, "epoch": epoch, "id": id, "kind": kind, "hash": hash, "part": part, "parts": parts}))
+}
+/// The service's own minimum for an object body: a nonce and a tag.
+pub const OBJECT_OVERHEAD: usize = 24 + 16;
+/// Seals one plaintext part. Returns `(id, nonce ‖ ciphertext)`.
+#[allow(clippy::too_many_arguments)]
+pub fn seal_object(project_key: &[u8], org: &str, project: &str, epoch: u32, kind: &str, hash: &str, part: u32, parts: u32, plaintext: &[u8]) -> Result<(String, Vec<u8>)> {
+    if plaintext.len() > OBJECT_PART_BYTES || (part + 1 < parts && plaintext.len() != OBJECT_PART_BYTES) {
+        return Err(fail("invalid object part"));
+    }
+    let id = object_id(project_key, kind, hash, part, parts)?;
+    let key = project_subkey(project_key, "blob")?;
+    let nonce = &hmac_sha256(&key, format!("scribyra-object-nonce/1\n{id}").as_bytes())[..24];
+    let context = object_context(org, project, epoch, &id, kind, hash, part, parts)?;
+    let mut out = nonce.to_vec();
+    out.extend(seal(&key, nonce, context.as_bytes(), plaintext)?);
+    Ok((id, out))
+}
+/// Opens one part fetched by its ID. The caller joins the parts and checks the plaintext hash.
+#[allow(clippy::too_many_arguments)]
+pub fn open_object(project_key: &[u8], org: &str, project: &str, epoch: u32, kind: &str, hash: &str, part: u32, parts: u32, sealed: &[u8]) -> Result<Vec<u8>> {
+    let id = object_id(project_key, kind, hash, part, parts)?;
+    if sealed.len() < OBJECT_OVERHEAD {
+        return Err(fail("an object could not be decrypted: it was altered or uses another key"));
+    }
+    let key = project_subkey(project_key, "blob")?;
+    let context = object_context(org, project, epoch, &id, kind, hash, part, parts)?;
+    let plain = open(&key, &sealed[..24], context.as_bytes(), &sealed[24..]).map_err(|_| fail("an object could not be decrypted: it was altered or uses another key"))?;
+    if plain.len() > OBJECT_PART_BYTES || (part + 1 < parts && plain.len() != OBJECT_PART_BYTES) {
+        return Err(fail("an object part has the wrong length"));
+    }
+    Ok(plain)
+}
+
+/// One object a `blobref` entry announces: its plaintext hash and size, the epoch it was sealed
+/// under and the IDs of its parts.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ObjectRef {
+    pub kind: String,
+    pub hash: String,
+    pub size: u64,
+    pub epoch: u32,
+    pub ids: Vec<String>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Blobref {
+    pub v: u32,
+    pub objects: Vec<ObjectRef>,
+}
+/// Checks a decrypted `blobref` payload: canonical JSON, known kinds, bounded sizes, and part
+/// IDs that are exactly the keyed IDs under the named epoch's key (`keys` maps epochs this
+/// reader holds to their project keys; objects under other epochs are kept unchecked, since a
+/// reader can only fetch what it can open).
+pub fn check_blobref(payload: &[u8], keys: &std::collections::BTreeMap<u32, Vec<u8>>) -> Result<Blobref> {
+    let text = std::str::from_utf8(payload).map_err(|_| fail("invalid object list"))?;
+    let value: Value = serde_json::from_str(text).map_err(|_| fail("invalid object list"))?;
+    if canonical(&value)? != text {
+        return Err(fail("the object list is not in canonical form"));
+    }
+    let list: Blobref = serde_json::from_value(value).map_err(|_| fail("invalid object list"))?;
+    if list.v != 1 || list.objects.is_empty() || list.objects.len() > MAX_BLOBREF_OBJECTS {
+        return Err(fail("invalid object list"));
+    }
+    for object in &list.objects {
+        let parts = object_parts(object.size);
+        if object.size > MAX_OBJECT_BYTES || object.epoch == 0 || object.ids.len() != parts as usize {
+            return Err(fail("invalid object list"));
+        }
+        object_check(&object.kind, &object.hash, 0, parts)?;
+        if let Some(key) = keys.get(&object.epoch) {
+            for (part, id) in object.ids.iter().enumerate() {
+                if *id != object_id(key, &object.kind, &object.hash, part as u32, parts)? {
+                    return Err(fail("an object list names IDs that do not match its objects"));
+                }
+            }
+        } else if object.ids.iter().any(|id| !is_hex(id, 32)) {
+            return Err(fail("invalid object list"));
+        }
+    }
+    Ok(list)
+}
+
+// ---------------------------------------------------------------------------
 // Project log entries
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -434,7 +557,9 @@ pub struct EntryHeader {
     pub epoch: u32,
     pub sig: String,
 }
-pub const ENTRY_KINDS: &[&str] = &["update"];
+/// `update` carries a Yjs update; `blobref` lists encrypted objects uploaded before the update
+/// that references them.
+pub const ENTRY_KINDS: &[&str] = &["update", "blobref"];
 /// Split `u32 header length ‖ canonical header JSON ‖ ciphertext` and check the header.
 pub fn split_entry(body: &[u8]) -> Result<(EntryHeader, &str, &[u8])> {
     if body.len() < 4 {
@@ -664,5 +789,57 @@ mod tests {
         body.extend_from_slice(spaced.as_bytes());
         body.extend_from_slice(&ciphertext);
         assert!(split_entry(&body).is_err());
+    }
+
+    #[test]
+    fn objects_seal_deterministically_under_keyed_ids_and_bind_their_context() {
+        let (org, project, pk) = (hex(&[7; 32]), hex(&[8; 32]), [33u8; 32]);
+        let plain = b"\x89PNG image bytes";
+        let hash = hex(&sha256(plain));
+        let (id, sealed) = seal_object(&pk, &org, &project, 1, "asset", &hash, 0, 1, plain).unwrap();
+        // The service sees neither the plaintext hash nor anything derived without the key.
+        assert_ne!(id, hash);
+        assert!(!hex(&sealed).contains(&hex(plain)));
+        // Same epoch, same plaintext: identical bytes (two devices upload the same object).
+        assert_eq!(seal_object(&pk, &org, &project, 1, "asset", &hash, 0, 1, plain).unwrap(), (id.clone(), sealed.clone()));
+        assert_eq!(open_object(&pk, &org, &project, 1, "asset", &hash, 0, 1, &sealed).unwrap(), plain);
+        // A new epoch key gives another ID; another kind, project or position does not open.
+        let other = [34u8; 32];
+        assert_ne!(object_id(&other, "asset", &hash, 0, 1).unwrap(), id);
+        assert_ne!(object_id(&pk, "history", &hash, 0, 1).unwrap(), id);
+        assert!(open_object(&pk, &org, &project, 2, "asset", &hash, 0, 1, &sealed).is_err());
+        assert!(open_object(&pk, &org, &hex(&[9; 32]), 1, "asset", &hash, 0, 1, &sealed).is_err());
+        assert!(open_object(&other, &org, &project, 1, "asset", &hash, 0, 1, &sealed).is_err());
+        assert!(open_object(&pk, &org, &project, 1, "asset", &hex(&[1; 32]), 0, 1, &sealed).is_err());
+        let mut altered = sealed.clone();
+        *altered.last_mut().unwrap() ^= 1;
+        assert!(open_object(&pk, &org, &project, 1, "asset", &hash, 0, 1, &altered).is_err());
+        // Parts: every part but the last is full; positions are bound.
+        assert_eq!(object_parts(0), 1);
+        assert_eq!(object_parts(OBJECT_PART_BYTES as u64 + 1), 2);
+        assert!(seal_object(&pk, &org, &project, 1, "asset", &hash, 0, 2, plain).is_err());
+        let (_, last) = seal_object(&pk, &org, &project, 1, "asset", &hash, 1, 2, plain).unwrap();
+        assert!(open_object(&pk, &org, &project, 1, "asset", &hash, 0, 2, &last).is_err());
+        assert!(object_id(&pk, "script", &hash, 0, 1).is_err());
+    }
+
+    #[test]
+    fn blobref_lists_are_canonical_and_name_the_keyed_ids() {
+        let pk = vec![33u8; 32];
+        let hash = hex(&[5; 32]);
+        let id = object_id(&pk, "asset", &hash, 0, 1).unwrap();
+        let keys = std::collections::BTreeMap::from([(1u32, pk.clone())]);
+        let good = canonical(&json!({"v":1,"objects":[{"kind":"asset","hash":hash,"size":10,"epoch":1,"ids":[id]}]})).unwrap();
+        assert_eq!(check_blobref(good.as_bytes(), &keys).unwrap().objects[0].ids, vec![id.clone()]);
+        // An ID that is not the keyed ID of its object is refused, as is a wrong part count.
+        let wrong = canonical(&json!({"v":1,"objects":[{"kind":"asset","hash":hash,"size":10,"epoch":1,"ids":[hex(&[1;32])]}]})).unwrap();
+        assert!(check_blobref(wrong.as_bytes(), &keys).is_err());
+        let parts = canonical(&json!({"v":1,"objects":[{"kind":"asset","hash":hash,"size":OBJECT_PART_BYTES + 1,"epoch":1,"ids":[id]}]})).unwrap();
+        assert!(check_blobref(parts.as_bytes(), &keys).is_err());
+        // Objects under an epoch this reader cannot open are kept, shape-checked only.
+        let later = canonical(&json!({"v":1,"objects":[{"kind":"history","hash":hash,"size":10,"epoch":2,"ids":[hex(&[1;32])]}]})).unwrap();
+        assert!(check_blobref(later.as_bytes(), &keys).is_ok());
+        assert!(check_blobref(good.replace(":", ": ").as_bytes(), &keys).is_err());
+        assert!(check_blobref(br#"{"objects":[],"v":1}"#, &keys).is_err());
     }
 }

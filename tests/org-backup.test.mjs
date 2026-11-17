@@ -75,16 +75,116 @@ test('a project with comments, reviews and history backs up encrypted and restor
  }finally{engine?.close();restoredEngine?.close();await s.close();}
 });
 
-test('a project with binary assets is refused with a plain message, and nothing is uploaded',async()=>{
- const s=await service({org:true});let engine;
+// --- Slice 6: encrypted assets and history objects.
+
+const MARK=text=>new TextEncoder().encode(text);
+/** A PNG-looking file with a plaintext marker in it, `size` bytes long. */
+function image(marker,size=2048){const bytes=new Uint8Array(size);bytes.set([137,80,78,71,13,10,26,10]);bytes.set(MARK(marker),8);for(let i=8+marker.length;i<size;i++)bytes[i]=(i*31)&255;return bytes;}
+const {collaborationCommands}=await import('../web/collaboration-commands.js');
+const {mount:mountHistory}=await import('../web/history.js');
+const {inventory,openVersion}=await import('../web/history-storage.js');
+const {assetBytes}=await import('../web/assets.js');
+const {addEntries,replaceAsset,projectNodes}=await import('../web/model.js');
+const {blob_hash}=await import('../web/pkg/scribyra_app.js');
+/** A project with an image and a named version taken before the image was replaced. */
+async function projectWithHistory(name,{size=2048}={}){
+ const {migrateProject}=await import('../web/model.js'),doc=new Y.Doc(),projectId=crypto.randomUUID();
+ const oldImage=image('OLD_IMAGE_MARKER',size),newImage=image('NEW_IMAGE_MARKER',size);
+ const [main,figure]=addEntries(doc,[{path:'main.tex',content:'\\documentclass{article}\\begin{document}ASSET_TEXT_MARKER\\end{document}'},{path:'figure.png',content:oldImage}]);
+ migrateProject(doc,projectId);doc.getMap('meta').set('name',name);await storage.saveProject(projectId,doc);
+ const commands=collaborationCommands({doc,projectId,storage}),feature=mountHistory({doc,projectId,storage,commands,author:{id:crypto.randomUUID(),displayName:'Owner'},flushSave:async()=>{const r=await storage.saveProject(projectId,doc);Y.applyUpdate(doc,r.update);}});
+ const exec=async command=>{const reply=await commands.execute({version:2,requestId:crypto.randomUUID(),projectId,expectedRevision:commands.revision(),command});if(!reply.ok)throw Error(reply.error.message);return reply.value;};
+ const named=await exec({op:'history.name',label:'With the old figure'});
+ replaceAsset(doc,figure,newImage);const saved=await storage.saveProject(projectId,doc);Y.applyUpdate(doc,saved.update);
+ return{id:projectId,doc,figure,main,named,oldImage,newImage,close(){feature.close();commands.close();doc.destroy();}};
+}
+/** Every file under a directory, as bytes (the service's blob store). */
+async function filesUnder(dir){
+ const {readdir,readFile}=await import('node:fs/promises'),{join}=await import('node:path'),out=[];
+ for(const entry of await readdir(dir,{withFileTypes:true,recursive:true}))if(entry.isFile())out.push(await readFile(join(entry.parentPath??entry.path,entry.name)));
+ return out;
+}
+const contains=(haystack,needle)=>Buffer.from(haystack).includes(Buffer.from(needle));
+
+test('a project with images and named versions backs up encrypted and restores, old versions with replaced images included',async()=>{
+ const s=await service({org:true});let engine,back,p;
  try{
-  const doc=new Y.Doc(),{addFile,migrateProject}=await import('../web/model.js'),id=crypto.randomUUID();
-  addFile(doc,'main.tex','x');addFile(doc,'figure.png',new Uint8Array([137,80,78,71,1,2,3]));migrateProject(doc,id);await storage.saveProject(id,doc);doc.destroy();
-  await deleteDB('scribyra-org');await deleteDB('scribyra-direct');
-  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'assets'));
-  await assert.rejects(engine.backUp(id),/binary files/);
-  assert.deepEqual(await engine.links(),[]);
- }finally{engine?.close();await deleteDB('scribyra-org');await deleteDB('scribyra-direct');localStorage.removeItem('scribyra:org-connected');await s.close();}
+  await erase();
+  p=await projectWithHistory('Figures');
+  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'figures'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);
+  // Objects: the current image, the replaced one the version needs, the version's manifest and chunks.
+  assert.equal(await s.sql("SELECT count(*) > 3 FROM project_objects"),'t');
+  // Neither content nor plaintext hashes reach the service: not in the database, not in blob files.
+  const oldHash=blob_hash(p.oldImage),newHash=blob_hash(p.newImage);
+  for(const table of ['project_objects','objects','entries','org_events'])
+   assert.equal(await s.sql(`SELECT count(*) FROM ${table} t WHERE position('${oldHash}' in t::text) > 0 OR position('${newHash}' in t::text) > 0 OR position('${p.named.checkpointRef}' in t::text) > 0`),'0',table);
+  assert.equal(await s.sql("SELECT count(*) FROM entries WHERE position(convert_to('MARKER','UTF8') in inline) > 0"),'0');
+  const blobs=await filesUnder(s.config.data);assert(blobs.length>0);
+  for(const bytes of blobs)for(const marker of ['OLD_IMAGE_MARKER','NEW_IMAGE_MARKER','ASSET_TEXT_MARKER','With the old figure'])assert(!contains(bytes,MARK(marker)),marker);
+  const original=snapshot(p.doc);p.close();p=null;engine.close();
+  await erase();
+  back=orgBackup({fetchImpl:fetch});
+  const result=await back.restore(kit);
+  assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['Figures']);
+  const localId=result.restored[0].localId,restored=await storage.loadProject(localId);
+  try{
+   assert.equal(snapshot(restored),original);
+   const figure=projectNodes(restored).find(f=>f.path==='figure.png');
+   assert.deepEqual(assetBytes(restored,figure.id),image('NEW_IMAGE_MARKER'));
+   // The named version restores here too, with the image that was replaced since.
+   const data=await storage.readHistoryData(localId),inv=inventory(data),version=inv.items.find(item=>item.versionId);
+   assert(version?.available,JSON.stringify(version));assert.equal(version.label,'With the old figure');
+   const opened=openVersion(data,inv,version.checkpointRef);
+   try{assert.deepEqual(assetBytes(opened.doc,figure.id),image('OLD_IMAGE_MARKER'));}finally{opened.doc.destroy();}
+  }finally{restored.destroy();}
+ }finally{p?.close();engine?.close();back?.close();await erase();await s.close();}
+});
+
+test('a file that does not decrypt or match its hash is refused, nothing is saved, and it is fetched again',async()=>{
+ const s=await service({org:true});let engine,back;
+ try{
+  await erase();
+  const p=await projectWithHistory('Tampered');
+  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'tamper'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);p.close();engine.close();await erase();
+  // The first object fetched arrives altered (a byte flipped in transit, or by the service).
+  let flips=1;
+  const altered=async(url,init)=>{
+   const response=await fetch(url,init);
+   if(!(flips>0&&/\/objects\//.test(url)&&(init?.method||'GET')==='GET'&&response.ok))return response;
+   flips--;const bytes=new Uint8Array(await response.arrayBuffer());bytes[bytes.length-1]^=1;
+   return new Response(bytes,{status:200,headers:response.headers});
+  };
+  back=orgBackup({fetchImpl:altered});
+  const first=await back.restore(kit);
+  assert.deepEqual(first.restored,[]);assert.match(first.failures.join(' '),/refused/);
+  assert.equal((await storage.listProjects()).length,0);
+  // The next attempt fetches it again and gets the real bytes.
+  const again=await back.restoreRemaining();
+  assert.deepEqual(again.failures,[]);assert.deepEqual(names(again),['Tampered']);
+  const doc=await storage.loadProject(again.restored[0].localId);
+  try{const figure=projectNodes(doc).find(f=>f.path==='figure.png');assert.deepEqual(assetBytes(doc,figure.id),image('NEW_IMAGE_MARKER'));}finally{doc.destroy();}
+ }finally{engine?.close();back?.close();await erase();await s.close();}
+});
+
+test('when the organisation’s storage is full, backup waits with a plain message and local saving keeps working',async()=>{
+ const s=await service({org:true,org_bytes:64*1024});let engine;
+ try{
+  await erase();
+  const p=await localProject('Full storage','\\documentclass{article}\\begin{document}FULL\\end{document}');
+  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'full'));await engine.confirmKit();
+  await engine.backUp(p.id);await settled(engine,p.id);
+  // A 200 KiB image does not fit the organisation's 64 KiB.
+  await p.edit(doc=>addEntries(doc,[{path:'big.png',content:image('FULL_MARKER',200*1024)}]));
+  await engine.push(p.id).catch(()=>{});
+  assert.equal(engine.status(p.id).state,'waiting');assert.match(engine.status(p.id).message,/storage on the service is full.*saved on this device/);
+  // Saving locally is unaffected.
+  await p.edit(doc=>doc.getText([...doc.share.keys()].find(k=>k.startsWith('text:'))).insert(0,'% STILL_SAVING\n'));
+  const reloaded=await storage.loadProject(p.id);
+  try{assert(reloaded.getText([...reloaded.share.keys()].find(k=>k.startsWith('text:'))).toString().startsWith('% STILL_SAVING'));}finally{reloaded.destroy();}
+  assert.equal(await s.sql("SELECT count(*) FROM project_objects"),'0');
+ }finally{engine?.close();await erase();await s.close();}
 });
 
 // --- Review findings of slice 1: lost answers, paging, kit replacement, interrupted restore, rollback.

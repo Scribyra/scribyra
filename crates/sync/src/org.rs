@@ -2,7 +2,7 @@
 //! log, key wraps and encrypted append-only project logs. The service checks every
 //! signature and membership rule with the same Rust code as the browser
 //! (`scribyra_core::orgsync`) but never holds a project key or decrypts anything.
-use crate::store::{GLOBAL_SCOPE, Store, StoreError};
+use crate::store::{GLOBAL_SCOPE, PutOutcome, Quota, Store, StoreError, namespace_scope, object_key};
 use crate::blobs::{BlobKey, Bytes};
 use axum::{
     Json, Router,
@@ -42,6 +42,8 @@ pub struct Orgs {
     states: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<OrgState>>>>>,
     /// Per-organisation change counter for the long-poll heads notice.
     changes: Mutex<HashMap<String, tokio::sync::watch::Sender<u64>>>,
+    /// Memory budget for object downloads (bytes held in responses at once).
+    downloads: Arc<tokio::sync::Semaphore>,
 }
 #[derive(Clone)]
 struct Session {
@@ -86,6 +88,11 @@ pub fn unseal_service_key(master: &[u8; 32], org: &str, sealed: &[u8]) -> Result
 pub fn org_scope(org: &str) -> String {
     format!("org:{org}")
 }
+/// Object-store namespace of a project's encrypted objects. The `p-` prefix keeps it apart from
+/// capability namespaces (64 hex characters), which can never name it.
+pub fn object_namespace(project: &str) -> String {
+    format!("p-{project}")
+}
 pub fn entry_key(project: &str, hash: &str) -> Result<BlobKey, StoreError> {
     BlobKey::new(format!("entries/{project}/{hash}")).map_err(|_| StoreError::BadRequest)
 }
@@ -94,7 +101,8 @@ impl Orgs {
     pub fn new(store: Arc<Store>, sso: Arc<crate::sso::Sso>) -> Shared {
         let public_url = store.config.public_url.clone();
         let mut revocations = sso.revocations();
-        let orgs = Arc::new(Self { store, sso, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default() });
+        let downloads = Arc::new(tokio::sync::Semaphore::new(store.config.response_bytes));
+        let orgs = Arc::new(Self { store, sso, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default(), downloads });
         // When the identity provider disables someone, or they sign out, their device sessions
         // close at once.
         let weak = Arc::downgrade(&orgs);
@@ -906,6 +914,119 @@ async fn read_log(State(o): State<Shared>, Path(project): Path<String>, Query(q)
     ([(header::CONTENT_TYPE, "application/octet-stream".to_string()), (header::CACHE_CONTROL, "no-store".to_string()), (header::HeaderName::from_static("scribyra-log-head"), head.to_string())], out).into_response()
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ObjectQuery {
+    epoch: u32,
+}
+/// Uploads one encrypted object part under its keyed ID (editors only, under the project's
+/// current epoch). The service checks nothing about the content but its size; it stores the
+/// ciphertext content-addressed, charges the global, organisation and project quotas, and keeps
+/// the ID → ciphertext mapping write-once.
+async fn put_object(State(o): State<Shared>, Path((project, id)): Path<(String, String)>, Query(q): Query<ObjectQuery>, headers: HeaderMap, body: Body) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if !core::is_hex(&project, 32) || !core::is_hex(&id, 32) {
+        return error(StatusCode::BAD_REQUEST, "invalid object");
+    }
+    let epoch = match project_access(&o, &session, &project, true).await {
+        Ok(e) => e,
+        Err(r) => return r,
+    };
+    if q.epoch != epoch {
+        return error(StatusCode::CONFLICT, "epoch");
+    }
+    let config = &o.store.config;
+    let Ok(bytes) = to_bytes(body, config.object_bytes).await else {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "object too large");
+    };
+    if bytes.len() < core::OBJECT_OVERHEAD {
+        return error(StatusCode::BAD_REQUEST, "object too short");
+    }
+    let hash = core::hex(&core::sha256(&bytes));
+    let namespace = object_namespace(&project);
+    let mapped = |row: Option<String>| -> Option<Response> {
+        match row {
+            Some(stored) if stored == hash => Some(StatusCode::NO_CONTENT.into_response()),
+            Some(_) => Some(error(StatusCode::CONFLICT, "a different object is stored under this ID")),
+            None => None,
+        }
+    };
+    let existing: Option<String> = match sqlx::query_scalar("SELECT hash FROM project_objects WHERE project = $1 AND id = $2").bind(&project).bind(&id).fetch_optional(&o.store.pool).await {
+        Ok(row) => row,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    if existing.as_deref() == Some(hash.as_str()) {
+        // The same bytes again: repair the stored copy if the blob store lost or damaged it.
+        if let Ok(key) = object_key(&namespace, &hash) {
+            let intact = matches!(o.store.blobs.get(&key, bytes.len()).await, Ok(stored) if core::sha256(&stored) == core::sha256(&bytes));
+            if !intact && o.store.blobs.put(&key, Bytes::from(bytes.to_vec())).await.is_err() {
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+        }
+        return StatusCode::NO_CONTENT.into_response();
+    }
+    if let Some(r) = mapped(existing) {
+        return r;
+    }
+    let quotas = [
+        Quota { scope: GLOBAL_SCOPE.into(), max_bytes: config.total_bytes, max_objects: config.total_objects },
+        Quota { scope: org_scope(&session.org), max_bytes: config.org_bytes, max_objects: u64::MAX },
+        Quota { scope: namespace_scope(&namespace), max_bytes: config.namespace_bytes, max_objects: config.namespace_objects },
+    ];
+    let size = bytes.len() as i64;
+    let outcome = match o.store.put_object_with(&namespace, &hash, Bytes::from(bytes.to_vec()), &quotas).await {
+        Ok(outcome) => outcome,
+        Err(e) => return store_error(e),
+    };
+    let inserted = sqlx::query("INSERT INTO project_objects (project, id, epoch, hash, size, device) VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING")
+        .bind(&project)
+        .bind(&id)
+        .bind(epoch as i32)
+        .bind(&hash)
+        .bind(size)
+        .bind(&session.key)
+        .execute(&o.store.pool)
+        .await;
+    match inserted {
+        Ok(done) if done.rows_affected() == 1 => match outcome {
+            PutOutcome::Created => StatusCode::CREATED.into_response(),
+            PutOutcome::Existing => StatusCode::NO_CONTENT.into_response(),
+        },
+        // A concurrent upload of the same ID won.
+        Ok(_) => {
+            let row = sqlx::query_scalar("SELECT hash FROM project_objects WHERE project = $1 AND id = $2").bind(&project).bind(&id).fetch_optional(&o.store.pool).await.unwrap_or(None);
+            mapped(row).unwrap_or_else(|| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+        }
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+/// Downloads one encrypted object part (any project member). The stored ciphertext is checked
+/// against its hash before it is sent; a damaged copy is a 500, never wrong bytes.
+async fn get_object(State(o): State<Shared>, Path((project, id)): Path<(String, String)>, headers: HeaderMap) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if !core::is_hex(&project, 32) || !core::is_hex(&id, 32) {
+        return error(StatusCode::BAD_REQUEST, "invalid object");
+    }
+    if let Err(r) = project_access(&o, &session, &project, false).await {
+        return r;
+    }
+    let hash: Option<String> = match sqlx::query_scalar("SELECT hash FROM project_objects WHERE project = $1 AND id = $2").bind(&project).bind(&id).fetch_optional(&o.store.pool).await {
+        Ok(row) => row,
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    };
+    let Some(hash) = hash else { return error(StatusCode::NOT_FOUND, "unknown object") };
+    match o.store.get_object(&object_namespace(&project), &hash, o.downloads.clone()).await {
+        Ok((bytes, _permit)) => ([(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "no-store"), (header::X_CONTENT_TYPE_OPTIONS, "nosniff")], bytes).into_response(),
+        Err(e) => store_error(e),
+    }
+}
+
 /// What a browser needs before it signs anything: whether the org exists and has a genesis,
 /// and the service's own key for organisation-managed mode (if the operator enabled it).
 async fn info(State(o): State<Shared>, Path(org): Path<String>) -> Response {
@@ -1224,6 +1345,7 @@ pub fn routes(o: Shared) -> Router {
         .route("/v1/orgs/{org}/device-links/sso", post(sso_link_request))
         .route("/v1/orgs/{org}/device-links/{link}", post(request_link))
         .route("/v1/projects/{project}/log", get(read_log).post(append))
+        .route("/v1/projects/{project}/objects/{id}", get(get_object).put(put_object))
         .with_state(o)
 }
 

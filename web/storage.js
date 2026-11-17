@@ -622,6 +622,36 @@ export async function commitPrepared(projectId,expectedSequence,update,objects=[
   try{const result=await saveProjectData(projectId,doc,prepared);return{update:result.update,sequence:result.sequence};}finally{doc.destroy();}
 }
 
+/** Locally stored history objects and binary assets by hash (missing ones are left out). Used by
+ * remote backup to upload what named versions and the current project refer to. */
+export async function readStoredBytes({objects=[],blobs=[]}){
+  const tx=(await db).transaction(['historyObjects','blobs']),found={objects:new Map(),blobs:new Map()};
+  try{
+    for(const hash of new Set(objects)){const row=await tx.objectStore('historyObjects').get(hash);if(row)found.objects.set(hash,row.bytes);}
+    for(const hash of new Set(blobs)){const row=await tx.objectStore('blobs').get(hash);if(row)found.blobs.set(hash,row.bytes);}
+    await tx.done;return found;
+  }catch(error){return abort(tx,error);}
+}
+/** Installs history objects and assets fetched from a remote backup for an existing project:
+ * the objects behind a named version (pinned to it, with its catalogue row) and the assets its
+ * checkpoint needs, so the version restores even if those files were deleted since. */
+export async function installRemoteHistory(id,{objects=[],pins=[],catalog=[],blobs=[]}){
+  const tx=(await db).transaction(['projects',...BLOB_STORES,...OBJECT_STORES],'readwrite');
+  try{
+    if(!(await tx.objectStore('projects').get(id)))throw new Error('Project not found on this device.');
+    for(const object of objects)if(blob_hash(object.bytes)!==object.hash)throw new Error('History object integrity check failed.');
+    await writeObjects(tx,id,{objects,pins});
+    for(const row of catalog)if(!(await tx.objectStore('historyCatalog').get([id,row.checkpointId])))await tx.objectStore('historyCatalog').put({...row,projectId:id});
+    for(const blob of blobs){
+      verifyBlob({hash:blob.hash,size:blob.bytes.length},blob.bytes);
+      const existing=await tx.objectStore('blobs').get(blob.hash);
+      if(existing&&!sameBytes(existing.bytes,blob.bytes))throw new Error('Immutable binary mismatch.');
+      if(!existing)await tx.objectStore('blobs').put({hash:blob.hash,bytes:blob.bytes});
+      await tx.objectStore('projectBlobs').put({projectId:id,hash:blob.hash});
+    }
+    await tx.done;
+  }catch(error){return abort(tx,error);}
+}
 /** One consistent read for backup/retention. Only this project's reachable stores travel. */
 export async function readHistoryData(id){
   const tx=(await db).transaction([...HISTORY_STORES,...BLOB_STORES,...OBJECT_STORES,'migrationBackups','migrationBackupsV2']);

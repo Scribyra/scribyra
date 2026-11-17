@@ -13,7 +13,7 @@ import {watchStorage} from './storage-events.js';
 import {profileIdentity} from './direct-identity.js';
 import {setDirectKeyPresent} from './direct-state.js';
 import {SCHEMA_VERSION,validateProjectState} from './model.js';
-import {blobRefs} from './assets.js';
+import {blobRefs,installBlob,knownBlob,verifyBlob} from './assets.js';
 import {validateReplica} from './replication.js';
 import {validateRetainedState,MAX_RETAINED_BYTES} from './model.js';
 import {orgClient,ServiceError} from './org-client.js';
@@ -24,8 +24,9 @@ import {
  sealName,openName,sealProjectName,openProjectName,wrapRecipients,
  parseInvite,formatInvite,inviteSeed,inviteMessage,formatDeviceLink,parseDeviceLink,linkSeed,deviceRequestMessage,linkCode,
  formatOrgLink,parseOrgLink,newDeviceCode,deviceCodeMac,signInUrl,keyCommit,
+ sealObject,openObjectPart,objectParts,blobrefPayload,checkBlobref,
 } from './org-crypto.js';
-import {org_ed25519_public,org_ed25519_sign,org_ed25519_verify} from './pkg/scribyra_app.js';
+import {org_ed25519_public,org_ed25519_sign,org_ed25519_verify,org_object_id,blob_hash,history_validate_manifest} from './pkg/scribyra_app.js';
 
 export const ORG_CONNECTED='scribyra:org-connected';
 export function orgConnected(){try{return globalThis.localStorage?.getItem(ORG_CONNECTED)==='true';}catch{return false;}}
@@ -35,15 +36,23 @@ const markConnected=on=>{try{localStorage.removeItem(ORG_JOINING);if(on)localSto
 export function orgJoining(){try{return globalThis.localStorage?.getItem(ORG_JOINING)==='true';}catch{return false;}}
 const markJoining=()=>{try{localStorage.setItem(ORG_JOINING,'true');}catch{}};
 const DB='scribyra-org';
-const database=()=>openDB(DB,1,{upgrade(db){
- db.createObjectStore('connection');
- db.createObjectStore('links',{keyPath:'localId'});
- db.createObjectStore('outbox',{keyPath:['localId','clientSeq']});
- db.createObjectStore('keys',{keyPath:['project','epoch']});
+const database=()=>openDB(DB,2,{upgrade(db,old){
+ if(old<1){
+  db.createObjectStore('connection');
+  db.createObjectStore('links',{keyPath:'localId'});
+  db.createObjectStore('outbox',{keyPath:['localId','clientSeq']});
+  db.createObjectStore('keys',{keyPath:['project','epoch']});
+ }
+ // Encrypted objects known to be on the service (uploaded here, or announced by a blobref):
+ // which epoch sealed them and the IDs of their parts.
+ if(old<2)db.createObjectStore('objects',{keyPath:['project','kind','hash','epoch']});
 }});
 // One entry may carry at most this much Yjs data; the service's default object limit is 8 MiB.
 export const MAX_ENTRY_BYTES=7*1024*1024;
 const RETRY=[2000,10000,30000,120000];
+const MAX_BLOBREF=512;
+const isHash=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value);
+const QUOTA_TEXT='The organisation’s storage on the service is full. Your changes are saved on this device and will back up when space is freed.';
 const WRAP_BATCH=64;
 const INVITE_DAYS=7;
 const LINK_MS=15*60*1000;
@@ -202,6 +211,132 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   const key=await projectKey(connection.org,1);try{return openName(key,connection.org,subject,sealed);}finally{key.fill(0);}
  }
 
+ /** A project's keys by epoch, opened as needed for one operation and wiped afterwards. Keys
+  * this browser does not hold yet are collected from its wraps once. */
+ function keyRing(project){
+  const held=new Map();let collected=false;
+  const ring={
+   async get(epoch){
+    if(held.has(epoch))return held.get(epoch);
+    if(!(await hasKey(project,epoch))&&!collected){collected=true;await collectKeys().catch(()=>{});}
+    if(!(await hasKey(project,epoch)))return null;
+    const key=await projectKey(project,epoch);held.set(epoch,key);return key;
+   },
+   async need(epoch){
+    const key=await ring.get(epoch);
+    if(!key)throw Error('This browser does not hold the key for some of this project’s changes yet. It waits for another member’s app to share it.');
+    return key;
+   },
+   wipe(){for(const key of held.values())key.fill(0);held.clear();},
+  };
+  return ring;
+ }
+
+ // --- Encrypted objects: binary assets and the history objects behind named versions
+
+ const objectRange=(project,kind,hash)=>IDBKeyRange.bound([project,kind,hash,0],[project,kind,hash,Infinity]);
+ /** Records objects from a checked blobref (or this browser's own uploads) as present on the service. */
+ async function noteObjects(refs,project,store){
+  for(const ref of refs)await store.put({project,kind:ref.kind,hash:ref.hash,epoch:ref.epoch,size:ref.size,ids:ref.ids});
+ }
+ /**
+  * What this browser should upload before its next entry: the project's current assets and,
+  * for every named version, its checkpoint manifest, update chunks and the assets it needs
+  * (including files deleted since). Objects already on the service (under any epoch) are skipped.
+  */
+ async function wantedObjects(project,doc,read){
+  const known=async(kind,hash)=>(await db.count('objects',objectRange(project,kind,hash)))>0;
+  const wanted=[],assets=new Map(read.blobs.map(blob=>[blob.ref.hash,blob.bytes]));
+  for(const ref of blobRefs(doc)){const bytes=assets.get(ref.hash)||knownBlob(doc,ref.hash);if(bytes&&!(await known('asset',ref.hash)))wanted.push({kind:'asset',hash:ref.hash,bytes});}
+  const versions=[...doc.getMap('versions').values()].map(version=>version?.checkpointRef).filter(isHash);
+  if(!versions.length)return wanted;
+  const manifests=await storage.readStoredBytes({objects:versions}),chunks=new Set(),extra=new Set();
+  for(const [hash,bytes] of manifests.objects){
+   let manifest;try{manifest=JSON.parse(new TextDecoder().decode(bytes));}catch{continue;}
+   if(!(await known('history',hash)))wanted.push({kind:'history',hash,bytes});
+   for(const chunk of manifest.updateChunks||[])if(isHash(chunk?.hash)&&!(await known('history',chunk.hash)))chunks.add(chunk.hash);
+   for(const asset of manifest.assets||[])if(isHash(asset?.hash)&&!assets.has(asset.hash)&&!(await known('asset',asset.hash)))extra.add(asset.hash);
+  }
+  const stored=await storage.readStoredBytes({objects:[...chunks],blobs:[...extra]});
+  for(const [hash,bytes] of stored.objects)wanted.push({kind:'history',hash,bytes});
+  for(const [hash,bytes] of stored.blobs)wanted.push({kind:'asset',hash,bytes});
+  return wanted;
+ }
+ /** Seals and uploads objects under `epoch`; returns their blobref records. Identical retries are free. */
+ async function uploadObjects(project,epoch,key,wanted){
+  const refs=[];
+  for(const object of wanted){
+   const parts=sealObject({projectKey:key,org:connection.org,project,epoch,kind:object.kind,hash:object.hash,bytes:object.bytes});
+   for(const part of parts)await authed(()=>client.putObject(project,part.id,epoch,part.body));
+   refs.push({kind:object.kind,hash:object.hash,size:object.bytes.length,epoch,ids:parts.map(part=>part.id)});
+  }
+  return refs;
+ }
+ const refused=message=>Object.assign(Error(message),{refused:true});
+ /**
+  * Fetches, decrypts and checks one object. It is looked up under the epochs blobrefs named for
+  * it, then under every epoch this browser holds a key for. Bytes that do not decrypt or do not
+  * match their hash are refused (and fetched again on the next attempt), never installed.
+  */
+ async function fetchObject(project,ring,kind,hash,size=null){
+  const announced=(await db.getAll('objects',objectRange(project,kind,hash))).sort((a,b)=>b.epoch-a.epoch);
+  const epochs=[...new Set([...announced.map(o=>o.epoch),...Array.from({length:connection.state.projects[project]?.epoch||0},(_,i)=>i+1).reverse()])];
+  for(const epoch of epochs){
+   const key=await ring.get(epoch);if(!key)continue;
+   const record=announced.find(o=>o.epoch===epoch),length=record?.size??size,parts=length===null?1:objectParts(length),pieces=[];
+   for(let part=0;part<parts;part++){
+    const id=record?.ids?.[part]??org_object_id(key,kind,hash,part,parts),body=await authed(()=>client.getObject(project,id));
+    if(!body){if(part===0)break;throw Error('Part of a file is missing on the service. It is fetched again later.');}
+    try{pieces.push(openObjectPart({projectKey:key,org:connection.org,project,epoch,kind,hash,part,parts,body}));}
+    catch(error){throw refused(error.message+' It was refused and is fetched again later.');}
+   }
+   if(pieces.length!==parts)continue;
+   const bytes=new Uint8Array(pieces.reduce((n,p)=>n+p.length,0));let at=0;for(const piece of pieces){bytes.set(piece,at);at+=piece.length;}
+   if(blob_hash(bytes)!==hash||(size!==null&&bytes.length!==size))throw refused('A file from the service does not match what the project refers to. It was refused and is fetched again later.');
+   return bytes;
+  }
+  throw Error('A file this project refers to is not on the service yet. It is fetched again later.');
+ }
+ /** Installs into `doc` every asset it refers to that this browser does not store yet. */
+ async function fetchAssets(project,ring,doc){
+  const refs=blobRefs(doc).filter(ref=>!knownBlob(doc,ref.hash));
+  if(!refs.length)return 0;
+  const present=await storage.readStoredBytes({blobs:refs.map(ref=>ref.hash)});
+  let fetched=0;
+  for(const ref of refs){
+   const local=present.blobs.get(ref.hash);
+   if(local){installBlob(doc,ref,local);continue;}
+   const bytes=await fetchObject(project,ring,'asset',ref.hash,ref.size);verifyBlob(ref,bytes);installBlob(doc,ref,bytes);fetched++;
+  }
+  return fetched;
+ }
+ /**
+  * Downloads what named versions need and this browser lacks: the checkpoint manifest, its
+  * update chunks and its assets, installed through the history store and pinned to the version,
+  * so an old version restores here too. A version whose objects cannot be fetched yet stays
+  * listed as unavailable and is tried again on the next sync.
+  */
+ async function hydrateHistory(localId,project,ring,doc){
+  const versions=[...doc.getMap('versions').values()].filter(version=>isHash(version?.checkpointRef));
+  if(!versions.length)return 0;
+  const stored=await storage.readStoredBytes({objects:versions.map(v=>v.checkpointRef)});let missing=0;
+  for(const version of versions){
+   if(stored.objects.has(version.checkpointRef))continue;
+   try{
+    const bytes=await fetchObject(project,ring,'history',version.checkpointRef),text=new TextDecoder('utf-8',{fatal:true}).decode(bytes);
+    try{history_validate_manifest(text);}catch{throw refused('A named version’s description from the service is invalid. It was refused.');}
+    const manifest=JSON.parse(text),objects=[{hash:version.checkpointRef,bytes}],blobs=[];
+    const have=await storage.readStoredBytes({objects:manifest.updateChunks.map(c=>c.hash),blobs:manifest.assets.map(a=>a.hash)});
+    for(const chunk of manifest.updateChunks)objects.push({hash:chunk.hash,bytes:have.objects.get(chunk.hash)||await fetchObject(project,ring,'history',chunk.hash,chunk.size)});
+    for(const asset of manifest.assets)blobs.push({hash:asset.hash,bytes:have.blobs.get(asset.hash)||await fetchObject(project,ring,'asset',asset.hash,asset.size)});
+    const read=await storage.readCommittedProject(localId);
+    await storage.installRemoteHistory(localId,{objects,blobs,pins:objects.map(o=>({hash:o.hash,pin:'checkpoint:'+manifest.checkpointId})),
+     catalog:[{checkpointId:manifest.checkpointId,checkpointRef:version.checkpointRef,sequence:read.head?.sequence??0,reason:'named'}]});
+   }catch{missing++;}
+  }
+  return missing;
+ }
+
  const withLock=(name,task)=>locks?locks.request(name,task):task();
  // Serialise work per project inside this tab, and across tabs with a Web Lock.
  function queue(localId,task){
@@ -214,7 +349,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  }
  function retry(localId,error){
   const n=attempts.get(localId)||0;attempts.set(localId,n+1);
-  setStatus(localId,'waiting',error.message);schedule(localId,RETRY[Math.min(n,RETRY.length-1)]);
+  setStatus(localId,'waiting',error instanceof ServiceError&&error.status===507?QUOTA_TEXT:error.message);schedule(localId,RETRY[Math.min(n,RETRY.length-1)]);
  }
  function role(project){
   const state=connection.state;
@@ -234,7 +369,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   // The device must have written as an editor: current members, and also devices and editors
   // since removed (their earlier entries stay valid). A state that may be behind is refreshed once.
   const editorEver=state=>{const p=state.projects[cursor.project],person=state.devices[header.device]?.person??state.formerDevices?.[header.device];
-   return!!p&&header.epoch===p.epoch&&!!person&&(p.members[person]==='editor'||(state.formerEditors?.[cursor.project]||[]).includes(person));};
+   return!!p&&header.epoch>=1&&header.epoch<=p.epoch&&!!person&&(p.members[person]==='editor'||(state.formerEditors?.[cursor.project]||[]).includes(person));};
   let state=connection.state;
   if(!editorEver(state))state=await refreshMembership();
   if(header.org!==connection.org||header.project!==cursor.project||!editorEver(state))
@@ -263,11 +398,11 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   * each device's last client sequence, and the Yjs state (so only the difference is sent).
   */
  async function serverState(link){
-  const key=await projectKey(link.project,link.epoch),doc=new Y.Doc();
+  const ring=keyRing(link.project),doc=new Y.Doc();
   try{
-   const cursor=await readVerified({project:link.project,seq:0,chain:link.project,devices:{}},(item,header)=>{Y.applyUpdate(doc,openChecked(item,header,key,link.lineage).payload);});
+   const cursor=await readVerified({project:link.project,seq:0,chain:link.project,devices:{}},async(item,header)=>{const opened=openChecked(item,header,await ring.need(header.epoch),link.lineage);if(header.kind==='update')Y.applyUpdate(doc,opened.payload);});
    return{seq:cursor.seq,chain:cursor.chain,devices:cursor.devices,vector:Y.encodeStateVector(doc)};
-  }finally{key.fill(0);doc.destroy();}
+  }finally{ring.wipe();doc.destroy();}
  }
  /**
   * The service lost entries this browser saw acknowledged (it was restored from an older
@@ -291,40 +426,60 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   * `pushed` is the local sequence that entry carried.
   */
  async function pull(link,{own,pushed=link.pushedSequence}={}){
-  const key=await projectKey(link.project,link.epoch),payloads=[];
-  let cursor={project:link.project,seq:link.seq,chain:link.chain,devices:link.devices||{}},vector=link.vector,ownSeen=!own,received=0;
+  const ring=keyRing(link.project),payloads=[],announced=[];
+  let cursor={project:link.project,seq:link.seq,chain:link.chain,devices:link.devices||{}},vector=link.vector,ownSeen=!own,received=0,pushedSequence=pushed;
   try{
-   cursor=await readVerified(cursor,(item,header,hash)=>{
+   cursor=await readVerified(cursor,async(item,header,hash)=>{
     if(header.device===connection.device){
      if(own&&item.seq===own.seq){if(hash!==own.hash||item.chain!==own.chain)throw fault('The service acknowledged a change this browser did not send. Sync paused.');ownSeen=true;}
      return;
     }
-    const opened=openChecked(item,header,key,link.lineage);payloads.push(opened.payload);
+    const opened=openChecked(item,header,await ring.need(header.epoch),link.lineage);
+    if(header.kind==='blobref'){announced.push(...await checkedBlobref(ring,opened.payload));return;}
+    payloads.push(opened.payload);
     if((received+=opened.payload.byteLength)>MAX_RETAINED_BYTES)throw fault('Changes from other devices exceed the 96 MiB limit. Sync paused.');
     vector=mergeVectors(vector,Y.encodeStateVectorFromUpdate(opened.payload));
    });
-  }finally{key.fill(0);}
-  if(!ownSeen)throw fault('The service acknowledged a log position this browser cannot verify. Sync paused.');
-  let pushedSequence=pushed;
-  if(payloads.length){
-   const read=await storage.readCommittedProject(link.localId);
-   if(read.kind==='deleted'||read.kind==='missing')throw fault('This project is no longer on this device. Its copy on the service is kept.');
-   const doc=new Y.Doc();
-   try{
-    Y.applyUpdate(doc,read.update);
-    if(doc.getMap('meta').get('lineageId')!==link.lineage)throw fault('This project’s identity changed on this device. Sync paused.');
-    for(const payload of payloads)Y.applyUpdate(doc,payload);
-    if(doc.store.pendingStructs||doc.store.pendingDs)throw fault('A change from another device is incomplete. Sync paused.');
-    validateRetainedState(doc);validateReplica(doc);
-    const saved=await storage.saveProject(link.localId,doc);
-    // Nothing local was waiting before the merge: the merged state is all on the service.
-    if(read.head.sequence===pushed)pushedSequence=saved.sequence;
-   }finally{doc.destroy();}
-  }
+   if(!ownSeen)throw fault('The service acknowledged a log position this browser cannot verify. Sync paused.');
+   // Objects announced by others are known before their assets are fetched.
+   if(announced.length){const tx=db.transaction('objects','readwrite');await noteObjects(announced,link.project,tx.store);await tx.done;}
+   if(payloads.length){
+    const read=await storage.readCommittedProject(link.localId);
+    if(read.kind==='deleted'||read.kind==='missing')throw fault('This project is no longer on this device. Its copy on the service is kept.');
+    const doc=new Y.Doc();
+    try{
+     Y.applyUpdate(doc,read.update);
+     if(doc.getMap('meta').get('lineageId')!==link.lineage)throw fault('This project’s identity changed on this device. Sync paused.');
+     for(const payload of payloads)Y.applyUpdate(doc,payload);
+     if(doc.store.pendingStructs||doc.store.pendingDs)throw fault('A change from another device is incomplete. Sync paused.');
+     // Images and other files the merged project refers to come from the service, decrypted and
+     // checked, before it is validated and saved (nothing is saved, and the cursor stays, until
+     // they all arrive).
+     await fetchAssets(link.project,ring,doc);
+     validateRetainedState(doc);validateReplica(doc);
+     const saved=await storage.saveProject(link.localId,doc);
+     // Nothing local was waiting before the merge: the merged state is all on the service.
+     if(read.head.sequence===pushed)pushedSequence=saved.sequence;
+    }finally{doc.destroy();}
+   }
+  }finally{ring.wipe();}
   const current={...await db.get('links',link.localId),seq:cursor.seq,chain:cursor.chain,devices:cursor.devices,vector,pushedSequence};
   await db.put('links',current);
   if(payloads.length)onRemote(link.localId);
   return current;
+ }
+ /** A blobref from another device, checked against the keys this browser holds. */
+ async function checkedBlobref(ring,payload){
+  let epochs;try{epochs=[...new Set(JSON.parse(new TextDecoder().decode(payload)).objects.map(o=>o.epoch))];}catch{throw fault('A list of files from another device is malformed. Sync paused.');}
+  const keys={};for(const epoch of epochs.filter(e=>Number.isSafeInteger(e)&&e>0)){const key=await ring.get(epoch);if(key)keys[epoch]=key;}
+  try{return checkBlobref(payload,keys).objects;}catch(error){throw fault(`A list of files from another device is invalid (${error.message||error}). Sync paused.`);}
+ }
+ /** Downloads the objects named versions need, quietly: a version that cannot be completed yet stays unavailable. */
+ async function syncHistory(link){
+  const read=await storage.readCommittedProject(link.localId);if(read.kind!=='updated')return 0;
+  const ring=keyRing(link.project),doc=new Y.Doc();
+  try{Y.applyUpdate(doc,read.update);return await hydrateHistory(link.localId,link.project,ring,doc);}
+  finally{ring.wipe();doc.destroy();}
  }
  async function send(link,entry){
   let ack;
@@ -344,13 +499,13 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   if(ack.seq===link.seq+1){
    const chain=chainNext(link.chain,hash);
    if(ack.chain!==chain)throw fault('The service acknowledged a log position this browser cannot verify. Sync paused.');
-   current={...await db.get('links',link.localId),seq:ack.seq,chain,devices:{...link.devices,[connection.device]:entry.clientSeq},pushedSequence:entry.sequence};
+   current={...await db.get('links',link.localId),seq:ack.seq,chain,devices:{...link.devices,[connection.device]:entry.clientSeq},pushedSequence:entry.sequence??link.pushedSequence};
   }else{
    // Other devices appended first: verify and merge them, and this entry in its place.
-   current=await pull(link,{own:{seq:ack.seq,hash,chain:ack.chain},pushed:entry.sequence});
+   current=await pull(link,{own:{seq:ack.seq,hash,chain:ack.chain},pushed:entry.sequence??link.pushedSequence});
   }
   const tx=db.transaction(['links','outbox'],'readwrite');
-  Object.assign(current,{vector:mergeVectors(current.vector,entry.vector),acked:entry.clientSeq,clientSeq:Math.max(current.clientSeq||0,entry.clientSeq)});
+  Object.assign(current,{vector:mergeVectors(current.vector,entry.vector||current.vector),acked:entry.clientSeq,clientSeq:Math.max(current.clientSeq||0,entry.clientSeq)});
   await tx.objectStore('links').put(current);await tx.objectStore('outbox').delete([link.localId,entry.clientSeq]);await tx.done;
   return current;
  }
@@ -383,27 +538,42 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   const read=await storage.readCommittedProject(localId);
   if(read.kind==='deleted'||read.kind==='missing'){setStatus(localId,'paused','This project is no longer on this device. Its copy on the service is kept.');return;}
   if(read.head.sequence!==link.pushedSequence){
-   const doc=new Y.Doc();
+   const doc=new Y.Doc(),epoch=connection.state.projects[link.project].epoch,ring=keyRing(link.project);
    try{
     Y.applyUpdate(doc,read.update);
-    if(blobRefs(doc).length){setStatus(localId,'unsupported','Projects with images or other binary files cannot be backed up remotely yet.');return;}
     const meta=doc.getMap('meta');
     if(meta.get('lineageId')!==link.lineage){setStatus(localId,'paused','This project’s identity changed. Back it up again as a new project.');return;}
     const payload=Y.encodeStateAsUpdate(doc,link.vector);
     if(payload.byteLength>MAX_ENTRY_BYTES){setStatus(localId,'unsupported','This change is too large to back up in one piece yet.');return;}
-    const key=await projectKey(link.project,link.epoch),identity=await deviceIdentity(),clientSeq=link.clientSeq+1;
-    let sealed;
-    try{sealed=await sealEntry({projectKey:key,org:connection.org,project:link.project,epoch:link.epoch,clientSeq,lineage:link.lineage,schema:meta.get('schemaVersion'),person:connection.person,payload},identity);}
-    finally{key.fill(0);}
-    const entry={localId,clientSeq,body:sealed.body,headerRaw:sealed.headerRaw,ciphertext:sealed.ciphertext,vector:Y.encodeStateVector(doc),sequence:read.head.sequence};
-    // The outbox entry and its sequence number are durable before anything is sent,
+    // New content is sealed only under the project's current epoch.
+    const key=await ring.need(epoch),identity=await deviceIdentity();
+    // Files first: every object the update refers to is on the service before the blobref that
+    // lists it, and the blobref before the update (one device's entries keep their order).
+    const refs=await uploadObjects(link.project,epoch,key,await wantedObjects(link.project,doc,read));
+    const common={projectKey:key,org:connection.org,project:link.project,epoch,lineage:link.lineage,schema:meta.get('schemaVersion'),person:connection.person};
+    let clientSeq=link.clientSeq;const entries=[];
+    for(let i=0;i<refs.length;i+=MAX_BLOBREF){
+     const sealed=await sealEntry({...common,clientSeq:++clientSeq,kind:'blobref',payload:blobrefPayload(refs.slice(i,i+MAX_BLOBREF))},identity);
+     entries.push({localId,clientSeq,kind:'blobref',body:sealed.body,headerRaw:sealed.headerRaw,ciphertext:sealed.ciphertext});
+    }
+    const sealed=await sealEntry({...common,clientSeq:++clientSeq,payload},identity);
+    entries.push({localId,clientSeq,kind:'update',body:sealed.body,headerRaw:sealed.headerRaw,ciphertext:sealed.ciphertext,vector:Y.encodeStateVector(doc),sequence:read.head.sequence});
+    // The outbox entries and their sequence numbers are durable before anything is sent,
     // so a retry after a crash resends identical bytes and never reuses a number.
-    const tx=db.transaction(['links','outbox'],'readwrite');
-    await tx.objectStore('outbox').put(entry);await tx.objectStore('links').put({...link,clientSeq});await tx.done;
-    const sent=await send({...link,clientSeq},entry);
-    if(sent.rollback){await recoverRollback(link);throw Error('The service lost recent changes. Re-uploading from this device.');}
-   }finally{doc.destroy();}
+    const tx=db.transaction(['links','outbox','objects'],'readwrite');
+    for(const entry of entries)await tx.objectStore('outbox').put(entry);
+    await noteObjects(refs,link.project,tx.objectStore('objects'));
+    await tx.objectStore('links').put({...link,clientSeq});await tx.done;
+    let current={...link,clientSeq};
+    for(const entry of entries){
+     const sent=await send(current,entry);
+     if(sent.rollback){await recoverRollback(link);throw Error('The service lost recent changes. Re-uploading from this device.');}
+     current=sent;
+    }
+   }finally{ring.wipe();doc.destroy();}
   }
+  // Named versions from other devices bring their history objects along when they can.
+  await syncHistory(link).catch(()=>{});
   attempts.delete(localId);setStatus(localId,live?'synced':'backed-up');
  }
  async function push(localId){
@@ -416,32 +586,40 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   });
  }
  /** Rebuilds one project from its log into a new local project. Nothing is saved unless it all verifies. */
- async function restoreProject(project,epoch){
-  const key=await projectKey(project,epoch),doc=new Y.Doc();
+ async function restoreProject(project){
+  const ring=keyRing(project),doc=new Y.Doc(),announced=[];
   let lineage=null;
   try{
-   const cursor=await readVerified({project,seq:0,chain:project,devices:{}},(item,header)=>{
-    const opened=openChecked(item,header,key,lineage);lineage=opened.meta.lineage;Y.applyUpdate(doc,opened.payload);
+   const cursor=await readVerified({project,seq:0,chain:project,devices:{}},async(item,header)=>{
+    const opened=openChecked(item,header,await ring.need(header.epoch),lineage);lineage=opened.meta.lineage;
+    if(header.kind==='blobref')announced.push(...await checkedBlobref(ring,opened.payload));else Y.applyUpdate(doc,opened.payload);
    });
    if(!cursor.seq)return null;
    if(doc.store.pendingStructs||doc.store.pendingDs)throw Error('A project’s copy on the service is incomplete. Nothing was restored for it.');
    if(doc.getMap('meta').get('lineageId')!==lineage)throw Error('A project’s copy on the service disagrees about its identity.');
    validateProjectState(doc);
+   if(announced.length){const tx=db.transaction('objects','readwrite');await noteObjects(announced,project,tx.store);await tx.done;}
+   // Every image and file the project refers to, decrypted and checked, before anything is saved.
+   await fetchAssets(project,ring,doc);
    const localId=crypto.randomUUID(),saved=await storage.saveProject(localId,doc);
-   await db.put('links',{localId,project,epoch,lineage,created:true,seq:cursor.seq,chain:cursor.chain,devices:cursor.devices,clientSeq:cursor.devices[connection.device]||0,acked:0,vector:Y.encodeStateVector(doc),pushedSequence:saved.sequence});
-   setStatus(localId,role(project)==='editor'?'backed-up':'read-only');
+   const link={localId,project,epoch:connection.state.projects[project]?.epoch||1,lineage,created:true,seq:cursor.seq,chain:cursor.chain,devices:cursor.devices,clientSeq:cursor.devices[connection.device]||0,acked:0,vector:Y.encodeStateVector(doc),pushedSequence:saved.sequence};
+   await db.put('links',link);
+   // Named versions: their checkpoint objects and the files they need (also ones deleted since).
+   const missing=await hydrateHistory(localId,project,ring,doc).catch(()=>1);
+   setStatus(localId,role(project)==='editor'?'backed-up':'read-only',missing?'Some named versions are not available on this device yet.':'');
    return{localId,name:doc.getMap('meta').get('name')||'Untitled project'};
-  }finally{key.fill(0);doc.destroy();}
+  }finally{ring.wipe();doc.destroy();}
  }
  /** Projects this browser holds keys for, can open, and has not downloaded yet. */
  async function unrestored(){
   const linked=new Set((await db.getAll('links')).map(l=>l.project));
-  return(await db.getAll('keys')).filter(k=>k.project!==connection.org&&!linked.has(k.project)&&role(k.project)&&connection.state.projects[k.project]?.epoch===k.epoch);
+  const seen=new Set();
+  return(await db.getAll('keys')).filter(k=>k.project!==connection.org&&!linked.has(k.project)&&role(k.project)&&!seen.has(k.project)&&seen.add(k.project));
  }
  async function restoreRemaining(){
   const restored=[],failures=[];
   for(const record of await unrestored()){
-   try{const result=await restoreProject(record.project,record.epoch);if(result)restored.push(result);}
+   try{const result=await restoreProject(record.project);if(result)restored.push(result);}
    catch(error){failures.push(error.message);}
   }
   return{restored,failures};
@@ -627,7 +805,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    if(read.kind!=='updated')throw Error('Open or save the project on this device first.');
    const doc=new Y.Doc();let lineage,name;
    try{Y.applyUpdate(doc,read.update);lineage=doc.getMap('meta').get('lineageId');name=doc.getMap('meta').get('name');
-    if(blobRefs(doc).length)throw Error('Projects with images or other binary files cannot be backed up remotely yet.');}
+}
    finally{doc.destroy();}
    if(typeof lineage!=='string')throw Error('This project has no identity yet. Save it once, then try again.');
    // The project's identity and key are durable here before the service hears of them.
@@ -683,7 +861,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** Projects this browser can download but has not yet. */
   async unrestored(){if(!orgConnected())return[];await load();return unrestored();},
   async restoreRemaining(){await load();await refreshMembership();await collectKeys().catch(()=>{});return restoreRemaining();},
-  async download(project){await load();await refreshMembership();await collectKeys().catch(()=>{});const epoch=connection.state.projects[project]?.epoch;if(!epoch)throw Error('Unknown project.');return restoreProject(project,epoch);},
+  async download(project){await load();await refreshMembership();await collectKeys().catch(()=>{});if(!connection.state.projects[project])throw Error('Unknown project.');return restoreProject(project);},
 
   // --- Organisation: names, members, projects
 
@@ -702,8 +880,9 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    await load();const links=new Map((await db.getAll('links')).map(l=>[l.project,l])),out=[];
    for(const [project,p] of Object.entries(connection.state.projects)){
     const myRole=role(project);if(!myRole)continue;
+    // The name was sealed when the project was created, under its first epoch's key.
     let name=null;const held=await hasKey(project,p.epoch);
-    if(held){const key=await projectKey(project,p.epoch);try{name=openProjectName(key,connection.org,project,p.name);}finally{key.fill(0);}}
+    if(await hasKey(project,1)){const key=await projectKey(project,1);try{name=openProjectName(key,connection.org,project,p.name);}finally{key.fill(0);}}
     out.push({project,name:name||'Shared project (waiting for its key)',role:myRole,localId:links.get(project)?.localId||null,held,
      members:Object.entries(p.members).map(([person,r])=>({person,role:r}))});
    }
