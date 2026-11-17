@@ -25,7 +25,7 @@ async function scan(directories,needle){
 async function owner(s){
  const setup=parseSetupCode(await orgCreate(s,'test-org')),client=orgClient(setup.service);
  const identity=await newIdentity(),agreement=await newAgreementKey();
- const body=genesisBody({org:setup.org,secret:setup.secret,device:identity.publicKey,agreement:agreement.publicKey});
+ const body=genesisBody({org:setup.org,secret:setup.secret,device:identity.publicKey,agreement:agreement.publicKey,directoryKey:randomBytes(32),name:'Test org',ownerName:'Owner'});
  const genesis=await signEvent({org:setup.org,prev:setup.org,type:'genesis',body},identity);
  let state=applyEvents(null,setup.org,[genesis],enrolPublic(setup.secret));
  assert.equal((await client.postEvent(setup.org,genesis,{auth:false})).seq,1);

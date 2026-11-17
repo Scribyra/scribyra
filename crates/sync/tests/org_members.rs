@@ -228,3 +228,38 @@ fn the_heads_notice_wakes_on_changes_and_shows_only_readable_projects() {
     send("GET", &format!("{heads_url}?since={version}&wait=1"), Some(&token), "", b"");
     assert!(started.elapsed() >= std::time::Duration::from_millis(900));
 }
+
+#[test]
+fn a_member_cannot_overwrite_or_hide_someone_elses_key() {
+    // Review M2: wraps are kept per sender, and a recipient can report one that does not open.
+    let s = Service::new(org_overrides(json!({})));
+    let mut org = Org::create(&s, &[], json!({}));
+    let owner = org.owner.clone();
+    let token = org.token(&owner.seed);
+    let project = org.create_project(&token, &owner);
+    let (_, invite, seed) = org.invite(&token, &owner, json!({}));
+    let (mallory, ben) = (Device::new(), Device::new());
+    assert_eq!(org.join(&mallory, &invite, &seed).status, 201);
+    let (_, invite, seed) = org.invite(&token, &owner, json!({}));
+    assert_eq!(org.join(&ben, &invite, &seed).status, 201);
+    for person in [org.person(&mallory), org.person(&ben)] {
+        assert_eq!(org.post(Some(&token), "project.grant", json!({"project":project,"person":person,"role":"viewer"}), &owner.seed).status, 201);
+    }
+    let mallory_token = org.token(&mallory.seed);
+    let ben_token = org.token(&ben.seed);
+    let key = random_bytes(32);
+    // Mallory races to plant a wrong key for Ben; the owner's good wrap still lands beside it.
+    assert_eq!(org.put_wraps(&mallory_token, &[real_wrap(&org, &project, 1, &ben.agreement, &mallory, &random_bytes(32))]).status, 204);
+    assert_eq!(org.put_wraps(&token, &[real_wrap(&org, &project, 1, &ben.agreement, &owner, &key)]).status, 204);
+    let for_ben: Vec<Wrap> = org.wraps(&ben_token).iter().map(|w| serde_json::from_str(w).unwrap()).filter(|w: &Wrap| w.project == project).collect();
+    assert_eq!(for_ben.len(), 2);
+    assert!(for_ben.iter().any(|w| w.sender == owner.key));
+    // Ben reports Mallory's wrap; it is gone, and only Ben's own wraps can be reported away.
+    let report = |token: &str, sender: &str| send("POST", &org.url(&format!("/v1/orgs/{}/keys/report", org.id)), Some(token), "application/json", json!({"project":project,"epoch":1,"sender":sender}).to_string().as_bytes()).status;
+    assert_eq!(report(&mallory_token, &owner.key), 204);
+    assert!(org.wraps(&ben_token).iter().any(|w| w.contains(&owner.key)));
+    assert_eq!(report(&ben_token, &mallory.key), 204);
+    let left: Vec<Wrap> = org.wraps(&ben_token).iter().map(|w| serde_json::from_str(w).unwrap()).filter(|w: &Wrap| w.project == project).collect();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].sender, owner.key);
+}

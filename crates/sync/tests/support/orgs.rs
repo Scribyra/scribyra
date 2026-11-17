@@ -159,6 +159,11 @@ impl Org {
         }
         send("POST", &self.url("/v1/auth/session"), None, "application/json", body.to_string().as_bytes())
     }
+    pub fn token_with(&self, seed: &[u8], sso: &str) -> String {
+        let reply = self.sign_in_with(seed, json!({"sso": sso}));
+        assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));
+        reply.json()["token"].as_str().unwrap().to_string()
+    }
     pub fn token(&self, seed: &[u8]) -> String {
         let reply = self.sign_in_with(seed, json!({}));
         assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));

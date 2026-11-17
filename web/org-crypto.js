@@ -175,6 +175,9 @@ export function parseDeviceLink(text){
  return{service,org:p.org,genesis:p.genesis,person:p.person,link:p.link,secret:unhex(p.secret,32)};
 }
 /** The code both devices show while linking: it depends on the link secret and the new keys. */
+/** `https://app/#org=…`: where to sign in with an organisation's SSO (to ask to join, or to add a browser). */
+export function formatOrgLink(origin,{service,org,genesis}){return `${origin}/#org=${b64url(encoder.encode(canonical({v:1,service,org,genesis})))}`;}
+export function parseOrgLink(text){const p=fragmentValue(text,'org'),service=serviceOrigin(p.service);unhex(p.org,32);unhex(p.genesis,32);return{service,org:p.org,genesis:p.genesis};}
 export function linkCode(secret,device,agreement){
  const digest=org_sha256_hex(concat(encoder.encode('scribyra-device-compare/1'),secret,unhex(device,32),unhex(agreement,32)));
  return(parseInt(digest.slice(0,10),16)%1e8).toString().padStart(8,'0').replace(/(\d{4})(\d{4})/,'$1 $2');
@@ -218,6 +221,7 @@ export async function wrapProjectKey({org,project,epoch,recipient,projectKey},se
  */
 export async function unwrapProjectKey(state,raw,recipient){
  const context=org_check_wrap(JSON.stringify(state),raw),wrap=JSON.parse(raw);
+ const directory=wrap.project===state.org;
  let shared;
  if(recipient instanceof Uint8Array)shared=org_x25519_shared(recipient,wrap.enc);
  else{
@@ -230,8 +234,9 @@ export async function unwrapProjectKey(state,raw,recipient){
  try{projectKey=org_open(key,unhex(wrap.nonce,24),encoder.encode(context),unhex(wrap.ct,48));}
  catch{throw Error('A project key could not be opened: it was altered or not meant for this key.');}
  finally{key.fill(0);shared.fill(0);}
- const project=state.projects[wrap.project];
- if(!project||wrap.epoch!==project.epoch||org_key_commit(projectKey)!==project.keyCommit)throw Error('A project key does not match the key the project was created with.');
+ // The directory key is checked against the genesis commitment; a project key against its epoch's.
+ const commit=directory?state.directoryCommit:state.projects[wrap.project]?.keyCommit,epoch=directory?1:state.projects[wrap.project]?.epoch;
+ if(!commit||wrap.epoch!==epoch||org_key_commit(projectKey)!==commit){projectKey.fill(0);throw Error('A key does not match the key it was created with.');}
  return{project:wrap.project,epoch:wrap.epoch,key:projectKey};
 }
 

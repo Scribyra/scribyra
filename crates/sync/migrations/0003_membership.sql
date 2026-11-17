@@ -20,3 +20,13 @@ CREATE TABLE device_links (
     PRIMARY KEY (org, link)
 );
 CREATE INDEX device_links_person ON device_links (org, person);
+
+-- Wraps are kept per sender, so a member who uploads a wrong key for someone cannot overwrite a
+-- good one; a recipient that cannot open a wrap reports it and the service drops it, which lists
+-- the recipient as missing again for honest members' apps.
+ALTER TABLE wraps ADD COLUMN sender text;
+UPDATE wraps SET sender = raw::jsonb ->> 'sender';
+ALTER TABLE wraps ALTER COLUMN sender SET NOT NULL;
+ALTER TABLE wraps ADD CONSTRAINT wraps_sender CHECK (sender ~ '^[0-9a-f]{64}$');
+ALTER TABLE wraps DROP CONSTRAINT wraps_pkey;
+ALTER TABLE wraps ADD PRIMARY KEY (org, project, epoch, recipient, sender);

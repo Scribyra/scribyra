@@ -26,7 +26,9 @@ fn post_with_sso(org: &mut Org, kind: &str, body: serde_json::Value, seed: &[u8]
 fn sso_joins_linking_required_sessions_blocking_and_device_requests() {
     let s = Service::new(org_overrides(json!({"origins": [APP], "sso_recheck_tick_seconds": 1, "requests_per_second": 100000, "source_requests_per_second": 100000})));
     let mut org = Org::create(&s, &[], json!({}));
-    let idp = Idp::start("RS256", &org.public, default_users());
+    let mut users = default_users();
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-gina", "username": "gina", "password": "pw-gina", "email": "gina@example.org", "email_verified": true, "name": "Gina"}));
+    let idp = Idp::start("RS256", &org.public, users);
     let (code, out) = configure(&s, &org.id, &idp, &["--offline-access"]);
     assert_eq!(code, 0, "{out}");
     let sso = Client { base: s.url.clone(), org: org.id.clone(), idp: &idp };
@@ -68,6 +70,15 @@ fn sso_joins_linking_required_sessions_blocking_and_device_requests() {
     assert_eq!(post_with_sso(&mut org, "person.request", body, &again.seed, &token_of(&bob_login)), 409);
     assert_eq!(org.post(Some(&token), "person.approve", json!({"person":bob_person,"role":"member"}), &owner.seed).status, 201);
     assert_eq!(org.sign_in_with(&bob.seed, json!({})).status, 200);
+
+    // Review M3: Gina joins with a plain invitation after SSO was configured. Later presenting an
+    // SSO identity does not link her on first use (that is only for people from before SSO).
+    let (_, invite, seed) = org.invite(&token, &owner, json!({}));
+    let gina = Device::new();
+    assert_eq!(org.join(&gina, &invite, &seed).status, 201);
+    let gina_login = sso.login("gina");
+    assert_eq!(org.sign_in_with(&gina.seed, json!({"sso": token_of(&gina_login)})).status, 403);
+    assert_eq!(sso.me(&token_of(&gina_login)).json()["state"], "unlinked");
 
     // Now the org requires SSO: device keys alone no longer open a session.
     let (code, out) = configure(&s, &org.id, &idp, &["--offline-access", "--required"]);
@@ -112,6 +123,10 @@ fn sso_joins_linking_required_sessions_blocking_and_device_requests() {
     assert!(blocked.status == 401 || blocked.status == 403, "{}", blocked.status);
     // Others are unaffected.
     assert_eq!(org.sign_in_with(&bob.seed, json!({"sso": token_of(&bob_login)})).status, 200);
+    // Review M3: with SSO required, even an invitation that does not ask for SSO needs it…
+    let (_, invite, seed) = org.invite(&org.token_with(&owner.seed, &token_of(&dave_login)), &owner, json!({}));
+    let erin = Device::new();
+    assert_eq!(org.join(&erin, &invite, &seed).status, 403);
     // A login for this org is useless in another org on the same service.
     let other = Org::create(&s, &[], json!({}));
     assert_eq!(other.sign_in_with(&other.owner.seed, json!({"sso": token_of(&bob_login)})).status, 403);

@@ -13,7 +13,10 @@ CREATE TABLE org_sso (
     groups_claim text,
     session_seconds integer NOT NULL DEFAULT 43200 CHECK (session_seconds BETWEEN 60 AND 2592000),
     recheck_seconds integer NOT NULL DEFAULT 600 CHECK (recheck_seconds BETWEEN 1 AND 86400),
-    scopes text NOT NULL DEFAULT 'openid email profile'
+    scopes text NOT NULL DEFAULT 'openid email profile',
+    -- People added at or before this membership log position (when SSO was first configured)
+    -- may be linked to an SSO identity on first sign-in; everyone later links when joining.
+    linked_before bigint NOT NULL DEFAULT 0
 );
 
 -- Signed-in SSO identities. Only SHA-256 of the bearer token is stored. `refresh_token` is the

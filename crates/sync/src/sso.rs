@@ -60,6 +60,8 @@ pub struct Policy {
     /// Members must sign in with SSO (enforced by the org module).
     pub required: bool,
     pub issuer: String,
+    /// People added at or before this membership log position may be linked on first sign-in.
+    pub linked_before: u64,
 }
 /// A valid (unexpired, unrevoked) SSO login.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +100,7 @@ struct Settings {
     groups_claim: Option<String>,
     session_seconds: i32,
     scopes: String,
+    linked_before: i64,
 }
 /// The endpoints named by a provider's discovery document.
 #[derive(Clone)]
@@ -236,7 +239,7 @@ impl Sso {
 
     /// The organisation's SSO policy, or `None` when SSO is not configured for it.
     pub async fn policy(&self, org: &str) -> Result<Option<Policy>, StoreError> {
-        Ok(self.settings(org).await?.map(|s| Policy { required: s.required, issuer: s.issuer }))
+        Ok(self.settings(org).await?.map(|s| Policy { required: s.required, issuer: s.issuer, linked_before: s.linked_before as u64 }))
     }
     /// The login for a bearer token, if it is valid, unexpired and unrevoked and its org still
     /// uses the provider that issued it.
@@ -329,7 +332,7 @@ impl Sso {
     }
 
     async fn settings(&self, org: &str) -> Result<Option<Settings>, StoreError> {
-        let row = sqlx::query("SELECT issuer, client_id, client_secret, required, email_domain, groups_claim, session_seconds, scopes FROM org_sso WHERE org = $1")
+        let row = sqlx::query("SELECT issuer, client_id, client_secret, required, email_domain, groups_claim, session_seconds, scopes, linked_before FROM org_sso WHERE org = $1")
             .bind(org)
             .fetch_optional(&self.store.pool)
             .await?;
@@ -342,6 +345,7 @@ impl Sso {
             groups_claim: r.get(5),
             session_seconds: r.get(6),
             scopes: r.get(7),
+            linked_before: r.get(8),
         }))
     }
     async fn org_exists(&self, org: &str) -> Result<bool, StoreError> {
@@ -1049,8 +1053,8 @@ pub async fn command(config: &Config, args: &[String]) -> Result<Value, &'static
     };
     let scopes = if offline { format!("{BASE_SCOPES} offline_access") } else { BASE_SCOPES.to_owned() };
     sqlx::query(
-        "INSERT INTO org_sso (org, issuer, client_id, client_secret, required, email_domain, groups_claim, session_seconds, recheck_seconds, scopes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "INSERT INTO org_sso (org, issuer, client_id, client_secret, required, email_domain, groups_claim, session_seconds, recheck_seconds, scopes, linked_before)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, (SELECT count(*) FROM org_events WHERE org = $1))
          ON CONFLICT (org) DO UPDATE SET issuer = $2, client_id = $3, client_secret = $4, required = $5, email_domain = $6,
            groups_claim = $7, session_seconds = $8, recheck_seconds = $9, scopes = $10",
     )

@@ -10,7 +10,7 @@ import {newIdentity} from '../web/direct-identity.js';
 const org=hex(randomBytes(32)),service='http://127.0.0.1:8787';
 async function owner(){
  const secret=randomBytes(32),identity=await newIdentity(),agreement=await newAgreementKey();
- const body=genesisBody({org,secret,device:identity.publicKey,agreement:agreement.publicKey});
+ const body=genesisBody({org,secret,device:identity.publicKey,agreement:agreement.publicKey,directoryKey:randomBytes(32),name:'Test org',ownerName:'Owner'});
  const raw=await signEvent({org,prev:org,type:'genesis',body},identity);
  let state=applyEvents(null,org,[raw],enrolPublic(secret));
  const code=newRecoveryCode(),recovery=recoverySecrets(code.bytes);

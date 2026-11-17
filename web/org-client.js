@@ -18,10 +18,11 @@ async function failure(response){
 }
 export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),timeoutMs=20000}={}){
  let token=null;
- async function request(path,{method='GET',body,type,auth=true}={}){
-  const headers={};if(type)headers['Content-Type']=type;if(auth&&token)headers.Authorization='Scribyra '+token;
+ async function request(path,{method="GET",body,type,auth=true,sso,timeout=timeoutMs,signal}={}){
+  const headers={};if(type)headers['Content-Type']=type;
+  if(sso)headers.Authorization='ScribyraSSO '+sso;else if(auth&&token)headers.Authorization='Scribyra '+token;
   let response;
-  try{response=await fetchImpl(service+path,{method,headers,body,signal:AbortSignal.timeout(timeoutMs),cache:'no-store',credentials:'omit'});}
+  try{response=await fetchImpl(service+path,{method,headers,body,signal:signal?AbortSignal.any([signal,AbortSignal.timeout(timeout)]):AbortSignal.timeout(timeout),cache:'no-store',credentials:'omit'});}
   catch(error){throw new ServiceError(0,error?.name==='TimeoutError'?'The service did not answer in time.':'The service cannot be reached. Your changes stay saved on this device.');}
   if(!response.ok)throw await failure(response);
   return response;
@@ -31,12 +32,12 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
   service,
   get token(){return token;},
   forget(){token=null;},
-  /** Challenge-response sign-in with a device identity or a recovery seed. */
-  async signIn(org,signer){
+  /** Challenge-response sign-in with a device identity or a recovery seed; `sso` is an SSO login token. */
+  async signIn(org,signer,{sso}={}){
    const {challenge}=await json('/v1/auth/challenge',{method:'POST',type:'application/json',body:JSON.stringify({org}),auth:false});
    if(typeof challenge!=='string'||!/^[0-9a-f]{64}$/.test(challenge))throw new ServiceError(0,'The service sent an invalid sign-in challenge.');
    const key=signerPublic(signer),sig=await sign(signer,encoder.encode(`scribyra-auth/1\n${service}\n${org}\n${key}\n${challenge}`));
-   const session=await json('/v1/auth/session',{method:'POST',type:'application/json',body:JSON.stringify({org,key,challenge,sig}),auth:false});
+   const session=await json('/v1/auth/session',{method:'POST',type:'application/json',body:JSON.stringify({org,key,challenge,sig,...(sso?{sso}:{})}),auth:false});
    if(typeof session?.token!=='string'||!/^[0-9a-f]{64}$/.test(session.token))throw new ServiceError(0,'The service sent an invalid session.');
    token=session.token;return session;
   },
@@ -56,7 +57,21 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
     if(!page.events.length)throw new ServiceError(0,'The service sent an incomplete membership log.');
    }
   },
-  async postEvent(org,raw,{auth=true}={}){return json(`/v1/orgs/${org}/events`,{method:'POST',type:'application/json',body:raw,auth});},
+  async postEvent(org,raw,{auth=true,sso}={}){return json(`/v1/orgs/${org}/events`,{method:'POST',type:'application/json',body:raw,auth,sso});},
+  /** Unauthenticated: whether the org has a genesis, its log head, and the managed-mode service key. */
+  async info(org){const r=await json(`/v1/orgs/${org}/info`,{auth:false});if(typeof r?.head!=='string'||!Number.isSafeInteger(r.count))throw new ServiceError(0,'The service sent invalid organisation details.');return r;},
+  async ssoPolicy(org){return json(`/v1/orgs/${org}/sso`,{auth:false});},
+  async ssoStart(org,returnTo,challenge){return json('/v1/sso/start',{method:'POST',type:'application/json',body:JSON.stringify({org,return:returnTo,challenge}),auth:false});},
+  async ssoRedeem(code,verifier){return json('/v1/sso/redeem',{method:'POST',type:'application/json',body:JSON.stringify({code,verifier}),auth:false});},
+  async ssoMe(sso){return json('/v1/sso/me',{sso});},
+  async ssoLogout(sso){await request('/v1/sso/logout',{method:'POST',type:'application/json',body:'{}',sso});},
+  async reportWrap(org,project,epoch,sender){await request(`/v1/orgs/${org}/keys/report`,{method:'POST',type:'application/json',body:JSON.stringify({project,epoch,sender})});},
+  async pending(org){return(await json(`/v1/orgs/${org}/pending`)).pending;},
+  async heads(org,since,wait,signal){return json(`/v1/orgs/${org}/heads?${since===undefined?'':`since=${since}&`}wait=${wait}`,{timeout:(wait+15)*1000,signal});},
+  async createLink(org,link,key){return json(`/v1/orgs/${org}/device-links`,{method:'POST',type:'application/json',body:JSON.stringify({link,key})});},
+  async links(org){return(await json(`/v1/orgs/${org}/device-links`)).links;},
+  async answerLink(org,link,body){return json(`/v1/orgs/${org}/device-links/${link}`,{method:'POST',type:'application/json',body:JSON.stringify(body),auth:false});},
+  async ssoDeviceRequest(org,body,sso){return json(`/v1/orgs/${org}/device-links/sso`,{method:'POST',type:'application/json',body:JSON.stringify(body),sso});},
   async putWraps(org,wraps){await request(`/v1/orgs/${org}/keys`,{method:'PUT',type:'application/json',body:JSON.stringify(wraps)});},
   async wraps(org){
    const result=await json(`/v1/orgs/${org}/keys`);

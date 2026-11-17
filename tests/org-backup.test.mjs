@@ -23,8 +23,10 @@ function snapshot(doc){
  for(const name of [...doc.share.keys()].filter(n=>n.startsWith('text:')).sort())out[name]=doc.getText(name).toString();
  return JSON.stringify(out);
 }
+// "Synced" (acknowledged and followed live) and "Backed up remotely" both mean every change is acknowledged.
 async function settled(engine,id,state='backed-up'){
- for(let i=0;i<400;i++){if(engine.status(id)?.state===state)return;await new Promise(r=>setTimeout(r,25));}
+ const accepted=state==='backed-up'?['backed-up','synced']:[state];
+ for(let i=0;i<400;i++){if(accepted.includes(engine.status(id)?.state))return;await new Promise(r=>setTimeout(r,25));}
  assert.fail(`backup did not reach ${state}: ${JSON.stringify(engine.status(id))}`);
 }
 
@@ -65,7 +67,7 @@ test('a project with comments, reviews and history backs up encrypted and restor
   assert.equal(restored.getMap('threads').size,1);assert.equal(restored.getMap('suggestions').size,1);
   restored.destroy();
   // The restored browser keeps backing up under its own device key.
-  assert.equal(restoredEngine.status(result.restored[0].localId)?.state,'backed-up');
+  assert(['backed-up','synced'].includes(restoredEngine.status(result.restored[0].localId)?.state));
   // An old kit no longer restores once replaced.
   const newer=await restoredEngine.replaceRecoveryKit();assert.notEqual(newer,kit);
   restoredEngine.close();await deleteDB('scribyra-org');await deleteDB('scribyra-direct');localStorage.removeItem('scribyra:org-connected');

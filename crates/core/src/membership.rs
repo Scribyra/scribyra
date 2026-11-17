@@ -176,6 +176,8 @@ pub struct Person {
     pub name: Option<String>,
     pub recovery_signing: Option<String>,
     pub recovery_agreement: Option<String>,
+    /// The log position (1-based event count) of the event that added this person.
+    pub joined: u64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -229,8 +231,9 @@ pub struct OrgState {
     pub invites: BTreeMap<String, Invite>,
     /// Device links already used (each adds one device).
     pub links: BTreeSet<String>,
-    /// Keys that were removed and can never be registered again.
-    pub retired: BTreeSet<String>,
+    /// Every key ever registered (device, agreement, recovery, invitation and service keys,
+    /// including retired ones): a key can be registered once, and the check stays O(log n).
+    pub keys: BTreeSet<String>,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum KeyRole {
@@ -381,12 +384,10 @@ impl OrgState {
         keys
     }
     fn known_key(&self, key: &str) -> bool {
-        self.retired.contains(key)
-            || self.service_key.as_deref() == Some(key)
-            || self.devices.contains_key(key)
-            || self.devices.values().any(|d| d.agreement == key)
-            || self.persons.values().any(|p| p.recovery_signing.as_deref() == Some(key) || p.recovery_agreement.as_deref() == Some(key))
-            || self.invites.values().any(|i| i.key == key)
+        self.keys.contains(key)
+    }
+    fn register(&mut self, keys: &[&str]) {
+        self.keys.extend(keys.iter().map(|k| k.to_string()));
     }
     fn new_device_keys(&self, device: &str, agreement: &str) -> Result<()> {
         if !is_hex(device, 32) || !valid_agreement_key(agreement) || device == agreement {
@@ -401,17 +402,28 @@ impl OrgState {
         self.persons.values().filter(|p| p.state == "active" && p.role == "owner").count()
     }
     fn retire_person_keys(&mut self, person: &str) {
-        let keys: Vec<(String, String)> = self.devices.iter().filter(|(_, d)| d.person == person).map(|(k, d)| (k.clone(), d.agreement.clone())).collect();
-        for (key, agreement) in keys {
-            self.devices.remove(&key);
-            self.retired.insert(key);
-            self.retired.insert(agreement);
-        }
+        // Their keys stay in `keys`, so they can never be registered again.
+        self.devices.retain(|_, d| d.person != person);
         if let Some(p) = self.persons.get_mut(person) {
-            for key in [p.recovery_signing.take(), p.recovery_agreement.take()].into_iter().flatten() {
-                self.retired.insert(key);
-            }
+            p.recovery_signing = None;
+            p.recovery_agreement = None;
         }
+    }
+    /// Whether an invitation's creator could still make it now: the authority checked at
+    /// `invite.create` is checked again when someone uses the invitation.
+    fn invite_still_authorised(&self, invite: &Invite) -> bool {
+        if !self.active(&invite.creator) {
+            return false;
+        }
+        let admin = self.is_admin(&invite.creator);
+        if invite.project.as_deref().is_some_and(|p| !self.can_write(&invite.creator, p)) {
+            return false;
+        }
+        admin || (invite.role == "member" && invite.project.is_some() && invite.approval)
+    }
+    /// Editors of a project who are active people (pending or removed ones keep nothing alive).
+    fn active_editors(&self, project: &Project) -> usize {
+        project.members.iter().filter(|(person, role)| *role == "editor" && self.active(person)).count()
     }
 
     /// Validate and apply one event. `expected_enrol`, when given, is the enrolment
@@ -439,15 +451,14 @@ impl OrgState {
             return Err(fail("membership event signature is invalid"));
         }
         let hash = event_hash(&value)?;
-        // Apply to a copy, so a failing rule never leaves a half-applied event behind.
-        let mut next = self.clone();
-        next.apply_event(&event, expected_enrol)?;
+        // Every rule checks everything before it changes anything, so a refused event leaves
+        // the state untouched without copying it (copying made replay quadratic).
+        self.apply_event(&event, expected_enrol)?;
         if event.kind == "genesis" {
-            next.genesis = Some(hash.clone());
+            self.genesis = Some(hash.clone());
         }
-        next.head = hash.clone();
-        next.count += 1;
-        *self = next;
+        self.head = hash.clone();
+        self.count += 1;
         Ok(hash)
     }
 
@@ -486,7 +497,11 @@ impl OrgState {
             if keys.iter().enumerate().any(|(i, k)| keys[i + 1..].contains(k) || b.service_key.as_ref() == Some(*k)) {
                 return Err(fail("genesis keys must be distinct"));
             }
-            self.persons.insert(b.person.clone(), Person { role: "owner".into(), state: "active".into(), via: "genesis".into(), name: Some(b.owner_name), ..Default::default() });
+            self.register(&[&b.device, &b.agreement, &b.enrol]);
+            if let Some(service) = &b.service_key {
+                self.register(&[service]);
+            }
+            self.persons.insert(b.person.clone(), Person { role: "owner".into(), state: "active".into(), via: "genesis".into(), name: Some(b.owner_name), joined: 1, ..Default::default() });
             self.devices.insert(b.device.clone(), Device { person: b.person, agreement: b.agreement });
             self.mode = Some(b.mode);
             self.admin_read = b.admin_read;
@@ -520,9 +535,10 @@ impl OrgState {
                 if !ed25519_verify(&b.signing, &recovery_proof_message(&self.org, &event.prev, &b.person, &b.signing, &b.agreement), &b.proof) {
                     return Err(fail("the recovery key was not proven"));
                 }
+                self.register(&[&b.signing, &b.agreement]);
                 let person = self.persons.get_mut(&b.person).ok_or(fail("unknown person"))?;
-                let old: Vec<String> = [person.recovery_signing.replace(b.signing), person.recovery_agreement.replace(b.agreement)].into_iter().flatten().collect();
-                self.retired.extend(old);
+                person.recovery_signing = Some(b.signing);
+                person.recovery_agreement = Some(b.agreement);
             }
             "device.add" => {
                 let b: DeviceBody = serde_json::from_value(body).map_err(parse)?;
@@ -555,10 +571,7 @@ impl OrgState {
                 if !ed25519_verify(&b.device, &device_proof_message(&self.org, &binding, &b.person, &b.device, &b.agreement), &b.proof) {
                     return Err(fail("the new device did not prove possession of its key"));
                 }
-                if rekey {
-                    let old = self.devices[&b.device].agreement.clone();
-                    self.retired.insert(old);
-                }
+                self.register(&[&b.device, &b.agreement]);
                 if let Some(link) = b.link {
                     self.links.insert(link);
                 }
@@ -571,9 +584,8 @@ impl OrgState {
                 if remover != device.person && !self.may_manage(&remover, &device.person) {
                     return Err(fail("only the same person or an admin can remove a device"));
                 }
+                let _ = device;
                 self.devices.remove(&b.device);
-                self.retired.insert(b.device);
-                self.retired.insert(device.agreement);
             }
             "invite.create" => {
                 let b: InviteBody = serde_json::from_value(body).map_err(parse)?;
@@ -603,6 +615,7 @@ impl OrgState {
                 if b.role == "admin" && !b.approval {
                     return Err(fail("admin invitations always need approval"));
                 }
+                self.register(&[&b.invite_key]);
                 self.invites.insert(
                     b.invite,
                     Invite { creator, key: b.invite_key, role: b.role, expires: b.expires, approval: b.approval, sso: b.sso, email_hash: b.email_hash, project: b.project, project_role: b.project_role, state: "open".into() },
@@ -637,12 +650,14 @@ impl OrgState {
                 if !ed25519_verify(&invite.key, &invite_message(&self.org, &event.prev, &b.invite, &b.person, &b.device, &b.agreement), &b.invite_sig) {
                     return Err(fail("the join was not signed with the invitation"));
                 }
-                // The invitation's creator must still be allowed to have made it.
-                if !self.active(&invite.creator) {
-                    return Err(fail("the invitation's creator is no longer a member"));
+                // The invitation's creator must still be allowed to make it now (not only when they did).
+                if !self.invite_still_authorised(&invite) {
+                    return Err(fail("the invitation's creator can no longer make that invitation"));
                 }
                 let state = if invite.approval { "pending" } else { "active" };
-                self.persons.insert(b.person.clone(), Person { role: invite.role.clone(), state: state.into(), via: "invite".into(), name: Some(b.name), ..Default::default() });
+                self.register(&[&b.device, &b.agreement]);
+                let joined = self.count + 1;
+                self.persons.insert(b.person.clone(), Person { role: invite.role.clone(), state: state.into(), via: "invite".into(), name: Some(b.name), joined, ..Default::default() });
                 self.devices.insert(b.device, Device { person: b.person.clone(), agreement: b.agreement });
                 if let (Some(project), Some(role)) = (&invite.project, &invite.project_role)
                     && let Some(p) = self.projects.get_mut(project)
@@ -665,7 +680,9 @@ impl OrgState {
                 if !ed25519_verify(&b.device, &device_proof_message(&self.org, &event.prev, &b.person, &b.device, &b.agreement), &b.proof) {
                     return Err(fail("the new device did not prove possession of its key"));
                 }
-                self.persons.insert(b.person.clone(), Person { role: "member".into(), state: "pending".into(), via: "sso".into(), name: Some(b.name), ..Default::default() });
+                self.register(&[&b.device, &b.agreement]);
+                let joined = self.count + 1;
+                self.persons.insert(b.person.clone(), Person { role: "member".into(), state: "pending".into(), via: "sso".into(), name: Some(b.name), joined, ..Default::default() });
                 self.devices.insert(b.device, Device { person: b.person, agreement: b.agreement });
             }
             "person.approve" => {
@@ -735,11 +752,11 @@ impl OrgState {
                 if !self.persons.get(&b.person).is_some_and(|p| p.state != "removed") {
                     return Err(fail("unknown person"));
                 }
-                let project = self.projects.get_mut(&b.project).unwrap();
-                if project.members.get(&b.person).map(String::as_str) == Some("editor") && b.role != "editor" && project.members.values().filter(|r| *r == "editor").count() == 1 {
+                let project = &self.projects[&b.project];
+                if project.members.get(&b.person).map(String::as_str) == Some("editor") && b.role != "editor" && self.active_editors(project) <= 1 {
                     return Err(fail("a project always keeps at least one editor"));
                 }
-                project.members.insert(b.person, b.role);
+                self.projects.get_mut(&b.project).unwrap().members.insert(b.person, b.role);
             }
             "project.revoke" => {
                 let b: RevokeBody = serde_json::from_value(body).map_err(parse)?;
@@ -747,12 +764,12 @@ impl OrgState {
                 if revoker != b.person && !self.can_write(&revoker, &b.project) {
                     return Err(fail("only a project's editor (or the person themselves) can revoke access"));
                 }
-                let project = self.projects.get_mut(&b.project).ok_or(fail("unknown project"))?;
+                let project = self.projects.get(&b.project).ok_or(fail("unknown project"))?;
                 let role = project.members.get(&b.person).ok_or(fail("that person has no access"))?;
-                if role == "editor" && project.members.values().filter(|r| *r == "editor").count() == 1 {
+                if role == "editor" && self.active(&b.person) && self.active_editors(project) <= 1 {
                     return Err(fail("a project always keeps at least one editor"));
                 }
-                project.members.remove(&b.person);
+                self.projects.get_mut(&b.project).unwrap().members.remove(&b.person);
             }
             _ => return Err(fail("unsupported membership event type")),
         }
@@ -1046,6 +1063,67 @@ mod tests {
         let ben = dev(8);
         o.join(&ben, &invite, &seed).unwrap();
         assert!(o.apply("device.remove", json!({"device":owner.key}), &ben.seed).is_err());
+    }
+
+    #[test]
+    fn an_invitation_needs_its_creators_authority_when_it_is_used() {
+        // Review M1: an admin's invitation made before a demotion no longer admits anyone.
+        let (mut o, owner) = org("e2ee", true);
+        let (invite, seed) = o.invite(&owner, 2, "admin", true, None).unwrap();
+        let ana = dev(2);
+        o.join(&ana, &invite, &seed).unwrap();
+        o.apply("person.approve", json!({"person":o.person(&ana),"role":"admin"}), &owner.seed).unwrap();
+        let project = o.project(&ana, 30);
+        let (open, open_seed) = o.invite(&ana, 3, "member", false, Some((&project, "editor"))).unwrap();
+        o.apply("person.role", json!({"person":o.person(&ana),"role":"member"}), &owner.seed).unwrap();
+        assert_eq!(o.join(&dev(4), &open, &open_seed).unwrap_err().0, "the invitation's creator can no longer make that invitation");
+        // Likewise an editor's invitation to a project they no longer edit.
+        o.apply("person.role", json!({"person":o.person(&ana),"role":"admin"}), &owner.seed).unwrap();
+        let (open, open_seed) = o.invite(&ana, 5, "member", false, Some((&project, "viewer"))).unwrap();
+        o.apply("project.grant", json!({"project":project,"person":o.person(&owner),"role":"editor"}), &ana.seed).unwrap();
+        o.apply("project.revoke", json!({"project":project,"person":o.person(&ana)}), &ana.seed).unwrap();
+        assert!(o.join(&dev(6), &open, &open_seed).is_err());
+    }
+
+    #[test]
+    fn pending_people_do_not_keep_a_project_alive() {
+        // Review L3: the last active editor cannot leave a project to a pending person.
+        let (mut o, owner) = org("e2ee", true);
+        let project = o.project(&owner, 30);
+        let (invite, seed) = o.invite(&owner, 2, "member", true, Some((&project, "editor"))).unwrap();
+        o.join(&dev(2), &invite, &seed).unwrap();
+        let owner_p = o.person(&owner);
+        assert_eq!(o.apply("project.revoke", json!({"project":project,"person":owner_p}), &owner.seed).unwrap_err().0, "a project always keeps at least one editor");
+    }
+
+    #[test]
+    fn replay_stays_linear() {
+        // Review H1: applying an event no longer copies the whole state.
+        let (mut o, owner) = org("e2ee", true);
+        let raws: Vec<String> = (0..1600u32)
+            .map(|i| {
+                let mut id = [0u8; 32];
+                id[..4].copy_from_slice(&i.to_be_bytes());
+                id[31] = 1;
+                let raw = o.event("project.create", json!({"project":hex(&id),"epoch":1,"keyCommit":hex(&[1; 32])}), &owner.seed);
+                o.state.apply(&raw, None).unwrap();
+                raw
+            })
+            .collect();
+        // The second half of the replay (on a state twice as large) costs about what the first did;
+        // copying the state per event made it cost about three times as much.
+        let (mut fresh, _) = org("e2ee", true);
+        let timed = |fresh: &mut Org, part: &[String]| {
+            let started = std::time::Instant::now();
+            for raw in part {
+                fresh.state.apply(raw, None).unwrap();
+            }
+            started.elapsed()
+        };
+        let first = timed(&mut fresh, &raws[..800]);
+        let second = timed(&mut fresh, &raws[800..]);
+        assert_eq!(fresh.state, o.state);
+        assert!(second < first * 2, "first {first:?}, second {second:?}");
     }
 
     #[test]
