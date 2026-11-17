@@ -21,6 +21,8 @@ import {companionHost,CompanionOrigin} from './companion-host.js';
 import {connectCompanion} from './companion-connection.js';
 import {companionDialog} from './companion-dialog.js';
 import {environmentDialog} from './environment-dialog.js';
+import {zoteroController,sourceLabel,freePath} from './zotero.js';
+import './zotero.css';
 import {trackComposition,compositionInProgress,composingEvent,restoreDialogFocus} from './input.js';
 trackComposition(document);
 import init, { main as startApp, TelemetryRecorder } from './pkg/scribyra_app.js';
@@ -52,6 +54,7 @@ import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
 import { projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
 import * as storage from './storage.js';
 import { readBrowserFiles, readDirectory, readDroppedFiles } from './import-files.js';
+import {readBibliography} from './bibtex.js';
 import { assetBytes, cloneProject, installBlob } from './assets.js';
 import { compileProject, cancelCompile } from './compiler.js';
 import {buildFailure} from './build-errors.js';
@@ -105,6 +108,12 @@ configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displa
 const editorOptions = new Compartment(), selections = new Map();
 const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision,emit,activate:activateFile,notify:notice,wireTree,mutate:run=>{assertUiMutation(collaboration?.review.state.mode);return run();}});
 const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision,emit,notify:notice,showRectangle:showSourceRectangle,clearMarker:clearSourceHighlight,activate:(id,line)=>{activateFile(id);selectSourceLine(line);}});
+// Bibliography import and Zotero links (docs/zotero.md). Links and keys stay on this device.
+const zotero=zoteroController({context:()=>doc&&!leavingProject&&commands?{doc,projectId,commands,mode:collaboration?.review.state.mode,transient:transientProject}:null,notify:message=>notice(message),activate:id=>activateFile(id),onLinks:()=>{zoteroBar();emit();}});
+function zoteroBar(){
+  const link=state.active?zotero.linked(state.active):null;
+  state.zotero=link?{linked:true,summary:`Linked to Zotero · ${sourceLabel(link)}${link.refreshedAt?` · refreshed ${new Date(link.refreshedAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}`:''}`}:{linked:false,summary:''};
+}
 function persistWorkspace() {
   if (!projectId || !doc || transientProject) return;
   try { localStorage.setItem(`scribyra:workspace:${projectId}`,JSON.stringify({tabs:state.tabs.map(f=>f.id),active:state.active,fontSize:state.fontSize,tabSize:state.tabSize,wrap:state.wrap,auto:state.auto,autocomplete:state.autocomplete})); }
@@ -191,7 +200,7 @@ function refreshDoc(openFirst = false) {
   if(openFirst&&!state.active)state.active=(state.files.find(f=>f.id===state.mainFile)||state.files.find(f=>!f.binary)||state.files[0])?.id||'';
   if (!state.files.some(f => f.id === state.active)) state.active = state.tabs[0]?.id || '';
   if(state.active&&!state.tabs.some(f=>f.id===state.active))state.tabs.push(state.files.find(f=>f.id===state.active));
-  workspace.activeChanged();persistWorkspace();
+  workspace.activeChanged();persistWorkspace();zoteroBar();
   emit();
   requestAnimationFrame(() => { mountEditor(); wireTree(); });
 }
@@ -274,7 +283,7 @@ async function leaveProject({save=true,directAttempt}={}) {
   try{if(save)await flushSave();}catch(error){leavingProject=false;throw error;}
   agent?.close();agent=null;window.scribyra.agent=null;
   tabSession?.close();tabSession=null; persistWorkspace(); workspace.leave(); navigation.clear(); selections.clear(); clearTimeout(autoTimer); autoPending=false; builds.close(); state.busy = false;
-  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;
+  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;zotero.close();
   clearAsset(); collapsed.clear(); sourcePositions.clear(); lastSource=null;
   sync?.close(); sync = null; editor?.destroy(); editor = null; mountedFile = null;
   for (const manager of undoManagers.values()) manager.destroy(); undoManagers.clear();
@@ -322,7 +331,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   Object.assign(state,collaboration.state);
   agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,mode:()=>collaboration?.review.state.mode,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
   window.scribyra.agent=agent.api;
-  loadWorkspace();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
+  loadWorkspace();void zotero.load(id);texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');
   if(previousEngine!=='lualatex') { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
   refreshDoc(); state.selected = state.active; emit();
@@ -451,6 +460,18 @@ function importEntries(targetDoc,entries,client,expected,destination) {
   if(firstFile)state.active=firstFile;
   revealNode(firstFile||ids[0]);notice(`Imported ${entries.filter(e=>!e.folder).length} files and ${entries.filter(e=>e.folder).length} folders.`);
 }
+/** Import bibliography: .bib files (BibTeX, BibLaTeX, Zotero or Better BibTeX exports), checked first and kept byte for byte. */
+async function importBibliography(client=commands,expected) {
+  const blocked=treeEditBlocked();if(blocked)throw new Error(blocked);
+  const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('.bib',true);if(!files.length)return;
+  const wrong=files.find(file=>!/\.bib$/i.test(file.name));if(wrong)throw new Error(`“${wrong.name}” is not a .bib file. Export BibTeX or BibLaTeX from Zotero or your reference manager, then import that file.`);
+  const entries=await readBrowserFiles(files,directory),renamed=[];
+  for(const entry of entries){const path=freePath(targetDoc,entry.path);if(path!==entry.path){renamed.push(`${entry.path} → ${path}`);entry.path=path;}}
+  if(!await zotero.checkImport(entries))return;
+  importEntries(targetDoc,entries,client,expected,destination);
+  const count=entries.reduce((sum,entry)=>sum+readBibliography(entry.content).entries.length,0);
+  notice(`Imported ${entries.length===1?entries[0].path:`${entries.length} bibliography files`} with ${count} ${count===1?'entry':'entries'}; citation keys are unchanged.${renamed.length?` A file with that name existed, so it was imported as ${renamed.join(', ')}.`:''}`);
+}
 async function importFolder(client=commands,expected) {
   const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard();
   try {
@@ -481,7 +502,7 @@ function wireFileDrop(area) {
     try {
       const directory=directoryAt(e),local=e.dataTransfer.getData(type);
       if(local){const item=JSON.parse(local);if(item.projectId!==projectId)throw new Error('Move files within the same project. Use export/import between projects.');const node=projectNode(doc,item.id);if(!node)throw new Error('The dragged item no longer exists.');await moveWithReview(node.id,directory+node.name);}
-      else {const targetDoc=doc,destination=destinationGuard();importEntries(targetDoc,await readDroppedFiles(e.dataTransfer,directory),commands,undefined,destination);}
+      else {const targetDoc=doc,destination=destinationGuard(),entries=await readDroppedFiles(e.dataTransfer,directory);if(await zotero.checkImport(entries))importEntries(targetDoc,entries,commands,undefined,destination);}
     }catch(error){displayError(error);}
   };
 }
@@ -582,7 +603,7 @@ async function treeMenu(id,origin={},client=commands,expected){
   const row=id?treeRow(id):null,button=row?.querySelector('.file-menu'),anchor=origin.point?undefined:origin.anchor||button||document.querySelector('.tree-root');
   const blocked=treeEditBlocked(),target=doc;
   const menuSignature=()=>client===commands&&doc===target?JSON.stringify([nodeShape(id),state.trashCount,treeEditBlocked()]):null,seen=menuSignature();
-  const opened=openMenu({label:node?`${node.folder?'Folder':'File'} actions`:'Project files',title:node?node.path:'Project files',note:blocked||undefined,items:treeMenuItems(node,{blocked,trashCount:state.trashCount}),anchor,point:origin.point,scope:workspaceRoot(),
+  const opened=openMenu({label:node?`${node.folder?'Folder':'File'} actions`:'Project files',title:node?node.path:'Project files',note:blocked||undefined,items:treeMenuItems(node,{blocked,trashCount:state.trashCount,linked:!!(node&&zotero.linked(node.id))}),anchor,point:origin.point,scope:workspaceRoot(),
     returnFocus:()=>id?treeRow(id)?.querySelector('[data-node]')||document.querySelector('.tree-root'):document.querySelector('.tree-root'),
     // Closes when what the menu offers changes, not when any file's text does.
     watchOptions:menuSignature,
@@ -603,9 +624,13 @@ async function treeMenu(id,origin={},client=commands,expected){
     }
     case 'new-file': case 'new-folder': state.selected=id;emit();await addNode(choice==='new-file'?'file':'folder',next,client,expected);break;
     case 'upload': {
-      state.selected=id;emit();const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('',true);
-      importEntries(targetDoc,await readBrowserFiles(files,directory),client,expected,destination);break;
+      state.selected=id;emit();const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('',true),entries=await readBrowserFiles(files,directory);
+      if(await zotero.checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
     }
+    case 'import-bibliography': state.selected=id||'';emit();await importBibliography(client,expected);break;
+    case 'zotero-link': state.selected=id||'';emit();await zotero.link({directory:selectedDirectory()});break;
+    case 'zotero-refresh': await zotero.refresh(id);break;
+    case 'zotero-panel': await zotero.panel();break;
     case 'import-folder': state.selected='';emit();await importFolder(client,expected);break;
     case 'restore': client.run({op:'trash.restore'},expected);if(!state.active)activateFile(state.mainFile||state.files[0]?.id);notice('Last deletion restored with its original contents.');break;
   }
@@ -751,17 +776,21 @@ async function action(name, value = '', detail = {}) {
         const choice = await openMenu({label:'Project actions',anchor,items:[{label:'Open project',value:'open',icon:'open'},...(backup?[{label:'Export pre-upgrade backup',value:'backup',icon:'download'}]:[]),{separator:true},{label:'Delete project',value:'delete',icon:'trash',danger:true}]});
         if (choice === 'open') await openProject(value);
         if (choice === 'backup') { const original = new Y.Doc(); try { Y.applyUpdate(original, backup); download(exportZip(original), 'pre-upgrade-sources.zip', 'application/zip'); } finally { original.destroy(); } }
-        if (choice === 'delete' && await openPrompt({title:'Delete project',message:'Deleting a local project cannot be undone. Export a backup first.',label:'Delete project',danger:true,anchor})) { await storage.deleteProject(value); await refreshProjects(); }
+        if (choice === 'delete' && await openPrompt({title:'Delete project',message:'Deleting a local project cannot be undone. Export a backup first.',label:'Delete project',danger:true,anchor})) { await storage.deleteProject(value); await zotero.forgetProject(value); await refreshProjects(); }
         break;
       }
       case 'add-file': await addNode('file',detail,client,expected);break;
       case 'add-folder': await addNode('folder',detail,client,expected);break;
       case 'file-menu': await treeMenu(value,detail,client,expected);break;
       case 'upload-files': {
-        const targetDoc = doc, directory = selectedDirectory(), destination = destinationGuard(), uploads = await pickFiles('', true);
-        importEntries(targetDoc,await readBrowserFiles(uploads,directory),client,expected,destination);break;
+        const targetDoc = doc, directory = selectedDirectory(), destination = destinationGuard(), uploads = await pickFiles('', true), entries = await readBrowserFiles(uploads,directory);
+        if(await zotero.checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
       }
       case 'import-folder': await importFolder();break;
+      case 'import-bibliography': await importBibliography(client,expected);break;
+      case 'zotero': await zotero.panel();break;
+      case 'zotero-link': await zotero.link({directory:selectedDirectory()});break;
+      case 'zotero-refresh': await zotero.refresh(value||state.active);break;
       case 'insert-figure': {
         const snippet=figureSnippet(doc,value),target=projectNode(doc,lastSource)||projectNode(doc,state.mainFile);
         if(!target||target.binary||target.folder||! /\.(tex|ltx)$/i.test(target.path))throw new Error('Open a TeX source file first, then select the figure.');

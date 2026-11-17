@@ -1,0 +1,60 @@
+/* Bibliography import and Zotero dialogs, and the bar above a linked .bib file. */
+.linked-file-bar{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--accent-soft);color:var(--text);font-size:12px;min-height:36px}
+.linked-file-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.linked-file-bar .button{flex:none}
+
+.modal.zotero-dialog{width:min(640px,94vw);max-height:90vh;overflow:auto}
+.zotero-dialog h3{font-size:13px;font-weight:600;margin:18px 0 8px}
+.zotero-dialog a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.zotero-step{border:1px solid var(--border);border-radius:8px;margin:14px 0;padding:12px 14px;display:grid;gap:12px}
+.zotero-step:disabled{opacity:.6}
+.zotero-step legend{font-size:13px;font-weight:600;padding:0 4px}
+.zotero-step .modal-actions{margin-top:0}
+.zotero-field{display:grid;gap:6px;font-size:13px}
+.zotero-field label{font-weight:500}
+.zotero-dialog .zotero-field .input{width:100%;box-sizing:border-box;margin:0;border:1px solid var(--border);border-radius:6px;padding:9px 10px;background:var(--bg);color:var(--text);font-size:13px}
+.zotero-help{color:var(--muted);font-size:12px;line-height:1.6}
+.zotero-dialog .zotero-privacy{margin:0;padding:8px 10px;border-radius:6px;background:var(--subtle);color:var(--text)}
+.zotero-dialog .zotero-status{min-height:1.8em;margin:4px 0 0;color:var(--text)}
+.zotero-dialog .zotero-blocked{color:var(--log-warning);font-weight:500}
+.zotero-badge{display:inline-block;font-size:11px;font-weight:600;line-height:1.5;padding:0 6px;border-radius:999px;background:var(--subtle);color:var(--text);border:1px solid var(--border);vertical-align:middle}
+.zotero-badge.kind-added{border-color:var(--syntax-variable);color:var(--syntax-variable)}
+.zotero-badge.kind-changed{border-color:var(--syntax-special);color:var(--syntax-special)}
+.zotero-badge.kind-removed,.zotero-badge.conflict,.zotero-badge.cited{border-color:var(--log-warning);color:var(--log-warning)}
+
+.modal.zotero-refresh{width:min(760px,94vw)}
+.zotero-dialog .zotero-source{margin:-6px 0 4px;color:var(--text);font-weight:500}
+.zotero-changes{display:grid;gap:10px;margin-top:8px}
+.zotero-change{border:1px solid var(--border);border-radius:8px;padding:10px 14px 12px;margin:0;min-width:0}
+.zotero-change.is-conflict{border-color:var(--log-warning);border-left-width:4px}
+.zotero-change legend{padding:0 4px;font-size:13px}
+.zotero-flags{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.zotero-change legend code{font-size:13px;font-weight:600}
+.zotero-dialog .zotero-summary{margin:2px 0 6px;color:var(--text)}
+.zotero-dialog .zotero-note{margin:0 0 6px}
+.zotero-dialog .zotero-note.warning{color:var(--log-warning)}
+.zotero-fields{width:100%;border-collapse:collapse;font-size:12px;margin:4px 0 8px;table-layout:fixed}
+.zotero-fields th,.zotero-fields td{border-top:1px solid var(--border);padding:5px 6px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.zotero-fields thead th{color:var(--muted);font-weight:500;border-top:0}
+.zotero-fields th[scope=row]{width:18%;font-weight:600}
+.zotero-fields .zotero-before{color:var(--syntax-string)}
+.zotero-fields .zotero-after{color:var(--syntax-variable)}
+.zotero-change details{font-size:12px;margin-bottom:8px}
+.zotero-change summary{cursor:pointer;color:var(--muted)}
+.zotero-change pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:var(--subtle);border-radius:6px;padding:8px;margin:6px 0 0}
+.zotero-choices{display:flex;flex-wrap:wrap;gap:6px 18px}
+.zotero-choice{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.zotero-dialog .zotero-choice input{width:auto;height:auto;margin:0;padding:0;border:0;flex:none;accent-color:var(--accent)}
+
+.zotero-links,.zotero-keys,.bibliography-problems{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.zotero-links li,.zotero-keys li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px}
+.zotero-links li>div:first-child{display:grid;gap:2px;min-width:0}
+.zotero-links small{color:var(--muted)}
+.zotero-link-actions{display:flex;gap:6px;flex:none}
+.zotero-dialog li.zotero-empty{color:var(--muted);border-style:dashed}
+.bibliography-file h3{overflow-wrap:anywhere}
+.bibliography-problems{max-height:40vh;overflow:auto;font-size:12px;line-height:1.6}
+.bibliography-problems li{display:flex;gap:6px;align-items:baseline}
+.bibliography-problems li[data-severity=error] .zotero-badge{border-color:var(--log-error);color:var(--log-error)}
+.bibliography-problems li[data-severity=warning] .zotero-badge{border-color:var(--log-warning);color:var(--log-warning)}
+@media (max-width:560px){.zotero-links li{flex-direction:column;align-items:stretch}.linked-file-bar{flex-wrap:wrap}.linked-file-summary{white-space:normal}}
