@@ -173,6 +173,8 @@ menu and by drop. They search every IndexedDB database except `scribyra-zotero`,
 `localStorage`, `sessionStorage`, the source ZIP, the complete backup and
 Diagnostics for the key, and check that only requests to the fake carried it.
 
+Results on November 17, 2026: unit tests 18/18; the six Zotero browser tests pass in all three engines, and with `workspace`, `editor`, `accessibility`, `menus` and `pages-domains` 40/40 per engine. Screenshots of the link dialog, the refresh diff, the linked file and the import report in light and dark were reviewed during development.
+
 Not covered: the real api.zotero.org from a browser (the shapes come from the
 documentation and one header probe), very large libraries beyond the 10,000-entry
 page cap, and the Zotero desktop connector or local API.
