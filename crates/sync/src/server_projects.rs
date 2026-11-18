@@ -366,14 +366,21 @@ impl Projects {
         for r in rows {
             let seq: i64 = r.get(0);
             let sealed = self.read_body(r.get(2), r.get(3), r.get(1)).await?;
-            updates.push(open(&key, &item_ad(project, "update", &seq.to_string()), &sealed).ok_or("an entry does not open")?);
+            let update = open(&key, &item_ad(project, "update", &seq.to_string()), &sealed).ok_or("an entry does not open")?;
+            // Entries are checked again (stored before the check existed, or by another build);
+            // snapshots are the server's own `yrs` output.
+            crate::update_check::check(&update)?;
+            updates.push(update);
         }
-        {
+        // A panic inside `yrs` fails this replay, not the process or the replica's task.
+        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), Error> {
             let mut txn = doc.transact_mut();
             for update in updates {
                 txn.apply_update(Update::decode_v1(&update)?)?;
             }
-        }
+            Ok(())
+        }));
+        applied.map_err(|_| "yrs panicked while replaying the log")??;
         Ok((doc, head))
     }
 
@@ -879,8 +886,10 @@ fn client_id(text: &str) -> bool {
     !text.is_empty() && text.len() <= 64 && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 const MAX_CLIENT_SEQ: i64 = 1 << 53;
-fn decodes(update: &[u8]) -> bool {
-    Update::decode_v1(update).is_ok()
+/// Untrusted bytes reach `yrs` only through [`crate::update_check`] (review C1), on a blocking
+/// thread (a large update takes a while to walk and apply).
+async fn decodes(update: bytes::Bytes) -> bool {
+    tokio::task::spawn_blocking(move || crate::update_check::decodes(&update)).await.unwrap_or(false)
 }
 fn append_response(outcome: Result<Appended, AppendError>) -> Response {
     match outcome {
@@ -932,8 +941,8 @@ async fn create(State(sr): State<Shared>, headers: HeaderMap, body: Body) -> Res
     }
     let state = match &request.state {
         Some(text) => match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, text) {
-            Ok(state) if state.len() <= projects.store.config.sr_entry_bytes && decodes(&state) => Some(state),
             Ok(state) if state.len() > projects.store.config.sr_entry_bytes => return error(StatusCode::PAYLOAD_TOO_LARGE, "initial state too large"),
+            Ok(state) if decodes(bytes::Bytes::from(state.clone())).await => Some(state),
             _ => return error(StatusCode::BAD_REQUEST, "the initial state is not a Yjs update"),
         },
         None => None,
@@ -1050,7 +1059,7 @@ async fn append(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
         return error(StatusCode::BAD_REQUEST, "Scribyra-Client and Scribyra-Client-Seq are required");
     };
     let Ok(bytes) = to_bytes(body, projects.store.config.sr_entry_bytes).await else { return error(StatusCode::PAYLOAD_TOO_LARGE, "update too large") };
-    if !decodes(&bytes) {
+    if !decodes(bytes.clone()).await {
         return error(StatusCode::BAD_REQUEST, "the body is not a Yjs update");
     }
     let outcome = projects.append(&p, &caller.account, client, client_seq, &bytes).await;

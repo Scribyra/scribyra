@@ -13,3 +13,4 @@ pub mod server_projects;
 pub mod service;
 pub mod sso;
 pub mod store;
+pub mod update_check;

@@ -490,3 +490,54 @@ fn each_mode_serves_only_its_own_routes() {
     }
     assert_eq!(request("POST", &format!("{}/v1/auth/challenge", sr.url()), None, &[("Content-Type", "application/json".into())], json!({"org": sr.env.org()}).to_string().into_bytes()).status, 404);
 }
+
+/// One struct holding one `Any` item of the root map `t`, then an empty delete set.
+fn any_item(value: &[u8]) -> Vec<u8> {
+    let mut update = vec![1, 1, 1, 0, 8, 1, 1, b't', 1];
+    update.extend_from_slice(value);
+    update.push(0);
+    update
+}
+fn var(mut n: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    while n >= 0x80 {
+        out.push((n as u8 & 0x7f) | 0x80);
+        n >>= 7;
+    }
+    out.push(n as u8);
+    out
+}
+
+#[test]
+fn hostile_yjs_updates_are_refused_and_the_service_survives() {
+    // Review C1: `yrs` 0.25 pre-allocates from untrusted lengths (an abort), recurses without a
+    // limit (a stack overflow) and trusts strings to be UTF-8. Each of these killed the process
+    // through POST …/log or POST /v1/sr/projects {state}.
+    let sr = start(Blobs::Fs);
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Target");
+    let mut deep = Vec::new();
+    for _ in 0..1_000_000 {
+        deep.extend_from_slice(&[117, 1]);
+    }
+    deep.push(126);
+    let mut string = vec![1, 1, 1, 0, 4, 1, 1, b't', 2, 0xff, 0xfe, 0];
+    let hostile = [
+        ("array of 2^36", any_item(&[[117].as_slice(), &var(1 << 36)].concat())),
+        ("array of 2^50", any_item(&[[117].as_slice(), &var(1 << 50)].concat())),
+        ("map of 2^40", any_item(&[[118].as_slice(), &var(1 << 40)].concat())),
+        ("a million nested arrays", any_item(&deep)),
+        ("invalid UTF-8", string.clone()),
+        ("trailing bytes", [Project::new().add_text("f1", "a.tex", None, "x"), vec![0]].concat()),
+    ];
+    for (n, (what, update)) in hostile.iter().enumerate() {
+        assert_eq!(ana.append(&p, "evil", n as i64 + 1, update).status, 400, "{what}");
+        let state = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, update);
+        assert_eq!(ana.call("POST", "/v1/sr/projects", Some(json!({"name": "Evil", "state": state}))).status, 400, "{what}");
+    }
+    // The same string bytes, valid, are accepted: only the encoding was wrong.
+    string.splice(9..11, *b"ok");
+    assert_eq!(ana.append(&p, "good", 1, &string).status, 201);
+    assert_eq!(ana.append(&p, "good", 2, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "1");
+}
