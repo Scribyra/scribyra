@@ -226,6 +226,13 @@ fn compile_modes_and_the_project_switch_are_enforced() {
     assert_eq!(ana.compile(&p, None).status, 409);
     // Reading what was compiled stays possible.
     assert_eq!(dan.compile_status(&p).status, 200);
+    // Each change of the switch is in the audit log once, with who made it (refusals are not).
+    let modes: Vec<(String, String)> = postgres()
+        .psql(&both.db(), &format!("SELECT a.email || ' ' || (e.detail->>'mode') FROM audit_events e JOIN accounts a ON a.account = e.actor WHERE e.action = 'project.compile_mode' AND e.target_id = '{p}' ORDER BY e.seq"))
+        .lines()
+        .map(|l| l.split_once(' ').map(|(a, b)| (a.to_owned(), b.to_owned())).unwrap())
+        .collect();
+    assert_eq!(modes, [("ben@example.org".to_owned(), "server".to_owned()), ("alice@example.org".to_owned(), "browser".to_owned())]);
 }
 
 #[test]

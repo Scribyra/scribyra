@@ -598,6 +598,7 @@ pub fn router(s: Shared) -> Router {
         .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone(), s.sso.clone())))
         .merge(crate::sso::routes(s.sso.clone()))
         .merge(crate::server_projects::routes(s.server_projects.clone()))
+        .merge(crate::admin::routes(crate::admin::Admin::new(s.store.clone(), s.sso.clone(), s.server_projects.clone())))
         .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(s, guard))
         // Outermost, so the guard's refusals (429, 503, 403) reach the page as statuses rather
@@ -609,7 +610,7 @@ pub fn router(s: Shared) -> Router {
                 .allow_origin(origins)
                 .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::HeaderName::from_static("scribyra-client"), header::HeaderName::from_static("scribyra-client-seq")])
-                .expose_headers(["scribyra-log-head", "scribyra-log-floor", "scribyra-snapshot-seq", "scribyra-compile-job", "scribyra-compile-seq", "retry-after"].map(header::HeaderName::from_static))
+                .expose_headers(["scribyra-log-head", "scribyra-log-floor", "scribyra-snapshot-seq", "scribyra-compile-job", "scribyra-compile-seq", "scribyra-audit-head", "content-disposition", "retry-after"].map(header::HeaderName::from_static))
                 .max_age(Duration::from_secs(3600)),
         )
 }
@@ -621,6 +622,14 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
     let app = router(s.clone());
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
     let schema = store::MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
+    if let (Some(deployment), Some(org)) = (&config.deployment, &s.store.org) {
+        // Each start records a hash of the policy it runs with, so configuration changes appear
+        // in the audit log; then the retention task purges what is older than it keeps.
+        let policy = blob::hash(serde_json::to_string(deployment).unwrap_or_default().as_bytes());
+        let detail = serde_json::json!({"policy": policy, "encryption": deployment.encryption.as_str(), "schema": schema, "version": env!("CARGO_PKG_VERSION")});
+        crate::audit::record_now(&s.store.pool, &crate::audit::Actor::system(), "deployment.start", Some(("deployment", org)), detail).await?;
+        tokio::spawn(crate::audit::retain(s.store.pool.clone(), config.audit_retention(), config.audit_purge_seconds));
+    }
     println!(
         "{{\"event\":\"listening\",\"address\":\"{}\",\"protocol\":1,\"schema\":{schema}}}",
         listener.local_addr()?

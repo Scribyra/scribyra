@@ -8,6 +8,8 @@ license.workspace = true
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 futures-util = "0.3"
+# The admin export's streamed zip.
+crc32fast = "1"
 # Only for the one-time `migrate-sqlite` import of milestone-S data directories.
 rusqlite = { version = "0.32", features = ["bundled"] }
 # Runtime-checked queries only (no compile-time macros, no DATABASE_URL at build);

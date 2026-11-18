@@ -3,6 +3,8 @@
 //!
 //! Metadata lives in PostgreSQL (migrations in `migrations/`, applied at startup); bytes live
 //! behind [`blobs::BlobStore`] (filesystem or S3-compatible).
+pub mod admin;
+pub mod audit;
 pub mod blobs;
 pub mod compiles;
 pub mod config;

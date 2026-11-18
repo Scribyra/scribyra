@@ -109,14 +109,18 @@ pub fn open(key: &[u8], ad: &[u8], sealed: &[u8]) -> Option<Vec<u8>> {
     orgsync::open(key, &sealed[..24], ad, &sealed[24..]).ok()
 }
 
-/// A project's role for the caller. Admins have no extra project rights in this slice.
+/// A project's role for the caller. `Admin` is an administrator reading a project they have no
+/// share in, after an audited "Open as administrator" (read-only, for [`ADMIN_OPEN_HOURS`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Access {
     Owner,
     Editor,
     Reviewer,
     Viewer,
+    Admin,
 }
+/// How long an "Open as administrator" lets the administrator read the project.
+pub const ADMIN_OPEN_HOURS: i32 = 12;
 impl Access {
     pub fn as_str(self) -> &'static str {
         match self {
@@ -124,6 +128,7 @@ impl Access {
             Self::Editor => "editor",
             Self::Reviewer => "reviewer",
             Self::Viewer => "viewer",
+            Self::Admin => "admin",
         }
     }
     fn share(text: &str) -> Option<Self> {
@@ -280,7 +285,7 @@ impl Projects {
     /// Creates an empty project owned by `owner`. A repeat by the same owner is `Ok(false)` (the
     /// project exists); an ID someone else holds is `Err(Conflict)` (with IDs derived from the
     /// owner, only by a SHA-256 collision).
-    pub async fn create(&self, id: &str, owner: &str, name: &str) -> Result<bool, AppendError> {
+    pub async fn create(&self, id: &str, owner: &str, name: &str, actor: &crate::audit::Actor) -> Result<bool, AppendError> {
         let key = random_bytes::<32>();
         let mut tx = self.pool().begin().await?;
         let inserted = sqlx::query("INSERT INTO sr_projects (project, owner, name, data_key_wrapped) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
@@ -299,6 +304,7 @@ impl Projects {
         }
         notify(&mut tx, id).await?;
         notify_account(&mut tx, owner).await?;
+        crate::audit::record(&mut tx, actor, "project.created", Some(("project", id)), json!({})).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -669,13 +675,14 @@ impl Projects {
     /// Crypto-erase: the wrapped key goes in the same transaction that marks the project
     /// deleted, so everything sealed under it is unreadable from then on; maintenance removes
     /// the rows and blobs.
-    pub async fn delete(&self, project: &str) -> Result<bool, Error> {
+    pub async fn delete(&self, project: &str, actor: &crate::audit::Actor, detail: Value) -> Result<bool, Error> {
         let mut tx = self.pool().begin().await?;
         let bytes: Option<i64> = sqlx::query_scalar("UPDATE sr_projects SET deleted = now(), data_key_wrapped = NULL WHERE project = $1 AND deleted IS NULL RETURNING bytes").bind(project).fetch_optional(&mut *tx).await?;
         let Some(bytes) = bytes else { return Ok(false) };
         sqlx::query("SELECT bytes FROM usage WHERE scope = $1 FOR UPDATE").bind(DEPLOYMENT_SCOPE).execute(&mut *tx).await?;
         sqlx::query("UPDATE usage SET bytes = greatest(bytes - $2, 0) WHERE scope = $1").bind(DEPLOYMENT_SCOPE).bind(bytes).execute(&mut *tx).await?;
         notify(&mut tx, project).await?;
+        crate::audit::record(&mut tx, actor, "project.deleted", Some(("project", project)), detail).await?;
         tx.commit().await?;
         self.kick.notify_one();
         Ok(true)
@@ -745,17 +752,17 @@ pub async fn notify_account(tx: &mut sqlx::PgConnection, account: &str) -> Resul
 /// every sign-in of a server-readable deployment). An unverified email matches nothing, and an
 /// invitation counts only for the provider it names or, naming none, for a provider whose
 /// `email_domains` vouch for the email (review H2).
-pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate::config::Deployment) -> Result<(), sqlx::Error> {
+pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate::config::Deployment, ip: Option<std::net::IpAddr>) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
     let row: Option<(String, String)> = sqlx::query_as("SELECT email, provider FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
     let Some((email, provider)) = row else { return Ok(()) };
     let email = crate::sso::normalise_email(&email);
     let vouched = deployment.provider(&provider).is_some_and(|p| crate::sso::vouches(p, &email));
-    let accepted: Vec<(String, String, Option<String>)> = sqlx::query_as(
+    let accepted: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
         "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p
          WHERE i.project = p.project AND p.deleted IS NULL AND p.owner <> $2 AND i.state = 'pending' AND i.email = $1 AND i.expires > now()
            AND (i.provider = $3 OR (i.provider IS NULL AND $4))
-         RETURNING i.project, i.role, i.created_by",
+         RETURNING i.project, i.role, i.created_by, i.invitation",
     )
     .bind(&email)
     .bind(account)
@@ -763,7 +770,7 @@ pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate
     .bind(vouched)
     .fetch_all(&mut *tx)
     .await?;
-    for (project, role, by) in &accepted {
+    for (project, role, by, _) in &accepted {
         sqlx::query("INSERT INTO sr_shares (project, account, role, created_by) VALUES ($1, $2, $3, $4) ON CONFLICT (project, account) DO UPDATE SET role = EXCLUDED.role")
             .bind(project)
             .bind(account)
@@ -775,6 +782,10 @@ pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate
     }
     if !accepted.is_empty() {
         notify_account(&mut tx, account).await?;
+    }
+    let actor = crate::audit::Actor::account(account, ip);
+    for (project, role, _, invitation) in &accepted {
+        crate::audit::record(&mut tx, &actor, "invitation.accepted", Some(("project", project)), json!({"invitation": invitation, "role": role})).await?;
     }
     tx.commit().await
 }
@@ -934,15 +945,20 @@ impl Sr {
         if !is_id(project) {
             return Err(not_found());
         }
-        let row: Option<(String, Option<String>)> = sqlx::query_as("SELECT p.owner, s.role FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $2 WHERE p.project = $1 AND p.deleted IS NULL")
-            .bind(project)
-            .bind(&caller.account)
-            .fetch_optional(&projects.store.pool)
-            .await
-            .map_err(internal)?;
+        let row: Option<(String, Option<String>, bool)> = sqlx::query_as(
+            "SELECT p.owner, s.role, EXISTS (SELECT 1 FROM sr_admin_opens o WHERE o.project = p.project AND o.account = $2 AND o.until > now())
+             FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $2 WHERE p.project = $1 AND p.deleted IS NULL",
+        )
+        .bind(project)
+        .bind(&caller.account)
+        .fetch_optional(&projects.store.pool)
+        .await
+        .map_err(internal)?;
         match row {
-            Some((owner, _)) if owner == caller.account => Ok(Access::Owner),
-            Some((_, Some(role))) => Access::share(&role).ok_or_else(|| internal(())),
+            Some((owner, _, _)) if owner == caller.account => Ok(Access::Owner),
+            Some((_, Some(role), _)) => Access::share(&role).ok_or_else(|| internal(())),
+            // An administrator reads only after an audited open, and only while it lasts.
+            Some((_, None, true)) if caller.role == Role::Admin => Ok(Access::Admin),
             _ => Err(not_found()),
         }
     }
@@ -953,7 +969,7 @@ impl Sr {
         }
         Ok(())
     }
-    async fn details(&self, projects: &Projects, caller: &Caller, project: &str, access: Access) -> Result<Value, Response> {
+    pub(crate) async fn details(&self, projects: &Projects, caller: &Caller, project: &str, access: Access) -> Result<Value, Response> {
         let pool = &projects.store.pool;
         let row = sqlx::query(
             "SELECT p.name, p.head_seq, p.floor_seq, p.snapshot_seq, p.bytes, (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint,
@@ -986,8 +1002,21 @@ impl Sr {
                 invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "provider": r.get::<Option<String>, _>(5), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
             }
         }
+        // Administrator actions on this project are never silent to its members (design section 5).
+        let activity: Vec<Value> = sqlx::query_as::<_, (String, i64)>(
+            "SELECT action, (extract(epoch FROM time) * 1000)::bigint FROM audit_events WHERE target_type = 'project' AND target_id = $1
+               AND (action IN ('project.admin_open', 'project.admin_edit') OR (action IN ('project.transferred', 'project.renamed') AND detail->>'admin' = 'true'))
+             ORDER BY seq DESC LIMIT 10",
+        )
+        .bind(project)
+        .fetch_all(pool)
+        .await
+        .map_err(internal)?
+        .into_iter()
+        .map(|(action, time)| json!({"action": action, "time": time}))
+        .collect();
         Ok(json!({
-            "id": project, "name": row.get::<String, _>(0), "role": access.as_str(), "owner": owner,
+            "id": project, "name": row.get::<String, _>(0), "role": access.as_str(), "owner": owner, "adminActivity": activity,
             "head": row.get::<i64, _>(1), "floor": row.get::<i64, _>(2), "snapshot": row.get::<i64, _>(3), "size": row.get::<i64, _>(4),
             "created": row.get::<i64, _>(5), "updated": row.get::<i64, _>(6), "members": members, "invitations": invitations,
             "compile": crate::compiles::effective_mode(&projects.store.config, &row.get::<String, _>(11)),
@@ -998,13 +1027,15 @@ impl Sr {
     /// and state, so a queued, started or finished compile wakes every member's poll.
     async fn heads_now(&self, projects: &Projects, caller: &Caller) -> Result<(String, Value), Response> {
         let rows = sqlx::query(
-            "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' ELSE s.role END, p.name, p.compile, c.job, c.state
+            "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' WHEN s.role IS NOT NULL THEN s.role ELSE 'admin' END, p.name, p.compile, c.job, c.state
              FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
+             LEFT JOIN sr_admin_opens o ON o.project = p.project AND o.account = $1 AND o.until > now() AND $3
              LEFT JOIN LATERAL (SELECT job, state FROM compiles WHERE project = p.project AND state <> 'replaced' AND $2 ORDER BY queued DESC LIMIT 1) c ON true
-             WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL) ORDER BY p.project",
+             WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL OR o.account IS NOT NULL) ORDER BY p.project",
         )
         .bind(&caller.account)
         .bind(self.compiles.is_some())
+        .bind(caller.role == Role::Admin)
         .fetch_all(&projects.store.pool)
         .await
         .map_err(internal)?;
@@ -1074,12 +1105,15 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
         Err(r) => return r,
     };
     let rows = sqlx::query(
-        "SELECT p.project, p.name, CASE WHEN p.owner = $1 THEN 'owner' ELSE s.role END, p.head_seq, p.bytes,
-                (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider
+        "SELECT p.project, p.name, CASE WHEN p.owner = $1 THEN 'owner' WHEN s.role IS NOT NULL THEN s.role ELSE 'admin' END, p.head_seq, p.bytes,
+                (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider,
+                (SELECT (extract(epoch FROM max(e.time)) * 1000)::bigint FROM audit_events e WHERE e.target_type = 'project' AND e.target_id = p.project AND e.action = 'project.admin_open')
          FROM sr_projects p JOIN accounts o ON o.account = p.owner LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
-         WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL) ORDER BY p.updated DESC, p.project",
+         LEFT JOIN sr_admin_opens ao ON ao.project = p.project AND ao.account = $1 AND ao.until > now() AND $2
+         WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL OR ao.account IS NOT NULL) ORDER BY p.updated DESC, p.project",
     )
     .bind(&caller.account)
+    .bind(caller.role == Role::Admin)
     .fetch_all(&projects.store.pool)
     .await;
     let rows = match rows {
@@ -1090,7 +1124,8 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
         .iter()
         .map(|r| {
             json!({"id": r.get::<String, _>(0), "name": r.get::<String, _>(1), "role": r.get::<String, _>(2), "head": r.get::<i64, _>(3), "size": r.get::<i64, _>(4),
-                   "created": r.get::<i64, _>(5), "updated": r.get::<i64, _>(6), "owner": {"account": r.get::<String, _>(7), "name": r.get::<Option<String>, _>(8), "email": r.get::<Option<String>, _>(9), "provider": r.get::<String, _>(10)}})
+                   "created": r.get::<i64, _>(5), "updated": r.get::<i64, _>(6), "owner": {"account": r.get::<String, _>(7), "name": r.get::<Option<String>, _>(8), "email": r.get::<Option<String>, _>(9), "provider": r.get::<String, _>(10)},
+                   "adminOpened": r.get::<Option<i64>, _>(11)})
         })
         .collect();
     ok_json(StatusCode::OK, json!({"account": caller.account, "role": caller.role.as_str(), "projects": list}))
@@ -1143,7 +1178,7 @@ struct CreateRequest {
     #[serde(default)]
     client_seq: Option<i64>,
 }
-async fn create(State(sr): State<Shared>, headers: HeaderMap, body: Body) -> Response {
+async fn create(State(sr): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, body: Body) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1172,7 +1207,8 @@ async fn create(State(sr): State<Shared>, headers: HeaderMap, body: Body) -> Res
         Some(key) => project_id(&caller.account, key),
         None => random_hex(),
     };
-    let created = match projects.create(&id, &caller.account, request.name.trim()).await {
+    let actor = crate::audit::Actor::account(&caller.account, crate::audit::source(&source));
+    let created = match projects.create(&id, &caller.account, request.name.trim(), &actor).await {
         Ok(created) => created,
         Err(e) => return internal(e),
     };
@@ -1184,7 +1220,7 @@ async fn create(State(sr): State<Shared>, headers: HeaderMap, body: Body) -> Res
             Err(e) => {
                 // A new project whose first state cannot be stored is not left behind empty.
                 if created {
-                    let _ = projects.delete(&id).await;
+                    let _ = projects.delete(&id, &actor, json!({"reason": "initial_state_refused"})).await;
                 }
                 return append_response(Err(e));
             }
@@ -1215,7 +1251,7 @@ async fn project(State(sr): State<Shared>, Path(p): Path<String>, headers: Heade
 struct Rename {
     name: String,
 }
-async fn rename(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Rename>) -> Response {
+async fn rename(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Rename>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1234,6 +1270,9 @@ async fn rename(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
         let mut tx = projects.store.pool.begin().await?;
         sqlx::query("UPDATE sr_projects SET name = $2, updated = now() WHERE project = $1 AND deleted IS NULL").bind(&p).bind(request.name.trim()).execute(&mut *tx).await?;
         notify(&mut tx, &p).await?;
+        // An administrator renaming a project that is not theirs is shown to its members.
+        let admin = caller.role == Role::Admin && access != Access::Owner;
+        crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.renamed", Some(("project", &p)), json!({"admin": admin})).await?;
         tx.commit().await
     };
     if let Err(e) = done.await {
@@ -1244,7 +1283,7 @@ async fn rename(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
         Err(r) => r,
     }
 }
-async fn delete_project(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap) -> Response {
+async fn delete_project(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1254,7 +1293,7 @@ async fn delete_project(State(sr): State<Shared>, Path(p): Path<String>, headers
         Ok(_) => return error(StatusCode::FORBIDDEN, "only the owner can delete this project"),
         Err(r) => return r,
     }
-    match projects.delete(&p).await {
+    match projects.delete(&p, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), json!({"admin": false})).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => not_found(),
         Err(e) => internal(e),
@@ -1471,7 +1510,7 @@ struct Invite {
 /// (that provider's accounts only) or a plain email: then any provider whose `email_domains`
 /// vouch for its domain, or the deployment's only provider; with several providers and none
 /// vouching, the inviter must name one (`400`). Review H2.
-async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Invite>) -> Response {
+async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Invite>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1508,6 +1547,7 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
         }
     };
     let days = projects.store.config.sr_invitation_days as f64;
+    let actor = crate::audit::Actor::account(&caller.account, crate::audit::source(&source));
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
         let owner: String = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(&p).fetch_one(&mut *tx).await?;
@@ -1532,6 +1572,7 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
                 .await?;
                 fresh |= inserted;
                 notify_account(&mut tx, account).await?;
+                crate::audit::record(&mut tx, &actor, if inserted { "share.created" } else { "share.changed" }, Some(("project", &p)), json!({"account": account, "role": request.role})).await?;
             }
             sqlx::query("UPDATE sr_invitations SET state = 'accepted' WHERE project = $1 AND email = $2 AND state = 'pending'").bind(&p).bind(&email).execute(&mut *tx).await?;
             (if fresh { StatusCode::CREATED } else { StatusCode::OK }, json!({"status": if others.is_empty() { "owner" } else { "shared" }}))
@@ -1550,6 +1591,8 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
             .bind(&recorded)
             .fetch_one(&mut *tx)
             .await?;
+            // The invitee's email is not recorded: emails appear only as account details.
+            crate::audit::record(&mut tx, &actor, "invitation.created", Some(("project", &p)), json!({"invitation": id, "role": request.role, "provider": recorded})).await?;
             (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "provider": recorded, "role": request.role, "expires": expires}}))
         };
         notify(&mut tx, &p).await?;
@@ -1571,7 +1614,7 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
         Err(r) => r,
     }
 }
-async fn withdraw(State(sr): State<Shared>, Path((p, invitation)): Path<(String, String)>, headers: HeaderMap) -> Response {
+async fn withdraw(State(sr): State<Shared>, Path((p, invitation)): Path<(String, String)>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1587,6 +1630,9 @@ async fn withdraw(State(sr): State<Shared>, Path((p, invitation)): Path<(String,
         let mut tx = projects.store.pool.begin().await?;
         let n = sqlx::query("UPDATE sr_invitations SET state = 'withdrawn' WHERE invitation = $1 AND project = $2 AND state = 'pending'").bind(&invitation).bind(&p).execute(&mut *tx).await?.rows_affected();
         notify(&mut tx, &p).await?;
+        if n > 0 {
+            crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "invitation.withdrawn", Some(("project", &p)), json!({"invitation": invitation})).await?;
+        }
         tx.commit().await?;
         Ok::<_, sqlx::Error>(n)
     };
@@ -1601,7 +1647,7 @@ async fn withdraw(State(sr): State<Shared>, Path((p, invitation)): Path<(String,
 struct ChangeRole {
     role: String,
 }
-async fn change_member(State(sr): State<Shared>, Path((p, account)): Path<(String, String)>, headers: HeaderMap, Json(request): Json<ChangeRole>) -> Response {
+async fn change_member(State(sr): State<Shared>, Path((p, account)): Path<(String, String)>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<ChangeRole>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1620,6 +1666,9 @@ async fn change_member(State(sr): State<Shared>, Path((p, account)): Path<(Strin
         let mut tx = projects.store.pool.begin().await?;
         let n = sqlx::query("UPDATE sr_shares SET role = $3 WHERE project = $1 AND account = $2").bind(&p).bind(&account).bind(&request.role).execute(&mut *tx).await?.rows_affected();
         notify(&mut tx, &p).await?;
+        if n > 0 {
+            crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "share.changed", Some(("project", &p)), json!({"account": account, "role": request.role})).await?;
+        }
         tx.commit().await?;
         Ok::<_, sqlx::Error>(n)
     };
@@ -1633,7 +1682,7 @@ async fn change_member(State(sr): State<Shared>, Path((p, account)): Path<(Strin
     }
 }
 /// Removes a share: owners and editors remove others; anyone but the owner may leave.
-async fn remove_member(State(sr): State<Shared>, Path((p, account)): Path<(String, String)>, headers: HeaderMap) -> Response {
+async fn remove_member(State(sr): State<Shared>, Path((p, account)): Path<(String, String)>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1653,6 +1702,9 @@ async fn remove_member(State(sr): State<Shared>, Path((p, account)): Path<(Strin
         let mut tx = projects.store.pool.begin().await?;
         let n = sqlx::query("DELETE FROM sr_shares WHERE project = $1 AND account = $2").bind(&p).bind(&account).execute(&mut *tx).await?.rows_affected();
         notify(&mut tx, &p).await?;
+        if n > 0 {
+            crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "share.removed", Some(("project", &p)), json!({"account": account, "left": account == caller.account})).await?;
+        }
         tx.commit().await?;
         Ok::<_, sqlx::Error>(n)
     };
@@ -1668,7 +1720,7 @@ struct Transfer {
     account: String,
 }
 /// The owner hands the project to a member who is not a guest; the old owner becomes an editor.
-async fn transfer(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Transfer>) -> Response {
+async fn transfer(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Transfer>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -1690,6 +1742,7 @@ async fn transfer(State(sr): State<Shared>, Path(p): Path<String>, headers: Head
         sqlx::query("UPDATE sr_projects SET owner = $2, updated = now() WHERE project = $1").bind(&p).bind(&request.account).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO sr_shares (project, account, role, created_by) VALUES ($1, $2, 'editor', $2)").bind(&p).bind(&caller.account).execute(&mut *tx).await?;
         notify(&mut tx, &p).await?;
+        crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.transferred", Some(("project", &p)), json!({"from": caller.account, "to": request.account, "admin": false})).await?;
         tx.commit().await?;
         Ok::<_, sqlx::Error>(Ok(()))
     };

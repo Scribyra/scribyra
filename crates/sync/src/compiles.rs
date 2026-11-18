@@ -892,7 +892,7 @@ struct Settings {
     compile: String,
 }
 /// `PUT …/settings {compile}`: owners and editors, when the deployment's `compile` is `both`.
-async fn settings(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Settings>) -> Response {
+async fn settings(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Settings>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
@@ -914,6 +914,7 @@ async fn settings(State(sr): State<Shared>, Path(p): Path<String>, headers: Head
         let mut tx = projects.store.pool.begin().await?;
         sqlx::query("UPDATE sr_projects SET compile = $2, updated = now() WHERE project = $1 AND deleted IS NULL").bind(&p).bind(&request.compile).execute(&mut *tx).await?;
         server_projects::notify(&mut tx, &p).await?;
+        crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.compile_mode", Some(("project", &p)), json!({"mode": request.compile})).await?;
         tx.commit().await
     };
     if let Err(e) = done.await {

@@ -123,6 +123,11 @@ pub struct Config {
     pub compile_heartbeat_seconds: u64,
     /// ...and how long without a report before the job is taken back (requeued once, then failed).
     pub compile_heartbeat_timeout_seconds: u64,
+    /// How often the audit log's retention task runs (default daily).
+    pub audit_purge_seconds: u64,
+    /// Development and tests only: keep audit events this many seconds instead of the deployment's
+    /// `audit_retention_days`.
+    pub audit_retention_seconds: Option<u64>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -191,6 +196,8 @@ impl Default for Config {
             compile_worker_in_process: false,
             compile_heartbeat_seconds: 5,
             compile_heartbeat_timeout_seconds: 30,
+            audit_purge_seconds: 24 * 3600,
+            audit_retention_seconds: None,
         }
     }
 }
@@ -334,6 +341,9 @@ impl Config {
         }
         if !(1..=300).contains(&self.compile_heartbeat_seconds) || self.compile_heartbeat_timeout_seconds < 2 * self.compile_heartbeat_seconds || self.compile_heartbeat_timeout_seconds > 3600 {
             return Err("compile_heartbeat_seconds must be 1-300 and compile_heartbeat_timeout_seconds at least twice it, at most 3600");
+        }
+        if !(1..=7 * 24 * 3600).contains(&self.audit_purge_seconds) || self.audit_retention_seconds.is_some_and(|s| s > 3650 * 24 * 3600) {
+            return Err("audit_purge_seconds must be 1 second to 7 days and audit_retention_seconds at most 3650 days");
         }
         if !(1..=3600).contains(&self.sso_recheck_tick_seconds) || self.sso_jwks_refetch_seconds > 3600 || !(1..=100_000).contains(&self.sso_starts_per_minute) {
             return Err("invalid single sign-on limits");
@@ -515,6 +525,13 @@ fn yes() -> bool {
 }
 fn audit_days() -> u32 {
     400
+}
+impl Config {
+    /// How long audit events are kept: `audit_retention_seconds` when set (tests), else the
+    /// deployment's `audit_retention_days`.
+    pub fn audit_retention(&self) -> u64 {
+        self.audit_retention_seconds.unwrap_or_else(|| self.deployment.as_ref().map_or(400, |d| d.audit_retention_days) as u64 * 24 * 3600)
+    }
 }
 /// How a provider marks guest accounts: a claim and the value that means "guest".
 #[derive(Clone, Debug, Deserialize, Serialize)]

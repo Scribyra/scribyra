@@ -1,13 +1,15 @@
 use scribyra_sync::{config::Config, migrate_sqlite, service, store::Store};
-use std::{path::PathBuf, process::ExitCode};
+use std::{path::PathBuf, process::ExitCode, str::FromStr};
 
-const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | migrate-sqlite <old-data-dir>";
+const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | audit verify [<seq>:<hash>] | migrate-sqlite <old-data-dir>";
 
 enum Command {
     Serve,
     Migrate,
     CompileWorker,
     Verify,
+    /// Checks the audit log's hash chain; optionally that an exported head is in it.
+    AuditVerify(Option<(i64, String)>),
     MigrateSqlite(PathBuf),
 }
 fn parse(args: &[String]) -> Option<Command> {
@@ -17,6 +19,12 @@ fn parse(args: &[String]) -> Option<Command> {
         [cmd] if cmd == scribyra_sync::deploy::COMMAND_MIGRATE => Some(Command::Migrate),
         [cmd] if cmd == scribyra_sync::deploy::COMMAND_COMPILE_WORKER => Some(Command::CompileWorker),
         [cmd] if cmd == "verify" => Some(Command::Verify),
+        [cmd, sub] if cmd == "audit" && sub == "verify" => Some(Command::AuditVerify(None)),
+        [cmd, sub, head] if cmd == "audit" && sub == "verify" => {
+            let (seq, hash) = head.split_once(':')?;
+            let valid = hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            Some(Command::AuditVerify(Some((seq.parse().ok()?, hash.to_owned())))).filter(|_| valid)
+        }
         [cmd, dir] if cmd == "migrate-sqlite" => Some(Command::MigrateSqlite(dir.into())),
         _ => None,
     }
@@ -41,11 +49,19 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
         println!("{}", serde_json::json!({"event": "migrated", "applied": applied, "schema": schema}));
         return Ok(ExitCode::SUCCESS);
     }
+    if let Command::AuditVerify(expect) = &command {
+        // Reads only: no ownership, no migrations, so it runs beside serving replicas.
+        let options = sqlx::postgres::PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?.application_name("scribyra-sync-audit");
+        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect_with(options).await?;
+        let report = scribyra_sync::audit::verify(&pool, expect.as_ref().map(|(s, h)| (*s, h.as_str()))).await?;
+        println!("{}", report.json());
+        return Ok(if report.ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE });
+    }
     let store = Store::open(config).await?;
     match command {
         Command::Serve => service::serve(store).await.map(|()| ExitCode::SUCCESS),
         Command::CompileWorker => scribyra_sync::compiles::run_worker(store).await.map(|()| ExitCode::SUCCESS),
-        Command::Migrate => unreachable!(),
+        Command::Migrate | Command::AuditVerify(_) => unreachable!(),
         Command::Verify => {
             let report = store.verify().await?;
             println!(

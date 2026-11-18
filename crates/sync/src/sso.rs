@@ -375,7 +375,7 @@ impl Sso {
         }
         let Some(org) = &self.org else { return Ok(None) };
         let row = sqlx::query(
-            "SELECT l.provider, l.issuer, l.subject, l.email, l.email_verified, l.name, l.groups::text, l.guest, extract(epoch FROM l.expires)::bigint, l.account
+            "SELECT l.provider, l.issuer, l.subject, l.email, l.email_verified, l.name, l.groups::text, l.guest, extract(epoch FROM l.expires)::bigint, l.account, COALESCE(a.admin_grant, false)
              FROM sso_logins l LEFT JOIN accounts a ON a.account = l.account
              WHERE l.token_hash = $1 AND l.org = $2 AND NOT l.revoked AND l.expires > now() AND l.provider IS NOT NULL
                AND (a.account IS NULL OR a.state = 'active')",
@@ -391,6 +391,9 @@ impl Sso {
         let groups: Vec<String> = serde_json::from_str(&row.get::<String, _>(6)).unwrap_or_default();
         let guest: bool = row.get(7);
         let Ok(role) = admit(deployment, configured, &subject, email.as_deref(), email_verified, &groups, guest) else { return Ok(None) };
+        // An administrator can make a member an administrator (slice 10); the configuration's
+        // own administrators and guests are decided by it alone.
+        let role = if role == Role::Member && row.get::<bool, _>(10) { Role::Admin } else { role };
         Ok(Some(Login {
             org: org.clone(),
             account: row.get(9),
@@ -405,6 +408,20 @@ impl Sso {
             role,
             expires: UNIX_EPOCH + Duration::from_secs(row.get::<i64, _>(8).max(0) as u64),
         }))
+    }
+    /// The role the deployment's rules (`admins`, groups, guests) alone give an account, from its
+    /// newest sign-in: `None` when it never signed in or the rules refuse it now.
+    pub async fn configured_role(&self, account: &str) -> Result<Option<Role>, StoreError> {
+        let row: Option<(String, String, String, Option<String>, bool, String, bool)> = sqlx::query_as(
+            "SELECT provider, issuer, subject, email, email_verified, groups::text, guest FROM sso_logins WHERE account = $1 AND provider IS NOT NULL ORDER BY created DESC LIMIT 1",
+        )
+        .bind(account)
+        .fetch_optional(&self.store.pool)
+        .await?;
+        let Some((provider, issuer, subject, email, verified, groups, guest)) = row else { return Ok(None) };
+        let Some((deployment, configured)) = self.configured(&provider).filter(|(_, p)| p.issuer == issuer) else { return Ok(None) };
+        let groups: Vec<String> = serde_json::from_str(&groups).unwrap_or_default();
+        Ok(admit(deployment, configured, &subject, email.as_deref(), verified, &groups, guest).ok())
     }
     /// The person this login's subject is linked to, and whether that link is blocked.
     pub async fn linked_person(&self, login: &Login) -> Result<Option<(String, bool)>, StoreError> {
@@ -573,8 +590,9 @@ impl Sso {
             "id_token"
         })
     }
-    /// Revoke logins and fire the hook for each linked person whose login ended.
-    async fn revoke_where(&self, sql: &str, binds: &[Option<&str>], block: bool) -> Result<u64, StoreError> {
+    /// Revoke logins and fire the hook for each linked person whose login ended; each account
+    /// whose login ended gets one audit event in the same transaction (`audit`).
+    async fn revoke_where(&self, sql: &str, binds: &[Option<&str>], block: bool, audit: Revoked<'_>) -> Result<u64, StoreError> {
         let mut query = sqlx::query(sql);
         for bind in binds {
             query = query.bind(*bind);
@@ -582,6 +600,7 @@ impl Sso {
         let mut tx = self.store.pool.begin().await?;
         let rows = query.fetch_all(&mut *tx).await?;
         let mut fired = Vec::new();
+        let mut audited = std::collections::HashSet::new();
         for row in &rows {
             let (org, issuer, subject): (String, String, String) = (row.get(0), row.get(1), row.get(2));
             let person: Option<String> = if block {
@@ -601,6 +620,13 @@ impl Sso {
             let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE issuer = $1 AND subject = $2").bind(&issuer).bind(&subject).fetch_all(&mut *tx).await?;
             for account in accounts {
                 crate::server_projects::notify_account(&mut tx, &account).await?;
+                if audited.insert(account.clone()) {
+                    let actor = match audit.by_self {
+                        Some(ip) => crate::audit::Actor::account(&account, ip),
+                        None => crate::audit::Actor::system(),
+                    };
+                    crate::audit::record(&mut tx, &actor, audit.action, Some(("account", &account)), audit.detail.clone()).await?;
+                }
             }
             if let Some(person) = person {
                 fired.push((org, person));
@@ -612,6 +638,28 @@ impl Sso {
             let _ = self.revoked.send(event);
         }
         Ok(rows.len() as u64)
+    }
+
+    /// Revokes every login of an account in the caller's transaction (an administrator disabled
+    /// or removed it) and tells its heads polls; returns the end-to-end (org, person) pairs whose
+    /// device sessions [`Sso::announce`] closes once the transaction committed.
+    pub async fn revoke_account_in(tx: &mut sqlx::PgConnection, account: &str) -> Result<Vec<(String, String)>, sqlx::Error> {
+        let rows: Vec<(String, String, String)> = sqlx::query_as("UPDATE sso_logins SET revoked = true WHERE account = $1 AND NOT revoked RETURNING org, issuer, subject").bind(account).fetch_all(&mut *tx).await?;
+        let mut fired = Vec::new();
+        for (org, issuer, subject) in rows {
+            let person: Option<String> = sqlx::query_scalar("SELECT person FROM sso_links WHERE org = $1 AND issuer = $2 AND subject = $3").bind(&org).bind(&issuer).bind(&subject).fetch_optional(&mut *tx).await?;
+            if let Some(person) = person {
+                fired.push((org, person));
+            }
+        }
+        crate::server_projects::notify_account(&mut *tx, account).await?;
+        fired.dedup();
+        Ok(fired)
+    }
+    pub fn announce(&self, fired: Vec<(String, String)>) {
+        for event in fired {
+            let _ = self.revoked.send(event);
+        }
     }
 
     /// Start the background recheck (every `sso_recheck_tick_seconds`, default one minute).
@@ -730,20 +778,30 @@ impl Sso {
                     .await?;
                 let admitted = admit(deployment, configured, subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest);
                 if let Ok(role) = admitted {
-                    sqlx::query("UPDATE accounts SET email = $3, email_verified = $4, name = $5, role = $6, guest = $7 WHERE provider = $1 AND subject = $2")
-                        .bind(&configured.id)
-                        .bind(subject)
-                        .bind(&id.email)
-                        .bind(id.email_verified)
-                        .bind(&id.name)
-                        .bind(role.as_str())
-                        .bind(id.guest)
-                        .execute(&self.store.pool)
-                        .await?;
+                    let mut tx = self.store.pool.begin().await?;
+                    let changed: Option<(String, String, String)> = sqlx::query_as(
+                        "WITH old AS (SELECT account, role FROM accounts WHERE provider = $1 AND subject = $2 FOR UPDATE)
+                         UPDATE accounts a SET email = $3, email_verified = $4, name = $5, role = CASE WHEN $6 = 'member' AND a.admin_grant THEN 'admin' ELSE $6 END, guest = $7
+                         FROM old WHERE a.account = old.account RETURNING a.account, old.role, a.role",
+                    )
+                    .bind(&configured.id)
+                    .bind(subject)
+                    .bind(&id.email)
+                    .bind(id.email_verified)
+                    .bind(&id.name)
+                    .bind(role.as_str())
+                    .bind(id.guest)
+                    .fetch_optional(&mut *tx)
+                    .await?;
+                    // A role the provider's groups changed (for example removal from an admin group).
+                    if let Some((account, from, to)) = changed.filter(|(_, from, to)| from != to) {
+                        crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.role_changed", Some(("account", &account)), json!({"from": from, "to": to, "by": "provider"})).await?;
+                    }
+                    tx.commit().await?;
                 }
                 if admitted.is_err() {
                     log("sso_refused", "recheck_rules");
-                    self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], false).await?;
+                    self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], false, Revoked::system("session.revoked", json!({"reason": "rules", "provider": configured.id}))).await?;
                     return Ok(Recheck::Revoked);
                 }
                 Ok(Recheck::Kept)
@@ -752,14 +810,26 @@ impl Sso {
             Ok((status, body)) if (400..500).contains(&status) && status != 408 && status != 429 => {
                 let invalid_grant = serde_json::from_slice::<Value>(&body).ok().is_some_and(|v| v.get("error").and_then(Value::as_str) == Some("invalid_grant"));
                 if invalid_grant {
-                    self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], true).await?;
+                    self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], true, Revoked::system("account.blocked", json!({"reason": "provider_refused", "provider": configured.id}))).await?;
                 } else {
-                    self.revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked RETURNING org, issuer, subject", &[Some(token_hash)], false).await?;
+                    self.revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked RETURNING org, issuer, subject", &[Some(token_hash)], false, Revoked::system("session.revoked", json!({"reason": "provider_refused_token", "provider": configured.id}))).await?;
                 }
                 Ok(Recheck::Revoked)
             }
             _ => Ok(Recheck::Retry),
         }
+    }
+}
+/// The audit event a revocation records for each account whose login ended: by the account
+/// itself (signing out, with its client address) or by the service (`by_self: None`).
+struct Revoked<'a> {
+    action: &'a str,
+    detail: Value,
+    by_self: Option<Option<std::net::IpAddr>>,
+}
+impl<'a> Revoked<'a> {
+    fn system(action: &'a str, detail: Value) -> Self {
+        Self { action, detail, by_self: None }
     }
 }
 enum Recheck {
@@ -921,15 +991,32 @@ fn redirect(location: String) -> Response {
     )
         .into_response()
 }
+/// A refused sign-in in progress; the refusal's code rides along so the callback can record it.
+#[derive(Clone, Copy)]
+struct Refused(&'static str);
 fn fail(return_to: &str, code: &'static str) -> Response {
     log("sso_refused", code);
-    redirect(format!("{return_to}/#scribyra-sso-error={code}"))
+    let mut response = redirect(format!("{return_to}/#scribyra-sso-error={code}"));
+    response.extensions_mut().insert(Refused(code));
+    response
 }
 /// The redirect URI registered at a provider: `<public_url>/v1/sso/callback/<provider id>`.
 pub fn callback_uri(public_url: &str, provider: &str) -> String {
     format!("{public_url}/v1/sso/callback/{provider}")
 }
-async fn callback(State(s): State<Shared>, axum::extract::Path(provider): axum::extract::Path<String>, Query(query): Query<HashMap<String, String>>) -> Response {
+/// The provider's redirect back. A refusal of a sign-in in progress is recorded in the audit log
+/// (`session.refused` with its reason); an unknown or reused `state` is not, since anyone can send
+/// one (sign-ins in progress are bounded per source, so their refusals are too).
+async fn callback(state: State<Shared>, source: Option<axum::Extension<crate::service::Source>>, provider: axum::extract::Path<String>, query: Query<HashMap<String, String>>) -> Response {
+    let (s, id) = (state.0.clone(), provider.0.clone());
+    let response = callback_flow(state, provider, query).await;
+    if let Some(Refused(code)) = response.extensions().get::<Refused>().copied() {
+        let detail = json!({"reason": code, "provider": if s.configured(&id).is_some() { Some(id) } else { None }});
+        crate::audit::record_or_log(&s.store.pool, &crate::audit::Actor { account: None, ip: crate::audit::source(&source) }, "session.refused", None, detail).await;
+    }
+    response
+}
+async fn callback_flow(State(s): State<Shared>, axum::extract::Path(provider): axum::extract::Path<String>, Query(query): Query<HashMap<String, String>>) -> Response {
     // Single use: the state is consumed whatever happens next.
     let flow = match query.get("state") {
         Some(state) => sqlx::query_as::<_, (String, String, String, String, String, bool)>(
@@ -1047,7 +1134,8 @@ struct RedeemRequest {
     code: String,
     verifier: String,
 }
-async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> Response {
+async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, Json(request): Json<RedeemRequest>) -> Response {
+    let ip = crate::audit::source(&source);
     // Single use: a redeem attempt consumes the grant even when the verifier is wrong.
     let grant = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
         "DELETE FROM sso_grants WHERE code_hash = $1 AND expires > now() RETURNING provider, challenge, identity::text, refresh_token, session_seconds",
@@ -1075,16 +1163,23 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     grant.identity.email = grant.identity.email.as_deref().map(normalise_email);
     let id = &grant.identity;
     let Ok(role) = admit(deployment, configured, &id.subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest) else {
+        crate::audit::record_or_log(&s.store.pool, &crate::audit::Actor { account: None, ip }, "session.refused", None, json!({"reason": "rules", "provider": grant.provider})).await;
         return error(StatusCode::FORBIDDEN, "this account cannot sign in here");
     };
     // The account: made at the first sign-in, refreshed at every one. A sign-in the provider
-    // admits again clears a block from a refused refresh token; a disabled account stays out.
-    let account = sqlx::query_as::<_, (String, String)>(
-        "INSERT INTO accounts (account, provider, issuer, subject, email, email_verified, name, role, guest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    // admits again clears a block from a refused refresh token; a disabled or removed account
+    // stays out. An administrator's grant keeps a member an administrator.
+    let mut tx = match s.store.pool.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return internal(e),
+    };
+    let account = sqlx::query_as::<_, (String, String, bool, String, Option<String>)>(
+        "WITH old AS (SELECT role FROM accounts WHERE provider = $2 AND subject = $4)
+         INSERT INTO accounts (account, provider, issuer, subject, email, email_verified, name, role, guest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (provider, subject) DO UPDATE SET issuer = EXCLUDED.issuer, email = EXCLUDED.email, email_verified = EXCLUDED.email_verified,
-           name = EXCLUDED.name, role = EXCLUDED.role, guest = EXCLUDED.guest, last_seen = now(),
+           name = EXCLUDED.name, role = CASE WHEN EXCLUDED.role = 'member' AND accounts.admin_grant THEN 'admin' ELSE EXCLUDED.role END, guest = EXCLUDED.guest, last_seen = now(),
            state = CASE WHEN accounts.state = 'blocked' THEN 'active' ELSE accounts.state END
-         RETURNING account, state",
+         RETURNING account, state, (xmax = 0), role, (SELECT role FROM old)",
     )
     .bind(random_hex())
     .bind(&grant.provider)
@@ -1095,13 +1190,29 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     .bind(&id.name)
     .bind(role.as_str())
     .bind(id.guest)
-    .fetch_one(&s.store.pool)
+    .fetch_one(&mut *tx)
     .await;
     let account = match account {
-        Ok((account, state)) if state == "active" => account,
-        Ok(_) => {
-            log("sso_refused", "account_disabled");
-            return error(StatusCode::FORBIDDEN, "this account is disabled");
+        Ok((account, state, created, role, old)) if state == "active" => {
+            let recorded = async {
+                if created {
+                    crate::audit::record(&mut tx, &crate::audit::Actor::account(&account, ip), "account.created", Some(("account", &account)), json!({"provider": grant.provider, "role": role})).await?;
+                } else if let Some(old) = old.filter(|o| *o != role) {
+                    crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.role_changed", Some(("account", &account)), json!({"from": old, "to": role, "by": "provider"})).await?;
+                }
+                Ok::<_, sqlx::Error>(())
+            };
+            if let Err(e) = recorded.await {
+                return internal(e);
+            }
+            account
+        }
+        Ok((account, state, ..)) => {
+            let _ = tx.rollback().await;
+            let reason = if state == "removed" { "account_removed" } else { "account_disabled" };
+            log("sso_refused", reason);
+            crate::audit::record_or_log(&s.store.pool, &crate::audit::Actor::account(&account, ip), "session.refused", Some(("account", &account)), json!({"reason": reason, "provider": grant.provider})).await;
+            return error(StatusCode::FORBIDDEN, if state == "removed" { "this account was removed" } else { "this account is disabled" });
         }
         Err(e) => return internal(e),
     };
@@ -1123,14 +1234,21 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     .bind(&grant.refresh_token)
     .bind(grant.session_seconds as f64)
     .bind(&account)
-    .execute(&s.store.pool)
+    .execute(&mut *tx)
     .await;
     if let Err(e) = inserted {
         return internal(e);
     }
+    let effective = if role == Role::Member && sqlx::query_scalar::<_, bool>("SELECT admin_grant FROM accounts WHERE account = $1").bind(&account).fetch_one(&mut *tx).await.unwrap_or(false) { Role::Admin } else { role };
+    if let Err(e) = crate::audit::record(&mut tx, &crate::audit::Actor::account(&account, ip), "session.sign_in", Some(("account", &account)), json!({"provider": grant.provider, "role": effective.as_str()})).await {
+        return internal(e);
+    }
+    if let Err(e) = tx.commit().await {
+        return internal(e);
+    }
     // Server-readable deployments: pending invitations to this verified email become shares.
     if deployment.encryption == crate::config::Encryption::Server
-        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account, deployment).await
+        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account, deployment, ip).await
     {
         return internal(e);
     }
@@ -1160,11 +1278,12 @@ async fn me(State(s): State<Shared>, headers: HeaderMap) -> Response {
         Err(e) => internal(e),
     }
 }
-async fn logout(State(s): State<Shared>, headers: HeaderMap) -> Response {
+async fn logout(State(s): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap) -> Response {
     let Some(token) = bearer(&headers) else { return error(StatusCode::UNAUTHORIZED, "sign in required") };
     let hash = sha256_hex(token.as_bytes());
+    let signed_out = Revoked { action: "session.sign_out", detail: json!({}), by_self: Some(crate::audit::source(&source)) };
     match s
-        .revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked AND expires > now() RETURNING org, issuer, subject", &[Some(&hash)], false)
+        .revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked AND expires > now() RETURNING org, issuer, subject", &[Some(&hash)], false, signed_out)
         .await
     {
         Ok(0) => error(StatusCode::UNAUTHORIZED, "sign in required"),
@@ -1227,6 +1346,7 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
                  RETURNING org, issuer, subject",
                 &[Some(org), Some(issuer), logout.subject.as_deref(), logout.sid.as_deref(), Some(&configured.id)],
                 false,
+                Revoked::system("session.revoked", json!({"reason": "provider_logout", "provider": configured.id})),
             )
             .await;
         if revoked.is_err() {
