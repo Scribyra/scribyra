@@ -520,3 +520,34 @@ fn a_worker_whose_heartbeats_keep_failing_stops_the_job() {
     stop.send_replace(true);
     runtime.block_on(worker).unwrap();
 }
+
+#[test]
+fn one_member_or_owner_cannot_monopolise_the_queue_and_workers_take_requesters_in_turn() {
+    // Review M1: one member could fill the whole queue, and workers took it first in first out.
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({"active_per_member": 2, "active_per_owner": 2}));
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    let ((p1, _), (p2, _), (p3, _)) = (paper(&ana, "One", &hello("1")), paper(&ana, "Two", &hello("2")), paper(&ana, "Three", &hello("3")));
+    let (q1, _) = paper(&ben, "Ben's", &hello("b"));
+    let j1 = ana.compile(&p1, None).json()["job"].as_str().unwrap().to_owned();
+    let j2 = ana.compile(&p2, None).json()["job"].as_str().unwrap().to_owned();
+    // Two of Ana's jobs wait: her third request is refused, though the queue has room.
+    let busy = ana.compile(&p3, None);
+    assert_eq!((busy.status, busy.header("retry-after")), (429, Some("60")), "{}", String::from_utf8_lossy(&busy.body));
+    // Ben, editing a project Ana owns, is refused too: her projects have two jobs waiting.
+    assert_eq!(ana.invite(&p3, "ben@example.org", "editor").status, 201);
+    assert_eq!(ben.compile(&p3, None).status, 429);
+    // His own project is his own count.
+    let k1 = ben.compile(&q1, None);
+    assert_eq!(k1.status, 202);
+    let k1 = k1.json()["job"].as_str().unwrap().to_owned();
+    // Workers take Ana's oldest, then Ben's (queued after both of hers), then Ana's next.
+    let (runtime, compiles) = library(&mut sr);
+    let order: Vec<String> = runtime.block_on(async {
+        let mut order = Vec::new();
+        while let Some(c) = compiles.claim().await.unwrap() {
+            order.push(c.job);
+        }
+        order
+    });
+    assert_eq!(order, vec![j1, k1, j2]);
+}

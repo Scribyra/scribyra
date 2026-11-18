@@ -148,6 +148,9 @@ pub enum RequestError {
     Compacted,
     BeyondHead,
     RateLimited,
+    /// The requester, or the project's owner, has `active_per_member`/`active_per_owner` jobs
+    /// queued or running already.
+    Busy,
     QueueFull,
     Internal,
 }
@@ -268,10 +271,8 @@ impl Compiles {
         }
         let mut tx = self.pool().begin().await?;
         // The project row serialises requests for one project (and against workers finishing).
-        let live: Option<i32> = sqlx::query_scalar("SELECT 1 FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
-        if live.is_none() {
-            return Err(RequestError::NotFound);
-        }
+        let owner: Option<String> = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
+        let Some(owner) = owner else { return Err(RequestError::NotFound) };
         let same: Option<(String, String)> = sqlx::query_as("SELECT job, state FROM compiles WHERE project = $1 AND state IN ('queued', 'running') AND content_hash = $2 AND engine = $3 AND texlive = $4 ORDER BY queued DESC LIMIT 1")
             .bind(project)
             .bind(&s.content_hash)
@@ -286,13 +287,27 @@ impl Compiles {
         if recent >= self.limits.per_member_per_hour as i64 {
             return Err(RequestError::RateLimited);
         }
+        // The queue lock serialises the bounds below (the queue, each member's and each owner's
+        // active jobs) across projects and replicas.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(QUEUE_LOCK).execute(&mut *tx).await?;
         let replaced: Option<String> = sqlx::query_scalar("UPDATE compiles SET state = 'replaced', finished = now() WHERE project = $1 AND state = 'queued' RETURNING job").bind(project).fetch_optional(&mut *tx).await?;
         if replaced.is_none() {
-            sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(QUEUE_LOCK).execute(&mut *tx).await?;
             let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM compiles WHERE state = 'queued'").fetch_one(&mut *tx).await?;
             if queued >= self.limits.queue as i64 {
                 return Err(RequestError::QueueFull);
             }
+        }
+        // Review M1: one member (or one owner's projects) could fill the queue.
+        let (mine, owners): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE c.requested_by = $1), count(*) FILTER (WHERE p.owner = $2)
+             FROM compiles c JOIN sr_projects p USING (project) WHERE c.state IN ('queued', 'running') AND (c.requested_by = $1 OR p.owner = $2)",
+        )
+        .bind(account)
+        .bind(&owner)
+        .fetch_one(&mut *tx)
+        .await?;
+        if mine >= self.limits.active_per_member as i64 || owners >= self.limits.active_per_owner as i64 {
+            return Err(RequestError::Busy);
         }
         let job = server_projects::random_hex();
         sqlx::query("INSERT INTO compiles (job, project, seq, content_hash, engine, texlive, requested_by) VALUES ($1, $2, $3, $4, $5, $6, $7)")
@@ -311,13 +326,18 @@ impl Compiles {
         Ok(Requested::Queued { job, replaced: replaced.is_some() })
     }
 
-    /// Takes the oldest queued job whose project has none running, under a new claim token.
+    /// Takes a queued job whose project has none running, under a new claim token: round robin
+    /// by requester (review M1), so the requester with the fewest running jobs goes first, each
+    /// requester's oldest job first, then the oldest of those.
     pub async fn claim(&self) -> Result<Option<Claimed>, Error> {
         let holder = server_projects::random_hex();
         let row = sqlx::query(
             "UPDATE compiles SET state = 'running', worker = $1, started = now(), heartbeat = now(), attempts = attempts + 1
              WHERE job = (SELECT c.job FROM compiles c WHERE c.state = 'queued' AND NOT EXISTS (SELECT 1 FROM compiles r WHERE r.project = c.project AND r.state = 'running')
-                          ORDER BY c.queued LIMIT 1 FOR UPDATE SKIP LOCKED)
+                          ORDER BY (SELECT count(*) FROM compiles r WHERE r.state = 'running' AND r.requested_by IS NOT DISTINCT FROM c.requested_by),
+                                   (SELECT count(*) FROM compiles q WHERE q.state = 'queued' AND q.requested_by IS NOT DISTINCT FROM c.requested_by AND q.queued < c.queued),
+                                   c.queued
+                          LIMIT 1 FOR UPDATE SKIP LOCKED)
              RETURNING job, project, seq, engine, extract(epoch FROM queued)::bigint",
         )
         .bind(&holder)
@@ -892,6 +912,7 @@ async fn start(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderM
         Err(e) => {
             metrics::global().compile_request(match e {
                 RequestError::RateLimited => "rate_limited",
+                RequestError::Busy => "busy",
                 RequestError::QueueFull => "queue_full",
                 _ => "refused",
             });
@@ -906,6 +927,7 @@ async fn start(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderM
                 RequestError::Compacted => error(StatusCode::GONE, "compacted"),
                 RequestError::BeyondHead => error(StatusCode::BAD_REQUEST, "seq is beyond the head"),
                 RequestError::RateLimited => retry(error(StatusCode::TOO_MANY_REQUESTS, "compile limit reached; try again later")),
+                RequestError::Busy => retry(error(StatusCode::TOO_MANY_REQUESTS, "too many compiles are waiting for you or this project's owner; try again when one finishes")),
                 RequestError::QueueFull => retry(error(StatusCode::SERVICE_UNAVAILABLE, "the compile queue is full; try again later")),
                 RequestError::Internal => internal(()),
             }
