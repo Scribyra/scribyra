@@ -1049,7 +1049,8 @@ async fn log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<Lo
 struct Settings {
     compile: String,
 }
-/// `PUT …/settings {compile}`: owners and editors, when the deployment's `compile` is `both`.
+/// `PUT …/settings {compile}`: owners and editors who are not guests (as for sharing; review
+/// L2), when the deployment's `compile` is `both`.
 async fn settings(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Settings>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
@@ -1059,8 +1060,8 @@ async fn settings(State(sr): State<Shared>, Path(p): Path<String>, headers: Head
         Ok(a) => a,
         Err(r) => return r,
     };
-    if !access.writes() {
-        return error(StatusCode::FORBIDDEN, "only the owner and editors can change this project's settings");
+    if !access.writes() || caller.role == crate::sso::Role::Guest {
+        return error(StatusCode::FORBIDDEN, "only the owner and editors who are not guests can change this project's settings");
     }
     if !matches!(request.compile.as_str(), "browser" | "server") {
         return error(StatusCode::BAD_REQUEST, "compile must be \"browser\" or \"server\"");
