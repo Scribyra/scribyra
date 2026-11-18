@@ -363,10 +363,17 @@ impl Sso {
     /// Links the subject to a person: Ok if newly linked or already linked to the same person (a
     /// blocked link stays blocked); Err(Conflict) if the subject or the person is linked elsewhere.
     pub async fn link(&self, login: &Login, person: &str) -> Result<(), LinkError> {
+        let mut tx = self.store.pool.begin().await?;
+        Self::link_in(&mut tx, login, person).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    /// [`Sso::link`] inside the caller's transaction, so the link commits (or not) with what
+    /// it belongs to, such as the membership event that admits the person.
+    pub async fn link_in(tx: &mut sqlx::PgConnection, login: &Login, person: &str) -> Result<(), LinkError> {
         if !scribyra_core::orgsync::is_uuid(person) {
             return Err(LinkError::Invalid);
         }
-        let mut tx = self.store.pool.begin().await?;
         let existing = sqlx::query("SELECT issuer, subject, person FROM sso_links WHERE org = $1 AND ((issuer = $2 AND subject = $3) OR person = $4) FOR UPDATE")
             .bind(&login.org)
             .bind(&login.issuer)
@@ -394,7 +401,6 @@ impl Sso {
                 return Err(LinkError::Conflict);
             }
         }
-        tx.commit().await?;
         Ok(())
     }
     /// The identity linked to a person, if any: (issuer, subject, blocked).

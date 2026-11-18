@@ -459,15 +459,30 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         Err(e) if e.0 == "membership event does not follow the current head" || e.0 == "the organisation already has a genesis" => return error(StatusCode::CONFLICT, e.0),
         Err(e) => return error(StatusCode::BAD_REQUEST, e.0),
     };
-    // The identity is linked before the event commits (a refused link refuses it), so one
-    // identity can never end up behind two people.
-    if let (Some(login), Some(person)) = (&joining_login, value["body"]["person"].as_str())
-        && o.sso.link(login, person).await.is_err()
-    {
-        return error(StatusCode::CONFLICT, "this single sign-on identity already belongs to a member");
-    }
     let result = async {
         let mut tx = o.store.pool.begin().await?;
+        // The identity is linked in the event's own transaction (a refused link refuses it, and
+        // a refused event leaves no link), so one identity can never end up behind two people.
+        if let (Some(login), Some(person)) = (&joining_login, value["body"]["person"].as_str()) {
+            match crate::sso::Sso::link_in(&mut tx, login, person).await {
+                Ok(()) => {}
+                Err(crate::sso::LinkError::Store(_)) => {
+                    tx.rollback().await?;
+                    return Ok(Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()));
+                }
+                Err(_) => {
+                    tx.rollback().await?;
+                    return Ok(Err(error(StatusCode::CONFLICT, "this single sign-on identity already belongs to a member")));
+                }
+            }
+        }
+        // A removed person's SSO identity is released with the removal, so it can be invited
+        // again later.
+        if kind == "person.remove"
+            && let Some(person) = value["body"]["person"].as_str()
+        {
+            sqlx::query("DELETE FROM sso_links WHERE org = $1 AND person = $2").bind(&org).bind(person).execute(&mut *tx).await?;
+        }
         // A new project epoch takes effect at the log's current head, under the project row's
         // lock, so no append races it; `after` may not reach past what the log holds.
         if kind == "project.epoch" {
@@ -527,12 +542,7 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
     }
     *guard = Some(next);
     drop(guard);
-    // A removed person's SSO identity is released, so it can be invited again later.
-    if kind == "person.remove"
-        && let Some(person) = value["body"]["person"].as_str()
-    {
-        let _ = o.sso.unlink(&org, person).await;
-    }
+
     o.changed(&org);
     (StatusCode::CREATED, Json(serde_json::json!({"seq": seq, "hash": hash}))).into_response()
 }

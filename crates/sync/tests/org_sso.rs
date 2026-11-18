@@ -222,3 +222,36 @@ fn one_client_cannot_use_up_the_session_challenges() {
     let reply = support::sr::request("POST", &org.url("/v1/auth/session"), None, &[("Content-Type", "application/json".into())], attempt.to_string().into_bytes());
     assert_eq!((reply.status, reply.json()["error"].as_str()), (401, Some("invalid signature")));
 }
+
+#[test]
+fn identity_links_commit_with_their_membership_events() {
+    // Review L1 and L2: a join request's link used to be written before its event committed (a
+    // failed event left the identity linked to a person who never joined), and a removal's
+    // unlink ran after commit with its failure ignored. Both now share the event's transaction.
+    let env = Env::start("RS256", people(), json!({}), json!({}));
+    let client = env.client();
+    let db = env.service.database_url().to_owned();
+    let mut org = Org::create(&env, "alice");
+    let owner = org.owner.clone();
+    let token = org.token(&owner.seed);
+    // The event's insert fails: no link remains, and the same identity can ask again later.
+    postgres().psql(&db, "CREATE FUNCTION refuse() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'refused'; END $$; CREATE TRIGGER refuse BEFORE INSERT ON org_events FOR EACH ROW EXECUTE FUNCTION refuse()");
+    let first = Device::new();
+    assert_eq!(org.request(&client, "ben", &first).status, 500);
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM sso_links WHERE subject = 'sub-ben'"), "0");
+    postgres().psql(&db, "DROP TRIGGER refuse ON org_events");
+    let second = Device::new();
+    assert_eq!(org.request(&client, "ben", &second).status, 201);
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM sso_links WHERE subject = 'sub-ben'"), "1");
+    assert_eq!(org.post(Some(&token), "person.approve", json!({"person": org.person(&second), "role": "member"}), &owner.seed).status, 201);
+    // The unlink fails: the removal does not happen either (it used to commit and keep the link).
+    postgres().psql(&db, "CREATE TRIGGER refuse BEFORE DELETE ON sso_links FOR EACH ROW EXECUTE FUNCTION refuse()");
+    let events = postgres().psql(&db, "SELECT count(*) FROM org_events");
+    assert_eq!(org.post(Some(&token), "person.remove", json!({"person": org.person(&second)}), &owner.seed).status, 500);
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM org_events"), events);
+    postgres().psql(&db, "DROP TRIGGER refuse ON sso_links");
+    // The service reloads its state after the failure; the removal then goes through with its unlink.
+    let reply = org.post(Some(&token), "person.remove", json!({"person": org.person(&second)}), &owner.seed);
+    assert_eq!(reply.status, 201, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM sso_links WHERE subject = 'sub-ben'"), "0");
+}
