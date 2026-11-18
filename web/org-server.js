@@ -153,10 +153,11 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   client??=srClient(connection.service,{fetchImpl,token:()=>connection.token,onAnswer:answered});
   return connection;
  }
- // Every answer from the service counts as a round trip; a refused session ends the sign-in.
+ // Every answer but a server error counts as a round trip; a refused session ends the sign-in.
  let wasPaused=null;
  function answered(status){
   if(status===401){if(connection?.token){connection.token=null;void save().then(sessionEnded);}return;}
+  if(status>=500)return;
   lastOk=now();reachable=true;checkPause();
  }
  /** In an online-only deployment, editing pauses unless the service answered recently. */

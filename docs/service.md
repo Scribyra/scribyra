@@ -285,6 +285,28 @@ owner's projects together (`member_bytes`). A write over any of them is `507` an
 nothing; the server's own snapshots are charged but never refused. Transfers do not check the
 new owner's quota.
 
+**The browser** (`web/org-server.js`, `web/org-server-dialog.js`). Remote backup → the
+deployment's address shows its name, "Stored on Acme's server, which can read it. Acme's
+administrators can open it." and one "Sign in with …" button per provider; nothing is contacted
+or stored before that. Signed in, the dialog lists the deployment's projects (on this device, or
+**Open**, which downloads the snapshot and log into a new local copy and opens it) with their
+state (Saved on this device · Syncing… · Synced · Waiting to sync · Read only · No longer shared
+with you), **Add to Acme** for personal projects (a copy with a new lineage becomes the new
+project; the personal project stays), **Share** (people with access and their roles, pending
+invitations, invite by email with a role, change a role, remove, withdraw) and **Sign out**
+(`POST /v1/sso/logout`). Each local copy has its own client ID (`<browser>-<copy>`, so a copy
+downloaded again never reuses sequence numbers), an IndexedDB outbox written before each send, a
+cursor and the server's Yjs state vector; uploads are `encodeStateAsUpdate(doc, serverVector)`,
+one at a time per project, at most every 2 s while typing (at once when online-only), after the
+assets and named-version objects they refer to. Catch-up validates the merged project like a
+replica from another tab before the merged-head save and then advances the cursor (the save and
+the cursor are in two databases: a crash between them repeats idempotent work, never loses it).
+Reviewers and viewers open with their role's modes and send nothing. With `offline: false` the
+editor is read only unless the service answered within the last 30 s and nothing is unsent
+("Reconnecting — editing is paused because Acme keeps projects online only."), and local copies
+are deleted at sign-out, when the service refuses the session, and at start without a valid
+session.
+
 **Materialisation** (for export and compile): `server_projects::Projects::materialise` replays a
 project and returns its files with paths (from the `files` tree, the same rules as the app),
 texts, asset objects (with their bytes when stored), the main file and the name.
