@@ -4,8 +4,10 @@
 //! files, and lets owners and editors share by email invitation.
 //!
 //! Everything durable is in PostgreSQL and the blob store; replicas share nothing in memory.
-//! A change (entry, rename, share, deletion) is announced with `NOTIFY scribyra_sr`; every
-//! replica `LISTEN`s and wakes its waiting heads polls.
+//! A change (entry, rename, share, deletion) is announced with `NOTIFY scribyra_sr`, naming the
+//! project, and a change to the projects an account can see (or to its sessions) with
+//! `a:<account>`; every replica `LISTEN`s and wakes only the heads polls those notices concern.
+//! Payloads only route wake-ups: a woken poll reads everything it answers from the database.
 //!
 //! **Sealing.** Each project has a random 32-byte data key, stored only wrapped by the master
 //! key (`service_key_file`) with XChaCha20-Poly1305 and associated data naming the deployment
@@ -36,17 +38,19 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::sync::{Notify, Semaphore, watch};
 use yrs::{Any, GetString, Map, Options, Out, ReadTxn, StateVector, Transact, Update, updates::decoder::Decode};
 
-/// The PostgreSQL notification channel; the payload is the project ID.
+/// The PostgreSQL notification channel; the payload is a project ID or `a:<account>`.
 pub const CHANNEL: &str = "scribyra_sr";
 /// The longest a heads poll waits.
 pub const MAX_HEADS_WAIT_SECS: u64 = 25;
+/// Heads polls one account may keep waiting on one replica; a further one ends the oldest.
+pub const MAX_POLLS_PER_ACCOUNT: usize = 4;
 const MAX_LOG_PAGE: i64 = 1000;
 const DEFAULT_LOG_PAGE: i64 = 256;
 const MAX_LOG_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -259,6 +263,7 @@ impl Projects {
             };
         }
         notify(&mut tx, id).await?;
+        notify_account(&mut tx, owner).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -664,6 +669,11 @@ async fn notify(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str) -
     sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(project).execute(&mut **tx).await?;
     Ok(())
 }
+/// Tells the account's heads polls that the projects it can see (or its sessions) changed.
+pub async fn notify_account(tx: &mut sqlx::PgConnection, account: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(format!("a:{account}")).execute(&mut *tx).await?;
+    Ok(())
+}
 
 /// Turns pending, unexpired invitations to the account's verified email into shares (called at
 /// every sign-in of a server-readable deployment). An unverified email matches nothing, and an
@@ -696,17 +706,126 @@ pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate
             .await?;
         notify(&mut tx, project).await?;
     }
+    if !accepted.is_empty() {
+        notify_account(&mut tx, account).await?;
+    }
     tx.commit().await
+}
+
+/// The heads polls waiting on this replica, indexed by account and by the projects each one's
+/// account could see when it last looked (review M4: every notice used to wake every poll).
+#[derive(Default)]
+pub struct Polls {
+    next: u64,
+    polls: HashMap<u64, Poll>,
+    by_project: HashMap<String, HashSet<u64>>,
+    by_account: HashMap<String, BTreeSet<u64>>,
+}
+struct Poll {
+    account: String,
+    projects: HashSet<String>,
+    wake: Arc<Notify>,
+    superseded: bool,
+}
+impl Polls {
+    /// Registers a poll; past [`MAX_POLLS_PER_ACCOUNT`] the account's oldest is superseded
+    /// (woken to answer at once). Returns the poll's ID and its wake-up.
+    pub fn register(&mut self, account: &str) -> (u64, Arc<Notify>) {
+        let id = self.next;
+        self.next += 1;
+        let mine = self.by_account.entry(account.to_owned()).or_default();
+        let live: Vec<u64> = mine.iter().copied().filter(|p| !self.polls[p].superseded).collect();
+        if live.len() >= MAX_POLLS_PER_ACCOUNT {
+            let oldest = self.polls.get_mut(&live[0]).expect("indexed poll");
+            oldest.superseded = true;
+            oldest.wake.notify_one();
+        }
+        mine.insert(id);
+        let wake = Arc::new(Notify::new());
+        self.polls.insert(id, Poll { account: account.to_owned(), projects: HashSet::new(), wake: wake.clone(), superseded: false });
+        (id, wake)
+    }
+    /// Records the projects the poll's account can see; returns whether any is new to it.
+    pub fn watch<'a>(&mut self, id: u64, projects: impl IntoIterator<Item = &'a String>) -> bool {
+        let Some(poll) = self.polls.get_mut(&id) else { return false };
+        let now: HashSet<String> = projects.into_iter().cloned().collect();
+        let added = now.difference(&poll.projects).cloned().collect::<Vec<_>>();
+        for gone in poll.projects.difference(&now) {
+            if let Some(set) = self.by_project.get_mut(gone) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.by_project.remove(gone);
+                }
+            }
+        }
+        for project in &added {
+            self.by_project.entry(project.clone()).or_default().insert(id);
+        }
+        poll.projects = now;
+        !added.is_empty()
+    }
+    pub fn superseded(&self, id: u64) -> bool {
+        self.polls.get(&id).is_some_and(|p| p.superseded)
+    }
+    pub fn remove(&mut self, id: u64) {
+        let Some(poll) = self.polls.remove(&id) else { return };
+        self.watch_none(&poll.projects, id);
+        if let Some(set) = self.by_account.get_mut(&poll.account) {
+            set.remove(&id);
+            if set.is_empty() {
+                self.by_account.remove(&poll.account);
+            }
+        }
+    }
+    fn watch_none(&mut self, projects: &HashSet<String>, id: u64) {
+        for project in projects {
+            if let Some(set) = self.by_project.get_mut(project) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.by_project.remove(project);
+                }
+            }
+        }
+    }
+    /// Wakes the polls a notice concerns (a project ID, or `a:<account>`); returns how many.
+    pub fn route(&self, payload: &str) -> usize {
+        let ids: Vec<u64> = match payload.strip_prefix("a:") {
+            Some(account) => self.by_account.get(account).map(|s| s.iter().copied().collect()).unwrap_or_default(),
+            None => self.by_project.get(payload).map(|s| s.iter().copied().collect()).unwrap_or_default(),
+        };
+        for id in &ids {
+            self.polls[id].wake.notify_one();
+        }
+        ids.len()
+    }
+    /// Wakes every poll (the listener reconnected, so notices may have been lost).
+    pub fn wake_all(&self) {
+        for poll in self.polls.values() {
+            poll.wake.notify_one();
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.polls.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.polls.is_empty()
+    }
 }
 
 /// The HTTP side: routes, the heads long poll and the background tasks.
 pub struct Sr {
     projects: Option<Arc<Projects>>,
     sso: Arc<Sso>,
-    /// Bumped on every `NOTIFY` (and on listener reconnects, when notices may have been lost).
-    changes: watch::Sender<u64>,
+    polls: Mutex<Polls>,
     shutdown: watch::Receiver<bool>,
     uploads: Arc<Semaphore>,
+}
+/// Unregisters a heads poll however its request ends.
+struct PollGuard<'a>(&'a Sr, u64);
+impl Drop for PollGuard<'_> {
+    fn drop(&mut self) {
+        self.0.polls.lock().unwrap().remove(self.1);
+    }
 }
 type Shared = Arc<Sr>;
 
@@ -720,7 +839,7 @@ impl Sr {
     pub fn new(store: Arc<Store>, sso: Arc<Sso>, shutdown: watch::Receiver<bool>) -> Result<Shared, Error> {
         let uploads = Arc::new(Semaphore::new(store.config.uploads));
         let projects = Projects::new(store.clone())?;
-        let sr = Arc::new(Self { projects, sso, changes: watch::channel(0).0, shutdown, uploads });
+        let sr = Arc::new(Self { projects, sso, polls: Mutex::default(), shutdown, uploads });
         if sr.projects.is_some()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
@@ -823,26 +942,31 @@ impl Sr {
     }
 }
 
-/// Follows `NOTIFY scribyra_sr` on a dedicated connection, reconnecting after failures.
+/// Follows `NOTIFY scribyra_sr` on a dedicated connection, reconnecting after failures. A
+/// notice wakes the polls it concerns; (re)connecting wakes every poll, since notices may have
+/// been lost meanwhile.
 async fn listen(sr: std::sync::Weak<Sr>, pool: PgPool) {
     loop {
         if let Ok(mut listener) = sqlx::postgres::PgListener::connect_with(&pool).await
             && listener.listen(CHANNEL).await.is_ok()
         {
+            let Some(s) = sr.upgrade() else { return };
+            s.polls.lock().unwrap().wake_all();
+            drop(s);
             loop {
-                let Some(sr) = sr.upgrade() else { return };
-                // A notice wakes the polls; a lost connection may have dropped some, so it does too.
-                sr.changes.send_modify(|n| *n += 1);
-                drop(sr);
-                match listener.try_recv().await {
-                    Ok(Some(_)) => continue,
+                let notice = listener.try_recv().await;
+                let Some(s) = sr.upgrade() else { return };
+                match notice {
+                    Ok(Some(n)) => {
+                        s.polls.lock().unwrap().route(n.payload());
+                    }
                     Ok(None) | Err(_) => break,
                 }
             }
         }
-        let Some(sr) = sr.upgrade() else { return };
-        sr.changes.send_modify(|n| *n += 1);
-        drop(sr);
+        let Some(s) = sr.upgrade() else { return };
+        s.polls.lock().unwrap().wake_all();
+        drop(s);
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -1291,6 +1415,7 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
                 .fetch_one(&mut *tx)
                 .await?;
                 fresh |= inserted;
+                notify_account(&mut tx, account).await?;
             }
             sqlx::query("UPDATE sr_invitations SET state = 'accepted' WHERE project = $1 AND email = $2 AND state = 'pending'").bind(&p).bind(&email).execute(&mut *tx).await?;
             (if fresh { StatusCode::CREATED } else { StatusCode::OK }, json!({"status": if others.is_empty() { "owner" } else { "shared" }}))
@@ -1473,25 +1598,41 @@ struct HeadsQuery {
 /// A notice, not a delivery: the caller's projects with head, role and name, and a `version`.
 /// With `since` equal to the current version it waits (up to `wait` seconds, at most 25) until
 /// something the caller can see changes, on any replica. Ends at once when the service stops.
+/// Only notices for the caller's projects or account wake it; an account keeps at most
+/// [`MAX_POLLS_PER_ACCOUNT`] waiting per replica, and a further one ends the oldest at once
+/// (`superseded: true`).
 async fn heads(State(sr): State<Shared>, Query(q): Query<HeadsQuery>, headers: HeaderMap) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(q.wait.min(MAX_HEADS_WAIT_SECS));
-    let mut changes = sr.changes.subscribe();
+    let (id, wake) = sr.polls.lock().unwrap().register(&caller.account);
+    let _registered = PollGuard(&sr, id);
     let mut shutdown = sr.shutdown.clone();
     loop {
-        changes.borrow_and_update();
         let (version, heads) = match sr.heads_now(projects, &caller).await {
             Ok(v) => v,
             Err(r) => return r,
         };
-        if q.since.as_deref() != Some(version.as_str()) || *shutdown.borrow() || tokio::time::Instant::now() >= deadline {
-            return ok_json(StatusCode::OK, json!({"version": version, "projects": heads}));
+        let (added, superseded) = {
+            let mut polls = sr.polls.lock().unwrap();
+            (polls.watch(id, heads.as_object().map(|m| m.keys()).into_iter().flatten()), polls.superseded(id))
+        };
+        if q.since.as_deref() != Some(version.as_str()) || *shutdown.borrow() || tokio::time::Instant::now() >= deadline || superseded {
+            let mut body = json!({"version": version, "projects": heads});
+            if superseded {
+                body["superseded"] = json!(true);
+            }
+            return ok_json(StatusCode::OK, body);
+        }
+        // A project just added to the watch could have changed between the query and the
+        // watch: look once more before waiting.
+        if added {
+            continue;
         }
         tokio::select! {
-            _ = changes.changed() => {}
+            _ = wake.notified() => {}
             _ = shutdown.changed() => {}
             _ = tokio::time::sleep_until(deadline) => {}
         }
@@ -1512,4 +1653,49 @@ pub fn routes(sr: Shared) -> Router {
         .route("/v1/sr/projects/{project}/owner", post(transfer))
         .route("/v1/sr/heads", get(heads))
         .with_state(sr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polls_wake_only_for_their_projects_and_accounts() {
+        let mut polls = Polls::default();
+        let (a, wake_a) = polls.register("ana");
+        let (b, _) = polls.register("ben");
+        let (p, q) = ("p".repeat(64), "q".repeat(64));
+        assert!(polls.watch(a, [&p, &q]));
+        assert!(!polls.watch(a, [&p, &q]));
+        assert!(polls.watch(b, [&q]));
+        // A notice for a project wakes only the polls that can see it; another account's notice
+        // wakes nobody else.
+        assert_eq!(polls.route(&p), 1);
+        assert_eq!(polls.route(&q), 2);
+        assert_eq!(polls.route(&"r".repeat(64)), 0);
+        assert_eq!(polls.route("a:ben"), 1);
+        assert_eq!(polls.route("a:cat"), 0);
+        // The stored permit means a wake-up between looking and waiting is not lost.
+        assert!(futures_util::FutureExt::now_or_never(wake_a.notified()).is_some());
+        // Watching fewer projects stops their wake-ups; removing a poll unindexes it.
+        polls.watch(a, [&q]);
+        assert_eq!(polls.route(&p), 0);
+        polls.remove(b);
+        assert_eq!((polls.route(&q), polls.route("a:ben"), polls.len()), (1, 0, 1));
+        polls.remove(a);
+        assert!(polls.is_empty() && polls.by_project.is_empty() && polls.by_account.is_empty());
+    }
+
+    #[test]
+    fn an_account_keeps_at_most_four_polls_and_the_oldest_gives_way() {
+        let mut polls = Polls::default();
+        let ids: Vec<u64> = (0..MAX_POLLS_PER_ACCOUNT).map(|_| polls.register("ana").0).collect();
+        assert!(ids.iter().all(|id| !polls.superseded(*id)));
+        let (other, _) = polls.register("ben");
+        let (fifth, _) = polls.register("ana");
+        assert!(polls.superseded(ids[0]) && !polls.superseded(ids[1]) && !polls.superseded(fifth) && !polls.superseded(other));
+        // The superseded one stays until its request ends; a sixth then ends the next oldest.
+        polls.register("ana");
+        assert!(polls.superseded(ids[1]) && !polls.superseded(ids[2]));
+    }
 }

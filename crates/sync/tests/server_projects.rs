@@ -581,3 +581,45 @@ fn invitations_count_an_email_only_at_a_provider_that_vouches_for_it() {
     assert_eq!((pending["status"].as_str(), pending["invitation"]["provider"].as_str()), (Some("pending"), Some("partner")));
     assert_eq!(ana.invite(&p, "nowhere:gus@partner.org", "viewer").status, 400);
 }
+
+#[test]
+fn an_account_keeps_at_most_four_heads_polls_waiting() {
+    // Review M4: polls were unbounded per account and every notice woke every poll on every
+    // replica. A fifth poll now ends the account's oldest at once.
+    let sr = start(Blobs::Fs);
+    let ana = sr.api(&sr.login("alice"));
+    ana.create("Polled");
+    let version = ana.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let poll = |api: &Api| {
+        let (api, version) = (api.clone(), version.clone());
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            (api.heads(Some(&version), 20).json(), t.elapsed())
+        })
+    };
+    let first = poll(&ana);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let others: Vec<_> = (0..3).map(|_| poll(&ana)).collect();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Another account's polls do not count against Ana's.
+    let ben = sr.api(&sr.login("ben"));
+    let ben_version = ben.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let ben_poll = {
+        let ben = ben.clone();
+        std::thread::spawn(move || ben.heads(Some(&ben_version), 3).json())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let fifth = poll(&ana);
+    let (answer, took) = first.join().unwrap();
+    assert!(took < std::time::Duration::from_secs(5), "the oldest poll kept waiting: {took:?}");
+    assert_eq!((answer["version"].as_str(), answer["superseded"].as_bool()), (Some(version.as_str()), Some(true)));
+    assert_eq!(ben_poll.join().unwrap()["superseded"], Value::Null);
+    // The others are still waiting, and an append wakes them with the new head.
+    let p = ana.call("GET", "/v1/sr/projects", None).json()["projects"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(ana.append(&p, "a", 1, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
+    for waiter in others.into_iter().chain([fifth]) {
+        let (answer, took) = waiter.join().unwrap();
+        assert!(took < std::time::Duration::from_secs(15), "{took:?}");
+        assert_eq!((answer["projects"][&p]["head"].as_i64(), answer["superseded"].as_bool()), (Some(1), None));
+    }
+}
