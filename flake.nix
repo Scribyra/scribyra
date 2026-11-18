@@ -33,7 +33,12 @@
     };
     default = pkgs.mkShell {
       buildInputs = [ pkgs.glib ];
-      packages = with pkgs; [ (rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; }) nodejs_22 wasm-bindgen-cli pkg-config openssl nginx haproxy git chromium python3 playwright-driver.browsers openssh postgresql_17 garage ];
+      packages = with pkgs; [ (rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; }) nodejs_22 wasm-bindgen-cli pkg-config openssl nginx haproxy git chromium python3 playwright-driver.browsers openssh postgresql_17 garage bubblewrap texliveSmall ];
+      # The server compile sandbox (crates/compile): bubblewrap, the TeX Live tree and its
+      # store closure, which is all the sandbox binds read-only.
+      SCRIBYRA_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
+      SCRIBYRA_TEXLIVE = "${pkgs.texliveSmall}";
+      SCRIBYRA_TEXLIVE_CLOSURE = "${pkgs.closureInfo { rootPaths = [ pkgs.texliveSmall ]; }}/store-paths";
       PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
       PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
       PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.chromium}/bin/chromium" else "";
