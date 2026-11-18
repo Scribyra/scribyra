@@ -51,6 +51,8 @@ const SWEEP: Duration = Duration::from_secs(600);
 /// How often an idle worker looks for jobs when no notice arrives.
 const POLL: Duration = Duration::from_secs(2);
 const NO_MAIN: &str = "choose a main .tex file first";
+/// The log members see when the sandbox itself failed.
+const SANDBOX_FAILED: &str = "The compile sandbox on the server failed before TeX could finish. This is not caused by the project; the server's operator has the details.";
 
 /// The compile mode members see for a project: the deployment's, or with `both` the project's.
 pub fn effective_mode(config: &Config, project_setting: &str) -> &'static str {
@@ -205,7 +207,15 @@ impl Finished {
             Status::Cancelled => ("cancelled".into(), Some("the compile was cancelled")),
             Status::SandboxFailure => ("sandbox_failure".into(), Some("the compile sandbox failed")),
         };
-        Finished { outcome, error, content_hash: Some(content_hash), cpu_ms: o.cpu_ms, passes: o.passes, pdf: o.pdf, log: Some(o.log) }
+        // Review L4: a sandbox failure's log is the host's error (paths of this machine); members
+        // get a fixed text and the operator's log the details.
+        let log = if o.status == Status::SandboxFailure {
+            println!("{}", json!({"event": "compile_sandbox_failure", "reason": o.log.chars().take(2000).collect::<String>()}));
+            SANDBOX_FAILED.to_owned()
+        } else {
+            o.log
+        };
+        Finished { outcome, error, content_hash: Some(content_hash), cpu_ms: o.cpu_ms, passes: o.passes, pdf: o.pdf, log: Some(log) }
     }
 }
 fn ms(column: &str) -> String {
@@ -1143,5 +1153,16 @@ mod tests {
         assert_eq!(biber.bibliography, Bibliography::Biber);
         assert_eq!(source(&m(&[("main.tex", "\\usepackage[backend = bibtex]{biblatex}")], None, None)).unwrap().bibliography, Bibliography::Bibtex);
         assert_eq!(source(&m(&[("main.tex", "\\bibliography{refs}")], None, None)).unwrap().bibliography, Bibliography::Bibtex);
+    }
+
+    #[test]
+    fn a_sandbox_failure_shows_members_no_host_details() {
+        let o = Outcome { status: Status::SandboxFailure, pdf: None, log: "could not start the sandbox: No such file or directory (os error 2): /var/lib/scribyra/cgroup/job-1".into(), cpu_ms: 0, passes: 0 };
+        let f = Finished::from_outcome(o, "h".into());
+        assert_eq!((f.outcome.as_str(), f.error), ("sandbox_failure", Some("the compile sandbox failed")));
+        assert_eq!(f.log.as_deref(), Some(SANDBOX_FAILED));
+        // Other outcomes keep TeX's log.
+        let o = Outcome { status: Status::TexError, pdf: None, log: "! Undefined control sequence.".into(), cpu_ms: 5, passes: 1 };
+        assert_eq!(Finished::from_outcome(o, "h".into()).log.as_deref(), Some("! Undefined control sequence."));
     }
 }
