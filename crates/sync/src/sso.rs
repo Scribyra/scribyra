@@ -4,7 +4,8 @@
 //!
 //! Flow: the app sends `POST /v1/sso/start` with a provider ID and a SHA-256 challenge of its
 //! own 32-byte verifier and gets the provider's authorization URL. The provider redirects the
-//! browser to `GET /v1/sso/callback`, where the service exchanges the code (client secret and
+//! browser to `GET /v1/sso/callback/<provider>` (one redirect URI per provider, so a response
+//! can only be taken for the provider it came from), where the service exchanges the code (client secret and
 //! its own PKCE verifier), verifies the ID token ([`jose`]), applies the deployment's guest and
 //! group rules, and redirects back to the app with a one-time grant in the URL fragment. The app
 //! redeems the grant with its verifier (`POST /v1/sso/redeem`) for a login token
@@ -780,7 +781,7 @@ async fn start(State(s): State<Shared>, source: Option<axum::Extension<crate::se
     url.query_pairs_mut()
         .append_pair("response_type", "code")
         .append_pair("client_id", &configured.client_id)
-        .append_pair("redirect_uri", &format!("{public_url}/v1/sso/callback"))
+        .append_pair("redirect_uri", &callback_uri(&public_url, &request.provider))
         .append_pair("scope", &configured.scope())
         .append_pair("state", &state)
         .append_pair("nonce", &nonce)
@@ -844,7 +845,11 @@ fn fail(return_to: &str, code: &'static str) -> Response {
     log("sso_refused", code);
     redirect(format!("{return_to}/#scribyra-sso-error={code}"))
 }
-async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, String>>) -> Response {
+/// The redirect URI registered at a provider: `<public_url>/v1/sso/callback/<provider id>`.
+pub fn callback_uri(public_url: &str, provider: &str) -> String {
+    format!("{public_url}/v1/sso/callback/{provider}")
+}
+async fn callback(State(s): State<Shared>, axum::extract::Path(provider): axum::extract::Path<String>, Query(query): Query<HashMap<String, String>>) -> Response {
     // Single use: the state is consumed whatever happens next.
     let flow = match query.get("state") {
         Some(state) => sqlx::query_as::<_, (String, String, String, String, String, bool)>(
@@ -865,6 +870,11 @@ async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, S
     };
     if !flow.live {
         return fail(&flow.return_to, "expired");
+    }
+    // A response arriving at another provider's redirect URI is not this sign-in's (review L4:
+    // a mix-up between providers), whatever `iss` it carries or omits.
+    if provider != flow.provider {
+        return fail(&flow.return_to, "idp_error");
     }
     let (Some((deployment, configured)), Some(org)) = (s.configured(&flow.provider), s.org.clone()) else {
         return fail(&flow.return_to, "not_configured");
@@ -892,7 +902,7 @@ async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, S
             form: vec![
                 ("grant_type", "authorization_code".into()),
                 ("code", code.clone()),
-                ("redirect_uri", format!("{public_url}/v1/sso/callback")),
+                ("redirect_uri", callback_uri(&public_url, &flow.provider)),
                 ("code_verifier", flow.verifier.clone()),
             ],
         })
@@ -1155,7 +1165,7 @@ pub fn routes(s: Shared) -> Router {
     Router::new()
         .route("/v1/deployment", get(deployment_route))
         .route("/v1/sso/start", post(start))
-        .route("/v1/sso/callback", get(callback))
+        .route("/v1/sso/callback/{provider}", get(callback))
         .route("/v1/sso/redeem", post(redeem))
         .route("/v1/sso/me", get(me))
         .route("/v1/sso/logout", post(logout))

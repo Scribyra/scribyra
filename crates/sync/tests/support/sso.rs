@@ -101,7 +101,7 @@ impl Idp {
         let secret = format!("client-secret-{}", super::random_hex(16));
         let config = json!({
             "bind": format!("127.0.0.1:{port}"), "issuer": issuer, "alg": alg, "test_shortcuts": true,
-            "clients": [{"client_id": CLIENT_ID, "client_secret": secret, "redirect_uris": [format!("{public_url}/v1/sso/callback")],
+            "clients": [{"client_id": CLIENT_ID, "client_secret": secret, "redirect_uris": (["test", "partner"].map(|id| format!("{public_url}/v1/sso/callback/{id}"))),
                          "backchannel_logout_uri": format!("{public_url}/v1/sso/backchannel")}],
             "users": users,
         });

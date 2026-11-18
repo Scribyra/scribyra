@@ -494,7 +494,7 @@ pub struct GuestRule {
     pub claim: String,
     pub equals: String,
 }
-/// One OpenID Connect provider. The redirect URI is `<public_url>/v1/sso/callback` for all.
+/// One OpenID Connect provider. Its redirect URI is `<public_url>/v1/sso/callback/<id>`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Provider {

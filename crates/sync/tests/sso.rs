@@ -30,7 +30,7 @@ fn rs256_sign_in_me_logout_and_replays() {
     let query: std::collections::HashMap<String, String> = url::Url::parse(&started.url).unwrap().query_pairs().into_owned().collect();
     assert_eq!(query["scope"], "openid email profile");
     assert_eq!(query["code_challenge_method"], "S256");
-    assert_eq!(query["redirect_uri"], format!("{}/v1/sso/callback", env.service.config["public_url"].as_str().unwrap()));
+    assert_eq!(query["redirect_uri"], format!("{}/v1/sso/callback/test", env.service.config["public_url"].as_str().unwrap()));
     let callback = c.authorize(&started, "alice", "pw-alice");
     let (status, outcome) = c.callback(&callback);
     assert_eq!(status, 302);
@@ -157,12 +157,12 @@ fn verifier_return_origin_and_request_checks() {
     // The per-organisation request shape and settings route are gone.
     assert_eq!(post_json(&c.url("/v1/sso/start"), None, &json!({"org": env.org(), "return": APP, "challenge": sha256(&raw)})).status, 422);
     // An unknown state is not redirected anywhere.
-    let reply = fetch(&c.url(&format!("/v1/sso/callback?code=x&state={}", random_hex(32))), None);
+    let reply = fetch(&c.url(&format!("/v1/sso/callback/test?code=x&state={}", random_hex(32))), None);
     assert_eq!((reply.status, reply.location), (400, None));
     // A provider error goes back to the app as a fixed code; its text is not reflected.
     let started = c.start();
     let state = url::Url::parse(&started.url).unwrap().query_pairs().find(|(k, _)| k == "state").unwrap().1.into_owned();
-    let reply = fetch(&c.url(&format!("/v1/sso/callback?error=access_denied&error_description=%3Cscript%3E&state={state}")), None);
+    let reply = fetch(&c.url(&format!("/v1/sso/callback/test?error=access_denied&error_description=%3Cscript%3E&state={state}")), None);
     assert_eq!(reply.location.as_deref(), Some(format!("{APP}/#scribyra-sso-error=idp_error").as_str()));
     // A wrong password at the provider never reaches a grant.
     let started = c.start();
@@ -495,4 +495,24 @@ fn one_client_cannot_fill_the_sign_ins_in_progress() {
     assert_eq!(status, 302);
     let Some(Outcome::Grant { grant, .. }) = outcome else { panic!("{outcome:?}") };
     assert_eq!(c.redeem(&grant, &started.verifier).status, 200);
+}
+
+#[test]
+fn each_provider_has_its_own_redirect_uri_and_a_response_counts_only_there() {
+    // Review L4: one redirect URI for every provider, with RFC 9207 `iss` checked only when
+    // present, let a response be taken for another provider's sign-in. Each provider now has its
+    // own callback path, and a response at another one's path is refused.
+    let env = Env::start("RS256", default_users(), json!({}), json!({}));
+    let c = env.client();
+    let started = c.start();
+    let query: std::collections::HashMap<String, String> = url::Url::parse(&started.url).unwrap().query_pairs().into_owned().collect();
+    assert_eq!(query["redirect_uri"], format!("{}/v1/sso/callback/test", env.public));
+    let callback = c.authorize(&started, "alice", "pw-alice");
+    assert!(callback.starts_with(&format!("{}/v1/sso/callback/test?", env.public)), "{callback}");
+    let (status, outcome) = c.callback(&callback.replace("/v1/sso/callback/test?", "/v1/sso/callback/partner?"));
+    assert_eq!((status, outcome), (302, Some(Outcome::Error("idp_error".into()))));
+    // The state was used up: the genuine response no longer completes either.
+    assert_eq!(c.callback(&callback).0, 400);
+    // The path without a provider is gone.
+    assert_eq!(fetch(&c.url("/v1/sso/callback?code=x&state=y"), None).status, 404);
 }

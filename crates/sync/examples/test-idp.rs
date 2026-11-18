@@ -8,7 +8,7 @@
 //! {"bind": "127.0.0.1:0", "issuer": "http://127.0.0.1:18300", "alg": "RS256",
 //!  "test_shortcuts": false,
 //!  "clients": [{"client_id": "scribyra", "client_secret": "…",
-//!               "redirect_uris": ["http://127.0.0.1:18301/v1/sso/callback"],
+//!               "redirect_uris": ["http://127.0.0.1:18301/v1/sso/callback/acme"],
 //!               "backchannel_logout_uri": "http://127.0.0.1:18301/v1/sso/backchannel"}],
 //!  "users": [{"sub": "u1", "username": "alice", "password": "…", "email": "alice@example.org",
 //!             "email_verified": true, "name": "Alice", "groups": ["staff"]}]}

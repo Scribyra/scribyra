@@ -17,7 +17,7 @@ export const people=names=>names.map(n=>({sub:`sub-${n}`,username:n,password:`pw
 export async function idp({publicUrl,users,shortcuts=false}){
  await mkdir(resolve('tmp'),{recursive:true});
  const dir=await mkdtemp(resolve('tmp/idp-')),port=await freePort(),issuer=`http://127.0.0.1:${port}`,secret=randomBytes(16).toString('hex');
- const config={bind:`127.0.0.1:${port}`,issuer,alg:'RS256',test_shortcuts:shortcuts,clients:[{client_id:CLIENT_ID,client_secret:secret,redirect_uris:[`${publicUrl}/v1/sso/callback`],backchannel_logout_uri:`${publicUrl}/v1/sso/backchannel`}],users};
+ const config={bind:`127.0.0.1:${port}`,issuer,alg:'RS256',test_shortcuts:shortcuts,clients:[{client_id:CLIENT_ID,client_secret:secret,redirect_uris:[`${publicUrl}/v1/sso/callback/acme`],backchannel_logout_uri:`${publicUrl}/v1/sso/backchannel`}],users};
  await writeFile(join(dir,'idp.json'),JSON.stringify(config));await writeFile(join(dir,'secret'),secret+'\n');
  const child=spawn(resolve('target/debug/examples/test-idp'),['--config',join(dir,'idp.json')],{stdio:['ignore','pipe','pipe']});
  let logs='';
