@@ -161,6 +161,7 @@ async fn controller_against_a_real_api_server() {
         tokio::spawn(failed_migration_keeps_the_old_release(admin.clone(), operator.clone())),
         tokio::spawn(deletion_policies(admin.clone(), operator.clone())),
         tokio::spawn(pruning_and_invalid_spec(admin.clone(), operator.clone())),
+        tokio::spawn(leader_election(operator.clone())),
     ])
     .await;
     let mut failed = vec![];
@@ -534,4 +535,18 @@ async fn cloudnativepg(admin: Client, operator: Client) {
     let volumes = serde_json::to_string(&job.spec.unwrap().template.spec.unwrap().volumes).unwrap();
     assert!(volumes.contains("pg-db-app"), "the Job reads the CloudNativePG URL Secret");
     eprintln!("cloudnativepg: ok");
+}
+
+/// Two replicas, one lease (with the operator's namespaced Role only).
+async fn leader_election(operator: Client) {
+    use scribyra_operator::leader::Elector;
+    let a = Elector::new(operator.clone(), manifests::DEFAULT_NAMESPACE, manifests::LEASE, "replica-a");
+    let b = Elector::new(operator.clone(), manifests::DEFAULT_NAMESPACE, manifests::LEASE, "replica-b");
+    assert!(a.try_acquire().await.unwrap(), "first replica takes the lease");
+    assert!(!b.try_acquire().await.unwrap(), "second replica stays standby");
+    assert!(a.try_acquire().await.unwrap(), "holder renews");
+    // Another lease name is outside the Role's resourceNames.
+    let other = Elector::new(operator, manifests::DEFAULT_NAMESPACE, "someone-else", "replica-a");
+    assert!(other.try_acquire().await.is_err(), "RBAC limits the operator to its own lease");
+    eprintln!("leader election: ok");
 }
