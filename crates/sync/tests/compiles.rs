@@ -613,3 +613,28 @@ fn asset_sizes_are_checked_before_any_asset_is_read() {
         assert!(refused.log.as_deref().unwrap().contains(&format!("at least {}", (200u64 << 20) / 100)), "{:?}", refused.log);
     });
 }
+
+#[test]
+fn concurrent_requests_across_projects_never_pass_the_member_rate() {
+    // Review L1: the rate was counted and recorded without a lock, so requests on several
+    // projects at once could all pass it.
+    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"per_member_per_hour": 3, "active_per_member": 100, "active_per_owner": 100, "queue": 100}));
+    let ana = sr.api(&sr.login("alice"));
+    let projects: Vec<String> = (0..12).map(|i| paper(&ana, &format!("P{i}"), &hello(&i.to_string())).0).collect();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(projects.len()));
+    let statuses: Vec<u16> = std::thread::scope(|s| {
+        let handles: Vec<_> = projects
+            .iter()
+            .map(|p| {
+                let (ana, barrier) = (&ana, barrier.clone());
+                s.spawn(move || {
+                    barrier.wait();
+                    ana.compile(p, None).status
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(statuses.iter().filter(|s| **s != 429).count(), 3, "{statuses:?}");
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compile_requests"), "3");
+}

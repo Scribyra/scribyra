@@ -44,6 +44,8 @@ use tokio::{sync::watch, task::JoinSet};
 pub const CHANNEL: &str = "scribyra_compile";
 /// Serialises the queue bound across replicas (`pg_advisory_xact_lock`).
 const QUEUE_LOCK: i64 = 0x5343_5259_434f_4d50;
+/// With the account's `hashtext`, serialises one member's rate checks (`pg_advisory_xact_lock`).
+const RATE_LOCK: i32 = 0x5352_4154;
 /// How often an idle worker looks for jobs when no notice arrives.
 const POLL: Duration = Duration::from_secs(2);
 const NO_MAIN: &str = "choose a main .tex file first";
@@ -240,6 +242,8 @@ impl Compiles {
     /// cached, existing and failed answers were free). Refused requests are not recorded.
     async fn admit(&self, project: &str, account: &str) -> Result<(), RequestError> {
         let mut tx = self.pool().begin().await?;
+        // Review L1: one member's requests on several projects at once are counted one by one.
+        sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))").bind(RATE_LOCK).bind(account).execute(&mut *tx).await?;
         let (member, recent): (i64, i64) = sqlx::query_as(
             "SELECT (SELECT count(*) FROM compile_requests WHERE account = $1 AND at > now() - interval '1 hour'),
                     (SELECT count(*) FROM compile_requests WHERE project = $2 AND at > now() - interval '1 minute')",
