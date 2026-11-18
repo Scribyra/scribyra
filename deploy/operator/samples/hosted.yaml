@@ -1,0 +1,54 @@
+# Paid hosting: server compile under gVisor, API autoscaling, Gateway API, provisioned
+# PostgreSQL with scheduled backups, external bucket.
+apiVersion: scribyra.com/v1alpha1
+kind: Scribyra
+metadata:
+  name: tenant-42
+  namespace: tenant-42
+spec:
+  version: "0.2.0"
+  domain: tenant-42.scribyra.example.net
+  displayName: Tenant 42
+  oidc:
+    providers:
+      - name: google
+        label: Google
+        issuer: https://accounts.google.com
+        clientId: tenant-42.apps.googleusercontent.com
+        clientSecretRef: {name: tenant-42-google, key: client-secret}
+        emailDomains: [tenant42.example.com]
+      - name: corp
+        issuer: https://idp.tenant42.example.com
+        clientId: scribyra
+        clientSecretRef: {name: tenant-42-corp, key: client-secret}
+        roleMapping: {groupsClaim: groups, adminGroups: [admins], memberGroups: [staff]}
+        guest: {claim: acct, equals: "1"}
+  compile:
+    mode: both
+    texlive: medium
+    runtimeClassName: gvisor
+    workers: {minReplicas: 0, maxReplicas: 6, concurrency: 2}
+    limits: {cpuSeconds: 90, wallSeconds: 180, memoryMiB: 2048, scratchMiB: 512}
+  policy: {offlineAllowed: false, linkSharing: true, guests: shared}
+  postgres:
+    provisioned: {storageSize: 50Gi, instances: 2, storageClassName: fast}
+  storage:
+    s3:
+      endpoint: https://objects.example.net
+      bucket: tenant-42
+      region: eu-central
+      pathStyle: true
+      secretRef: {name: tenant-42-s3}
+  autoscaling: {minReplicas: 2, maxReplicas: 10, targetCPUUtilizationPercentage: 70}
+  ingress:
+    gateway: {name: public, namespace: gateway-system, sectionName: https}
+  backup:
+    schedule: "0 30 2 * * *"
+    retention: 30d
+    destination:
+      destinationPath: s3://backups/tenant-42
+      endpointURL: https://objects.example.net
+      secretRef: {name: tenant-42-backup}
+  networkPolicy:
+    ingressNamespaceSelector: {matchLabels: {kubernetes.io/metadata.name: gateway-system}}
+  deletionPolicy: Delete

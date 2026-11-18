@@ -57,5 +57,9 @@ pub const COMMAND_MIGRATE: &str = "migrate";
 /// `scribyra-sync compile-worker` (*not yet served*; slice 15).
 pub const COMMAND_COMPILE_WORKER: &str = "compile-worker";
 
+/// Where the compile worker image keeps its TeX Live tree (`deployment.texlive`); the worker
+/// image is built per TeX Live variant (*not yet built*; slice 15).
+pub const TEXLIVE_DIR: &str = "/opt/texlive";
+
 /// The user and group the images run as.
 pub const RUN_AS: i64 = 10001;
