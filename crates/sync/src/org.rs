@@ -1223,6 +1223,37 @@ async fn list_links(State(o): State<Shared>, Path(org): Path<String>, headers: H
     }
 }
 
+/// The member directory: the email the identity provider vouched for, by person (the service
+/// knows it from the sign-in it linked; names in the log are sealed). An administrator's app shows
+/// it beside a join request, and members see whom they share with. Device sessions only.
+async fn identities(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap) -> Response {
+    let session = match o.session(&headers) {
+        Ok(s) => s,
+        Err(r) => return r,
+    };
+    if session.org != org {
+        return error(StatusCode::FORBIDDEN, "wrong organisation");
+    }
+    {
+        let slot = match o.slot(&org).await {
+            Ok(slot) => slot,
+            Err(r) => return r,
+        };
+        let mut guard = slot.lock().await;
+        let state = match o.state(&mut guard, &org).await {
+            Ok(s) => s,
+            Err(r) => return r,
+        };
+        if !matches!(Orgs::role(state, &session), Ok(KeyRole::Device { .. })) {
+            return error(StatusCode::FORBIDDEN, "only a device can read the directory");
+        }
+    }
+    match sqlx::query("SELECT person, email FROM sso_links WHERE org = $1").bind(&org).fetch_all(&o.store.pool).await {
+        Ok(rows) => Json(serde_json::json!({"people": rows.iter().map(|r| (r.get::<String, _>(0), serde_json::json!({"email": r.get::<Option<String>, _>(1)}))).collect::<serde_json::Map<_, _>>()})).into_response(),
+        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    }
+}
+
 pub fn routes(o: Shared) -> Router {
     Router::new()
         .route("/v1/auth/challenge", post(challenge))
@@ -1232,6 +1263,7 @@ pub fn routes(o: Shared) -> Router {
         .route("/v1/orgs/{org}/keys/report", post(report_wrap))
         .route("/v1/orgs/{org}/info", get(info))
         .route("/v1/orgs/{org}/pending", get(pending))
+        .route("/v1/orgs/{org}/people", get(identities))
         .route("/v1/orgs/{org}/heads", get(heads))
         .route("/v1/orgs/{org}/device-links", get(list_links))
         .route("/v1/orgs/{org}/device-links/sso", post(sso_link_request))

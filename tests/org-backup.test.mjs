@@ -1,6 +1,6 @@
 // The remote-backup engine end to end in Node (fake IndexedDB, real WASM core) against
 // the real service and PostgreSQL: back up a project with comments, reviews and history,
-// erase this "browser", and restore everything from the recovery kit alone.
+// erase this "browser", and restore everything from the recovery kit (with a sign-in).
 import './helpers/integration-session.mjs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +8,8 @@ import * as Y from 'yjs';
 import {deleteDB} from 'idb';
 import * as storage from '../web/storage.js';
 import {integrationSession} from './helpers/integration-session.mjs';
-import {service,orgCreate} from './helpers/service.mjs';
+import {APP_ORIGIN} from './helpers/service.mjs';
+import {orgService,signIn} from './helpers/idp.mjs';
 import {orgBackup} from '../web/org-backup.js';
 import {parseKit,blobrefPayload} from '../web/org-crypto.js';
 import {rawMember,inject} from './helpers/org-member.mjs';
@@ -25,6 +26,10 @@ function snapshot(doc){
  for(const name of [...doc.share.keys()].filter(n=>n.startsWith('text:')).sort())out[name]=doc.getText(name).toString();
  return JSON.stringify(out);
 }
+/** Ana, the deployment's administrator, signs in and creates the organisation; resolves to her kit. */
+async function connect(engine,s){await signIn(engine,s,'ana');return engine.create({name:'Acme Lab',ownerName:'Ana'});}
+/** A fresh browser: Ana signs in there, then restores with her kit (a kit alone opens nothing). */
+async function restoreAs(engine,s,kit){await signIn(engine,s,'ana');return engine.restore(kit);}
 // "Synced" (acknowledged and followed live) and "Backed up remotely" both mean every change is acknowledged.
 async function settled(engine,id,state='backed-up'){
  const accepted=state==='backed-up'?['backed-up','synced']:[state];
@@ -32,8 +37,8 @@ async function settled(engine,id,state='backed-up'){
  assert.fail(`backup did not reach ${state}: ${JSON.stringify(engine.status(id))}`);
 }
 
-test('a project with comments, reviews and history backs up encrypted and restores from the kit alone',async()=>{
- const s=await service({org:true});let engine,restoredEngine;
+test('a project with comments, reviews and history backs up encrypted and restores from the kit and its person’s sign-in',async()=>{
+ const s=await orgService();let engine,restoredEngine;
  try{
   const session=await integrationSession();
   const thread=session.call({op:'thread.create',fileId:'main',start:0,end:14,body:'BACKUP_DISCUSSION'},false);assert(thread.ok,JSON.stringify(thread));
@@ -43,10 +48,10 @@ test('a project with comments, reviews and history backs up encrypted and restor
   await session.context.flushSave();
   const projectId=session.projectId;
 
-  const changes=[];engine=orgBackup({fetchImpl:fetch,onChange:id=>changes.push(id)});
-  const kit=await engine.connect(await orgCreate(s,'home'));
+  const changes=[];engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch,onChange:id=>changes.push(id)});
+  const kit=await connect(engine,s);
   assert.match(kit,/scribyra-recovery:1:/);assert.equal(parseKit(kit).org,engine.info.org);
-  assert.equal(engine.info.mode,'e2ee');
+  assert.equal(engine.info.name,'Acme Lab');
   await engine.backUp(projectId);await settled(engine,projectId);
   // A later edit becomes a second encrypted entry.
   session.doc.getText('text:main').insert(0,'% BACKUP_LATER_EDIT\n');await session.context.flushSave();
@@ -58,8 +63,8 @@ test('a project with comments, reviews and history backs up encrypted and restor
   // Erase this "browser": the project, the backup database and the signing key.
   await storage.deleteProject(projectId);await deleteDB('scribyra-org');await deleteDB('scribyra-direct');localStorage.removeItem('scribyra:org-connected');
 
-  restoredEngine=orgBackup({fetchImpl:fetch});
-  const result=await restoredEngine.restore(kit);
+  restoredEngine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});
+  const result=await restoreAs(restoredEngine,s,kit);
   assert.deepEqual(result.failures,[]);assert.equal(result.restored.length,1);
   const restored=await storage.loadProject(result.restored[0].localId);
   assert.equal(snapshot(restored),original);
@@ -73,7 +78,7 @@ test('a project with comments, reviews and history backs up encrypted and restor
   // An old kit no longer restores once replaced.
   const newer=await restoredEngine.replaceRecoveryKit();assert.notEqual(newer,kit);
   restoredEngine.close();await deleteDB('scribyra-org');await deleteDB('scribyra-direct');localStorage.removeItem('scribyra:org-connected');
-  await assert.rejects(orgBackup({fetchImpl:fetch}).restore(kit),/replaced/);
+  await assert.rejects(restoreAs(orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch}),s,kit),/replaced/);
  }finally{engine?.close();restoredEngine?.close();await s.close();}
 });
 
@@ -109,11 +114,11 @@ async function filesUnder(dir){
 const contains=(haystack,needle)=>Buffer.from(haystack).includes(Buffer.from(needle));
 
 test('a project with images and named versions backs up encrypted and restores, old versions with replaced images included',async()=>{
- const s=await service({org:true});let engine,back,p;
+ const s=await orgService();let engine,back,p;
  try{
   await erase();
   p=await projectWithHistory('Figures');
-  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'figures'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});const kit=await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);
   // Objects: the current image, the replaced one the version needs, the version's manifest and chunks.
   assert.equal(await s.sql("SELECT count(*) > 3 FROM project_objects"),'t');
@@ -126,8 +131,8 @@ test('a project with images and named versions backs up encrypted and restores, 
   for(const bytes of blobs)for(const marker of ['OLD_IMAGE_MARKER','NEW_IMAGE_MARKER','ASSET_TEXT_MARKER','With the old figure'])assert(!contains(bytes,MARK(marker)),marker);
   const original=snapshot(p.doc);p.close();p=null;engine.close();
   await erase();
-  back=orgBackup({fetchImpl:fetch});
-  const result=await back.restore(kit);
+  back=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});
+  const result=await restoreAs(back,s,kit);
   assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['Figures']);
   const localId=result.restored[0].localId,restored=await storage.loadProject(localId);
   try{
@@ -144,11 +149,11 @@ test('a project with images and named versions backs up encrypted and restores, 
 });
 
 test('a file that does not decrypt or match its hash is refused, nothing is saved, and it is fetched again',async()=>{
- const s=await service({org:true});let engine,back;
+ const s=await orgService();let engine,back;
  try{
   await erase();
   const p=await projectWithHistory('Tampered');
-  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'tamper'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});const kit=await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);p.close();engine.close();await erase();
   // The first object fetched arrives altered (a byte flipped in transit, or by the service).
   let flips=1;
@@ -158,8 +163,8 @@ test('a file that does not decrypt or match its hash is refused, nothing is save
    flips--;const bytes=new Uint8Array(await response.arrayBuffer());bytes[bytes.length-1]^=1;
    return new Response(bytes,{status:200,headers:response.headers});
   };
-  back=orgBackup({fetchImpl:altered});
-  const first=await back.restore(kit);
+  back=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:altered});
+  const first=await restoreAs(back,s,kit);
   assert.deepEqual(first.restored,[]);assert.match(first.failures.join(' '),/refused/);
   assert.equal((await storage.listProjects()).length,0);
   // The next attempt fetches it again and gets the real bytes.
@@ -173,14 +178,14 @@ test('a file that does not decrypt or match its hash is refused, nothing is save
 test('a member who stores junk under a file’s ID, or announces false locations for it, cannot stop it backing up or restoring',async()=>{
  // Review M2 and M3 of slice 6: object IDs are computable by every editor and blobrefs come from
  // other members, so neither may decide where this browser uploads or fetches a file.
- const s=await service({org:true});let engine,back;
+ const s=await orgService();let engine,back;
  try{
   await erase();
   const p=await localProject('Contested','\\documentclass{article}\\begin{document}CONTESTED\\end{document}');
-  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'contested'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});const kit=await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);
   const [{project}]=await engine.projects();
-  const ben=await rawMember(await engine.createInvite({}),'Ben');
+  const ben=await rawMember(s,'ben',engine);
   await engine.grant(project,ben.person,'editor');
   const key=await ben.key(project,1),lineage=await ben.lineage(project,key);
   // Ben knows the figure the owner is about to add: he takes its ID first, and announces it
@@ -191,8 +196,8 @@ test('a member who stores junk under a file’s ID, or announces false locations
   await p.edit(doc=>addEntries(doc,[{path:'figure.png',content:figure}]));
   await engine.push(p.id);await settled(engine,p.id);
   engine.close();await erase();
-  back=orgBackup({fetchImpl:fetch});
-  const result=await back.restore(kit);
+  back=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});
+  const result=await restoreAs(back,s,kit);
   assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['Contested']);
   const doc=await storage.loadProject(result.restored[0].localId);
   try{assert.deepEqual(assetBytes(doc,projectNodes(doc).find(n=>n.path==='figure.png').id),figure);}finally{doc.destroy();}
@@ -200,11 +205,11 @@ test('a member who stores junk under a file’s ID, or announces false locations
 });
 
 test('when the organisation’s storage is full, backup waits with a plain message and local saving keeps working',async()=>{
- const s=await service({org:true,org_bytes:64*1024});let engine;
+ const s=await orgService({org_bytes:64*1024});let engine;
  try{
   await erase();
   const p=await localProject('Full storage','\\documentclass{article}\\begin{document}FULL\\end{document}');
-  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'full'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);
   // A 200 KiB image does not fit the organisation's 64 KiB.
   await p.edit(doc=>addEntries(doc,[{path:'big.png',content:image('FULL_MARKER',200*1024)}]));
@@ -220,7 +225,8 @@ test('when the organisation’s storage is full, backup waits with a plain messa
 
 // --- Review findings of slice 1: lost answers, paging, kit replacement, interrupted restore, rollback.
 
-const erase=async()=>{for(const p of await storage.listProjects())await storage.deleteProject(p.id);await deleteDB('scribyra-org');await deleteDB('scribyra-direct');localStorage.removeItem('scribyra:org-connected');};
+// A fresh "browser": no projects, no backup database, no signing key, and no sign-in.
+const erase=async()=>{for(const p of await storage.listProjects())await storage.deleteProject(p.id);await deleteDB('scribyra-org');await deleteDB('scribyra-direct');localStorage.removeItem('scribyra:org-connected');orgBackup().forgetLogin();};
 async function localProject(name,text){
  const {addFile,migrateProject}=await import('../web/model.js'),doc=new Y.Doc(),id=crypto.randomUUID();
  addFile(doc,'main.tex',text);migrateProject(doc,id);doc.getMap('meta').set('name',name);await storage.saveProject(id,doc);
@@ -240,16 +246,16 @@ const isEvent=type=>(url,init)=>init?.method==='POST'&&/\/events$/.test(url)&&JS
 const names=result=>result.restored.map(r=>r.name).sort();
 
 test('lost answers resume: genesis, project creation and a kit replacement are never lost or duplicated',async()=>{
- const s=await service({org:true}),net=lossy();let engine;
+ const s=await orgService(),net=lossy();let engine;
  try{
   await erase();
   const a=await localProject('Lost answers','\\documentclass{article}\\begin{document}LOST_ANSWERS\\end{document}');
-  engine=orgBackup({fetchImpl:net.fetch});
-  const setup=await orgCreate(s,'lost');
-  // The service commits genesis but the answer is lost: connecting again resumes, it is not "already used".
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:net.fetch});
+  await signIn(engine,s,'ana');
+  // The service commits genesis but the answer is lost: creating again resumes, it is not "already created".
   net.drop=isEvent('genesis');
-  await assert.rejects(engine.connect(setup),/cannot be reached|reset/);
-  const kit=await engine.connect(setup);assert.match(kit,/scribyra-recovery:1:/);
+  await assert.rejects(engine.create({name:'Acme Lab',ownerName:'Ana'}),/cannot be reached|reset/);
+  const kit=await engine.create({name:'Acme Lab',ownerName:'Ana'});assert.match(kit,/scribyra-recovery:1:/);
   assert.equal(await s.sql("SELECT count(*) FROM org_events WHERE raw LIKE '%\"genesis\"%'"),'1');
   // project.create is committed but its answer is lost: the retry reuses the same project.
   net.drop=isEvent('project.create');
@@ -262,7 +268,7 @@ test('lost answers resume: genesis, project creation and a kit replacement are n
   const pending=newer||await engine.pendingKit();
   assert.match(pending,/scribyra-recovery:1:/);assert.notEqual(pending,kit);
   // It stays until the person confirms they saved it, even across a reload.
-  engine.close();engine=orgBackup({fetchImpl:fetch});await engine.start();
+  engine.close();engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});await engine.start();
   assert.equal(await engine.pendingKit(),pending);
   await engine.confirmKit();assert.equal(await engine.pendingKit(),'');
   // The replaced kit's wraps are gone from the service; the new kit restores.
@@ -270,17 +276,17 @@ test('lost answers resume: genesis, project creation and a kit replacement are n
   assert.equal(old.org,engine.info.org);
   assert.equal(await s.sql(`SELECT count(*) FROM wraps WHERE recipient='${oldRecipient}'`),'0');
   engine.close();await erase();
-  const back=orgBackup({fetchImpl:fetch});
-  try{const result=await back.restore(pending);assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['Lost answers']);}finally{back.close();}
+  const back=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});
+  try{const result=await restoreAs(back,s,pending);assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['Lost answers']);}finally{back.close();}
  }finally{engine?.close();await erase();await s.close();}
 });
 
 test('a browser that cannot keep an X25519 key in IndexedDB keeps it sealed and opens shared keys after a reload',async()=>{
- const s=await service({org:true});let engine;
+ const s=await orgService();let engine;
  try{
   await erase();
   // WebKit on Linux reads a record holding an X25519 CryptoKey back as null; the engine then seals it.
-  engine=orgBackup({fetchImpl:fetch,sealAgreement:true});await engine.connect(await orgCreate(s,'sealed'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch,sealAgreement:true});await connect(engine,s);await engine.confirmKit();
   const a=await localProject('Sealed agreement','\\documentclass{article}\\begin{document}SEALED\\end{document}');
   await engine.backUp(a.id);await settled(engine,a.id);
   engine.close();
@@ -292,7 +298,7 @@ test('a browser that cannot keep an X25519 key in IndexedDB keeps it sealed and 
    // Drop the cached project keys, so the reloaded browser must open its wraps with the sealed key.
    await raw.clear('keys');
   }finally{raw.close();}
-  engine=orgBackup({fetchImpl:fetch,sealAgreement:true});await engine.start();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch,sealAgreement:true});await engine.start();
   assert.equal(engine.connected,true);
   const [project]=await engine.projects();
   const result=await engine.download(project.project);
@@ -302,10 +308,10 @@ test('a browser that cannot keep an X25519 key in IndexedDB keeps it sealed and 
 });
 
 test('restore reads every page of a long log, and an interrupted restore can be finished later',async()=>{
- const s=await service({org:true});let engine,fresh;
+ const s=await orgService();let engine,fresh;
  try{
   await erase();
-  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'pages'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});const kit=await connect(engine,s);await engine.confirmKit();
   // Nine entries of about 2 MiB each: the service sends eight to a page (16 MiB pages), far
   // fewer than the 256-entry page size, so a reader that stops at a short page loses the rest.
   const big=await localProject('Big entries','\\documentclass{article}\\begin{document}BIG\\end{document}');
@@ -320,8 +326,8 @@ test('restore reads every page of a long log, and an interrupted restore can be 
   // The first restore loses its connection while reading the second project's log.
   const net=lossy(),secondProject=JSON.parse(await s.sql("SELECT raw FROM org_events ORDER BY seq DESC LIMIT 1")).body.project;
   net.fail=url=>url.includes(`/v1/projects/${secondProject}/log`);
-  fresh=orgBackup({fetchImpl:net.fetch});
-  const first=await fresh.restore(kit);
+  fresh=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:net.fetch});
+  const first=await restoreAs(fresh,s,kit);
   assert.deepEqual(names(first),['Big entries'],JSON.stringify(first.failures));assert.equal(first.failures.length,1);
   const restored=await storage.loadProject(first.restored[0].localId);
   assert.deepEqual(Y.encodeStateVector(restored),expected);
@@ -337,32 +343,32 @@ test('restore reads every page of a long log, and an interrupted restore can be 
 });
 
 test('after a kit is replaced on one browser, projects backed up by another browser restore with the new kit',async()=>{
- const s=await service({org:true});let engine,other;
+ const s=await orgService();let engine,other;
  try{
   await erase();
-  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'devices'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});const kit=await connect(engine,s);await engine.confirmKit();
   const a=await localProject('From browser A','A');await engine.backUp(a.id);await settled(engine,a.id);
   engine.close();await erase();
   // Browser B restores, backs up its own project, and replaces the kit.
-  other=orgBackup({fetchImpl:fetch});await other.restore(kit);
+  other=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});await restoreAs(other,s,kit);
   const b=await localProject('From browser B','B');await other.backUp(b.id);await settled(other,b.id);
   const newKit=await other.replaceRecoveryKit();await other.confirmKit();
   other.close();await erase();
-  const third=orgBackup({fetchImpl:fetch});
+  const third=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});
   try{
-   const result=await third.restore(newKit);
+   const result=await restoreAs(third,s,newKit);
    assert.deepEqual(result.failures,[]);assert.deepEqual(names(result),['From browser A','From browser B']);
   }finally{third.close();}
   await erase();
-  await assert.rejects(orgBackup({fetchImpl:fetch}).restore(kit),/replaced|not active/);
+  await assert.rejects(restoreAs(orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch}),s,kit),/replaced|not active/);
  }finally{engine?.close();other?.close();await erase();await s.close();}
 });
 
 test('a service restored from an older backup gets the lost changes uploaded again',async()=>{
- const s=await service({org:true});let engine;
+ const s=await orgService();let engine;
  try{
   await erase();
-  engine=orgBackup({fetchImpl:fetch});const kit=await engine.connect(await orgCreate(s,'rollback'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});const kit=await connect(engine,s);await engine.confirmKit();
   const p=await localProject('Rolled back','\\documentclass{article}\\begin{document}ROLLBACK\\end{document}');
   await engine.backUp(p.id);await settled(engine,p.id);
   const textName=[...p.doc.share.keys()].find(k=>k.startsWith('text:'));
@@ -373,9 +379,9 @@ test('a service restored from an older backup gets the lost changes uploaded aga
   await engine.push(p.id).catch(()=>{});await engine.push(p.id);await settled(engine,p.id);
   const expected=p.doc.getText(textName).toString();
   engine.close();await erase();
-  const back=orgBackup({fetchImpl:fetch});
+  const back=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});
   try{
-   const result=await back.restore(kit);assert.deepEqual(result.failures,[]);
+   const result=await restoreAs(back,s,kit);assert.deepEqual(result.failures,[]);
    const doc=await storage.loadProject(result.restored[0].localId);
    assert.equal(doc.getText([...doc.share.keys()].find(k=>k.startsWith('text:'))).toString(),expected);
    assert(expected.includes('% LOST_IN_ROLLBACK')&&expected.includes('% AFTER_ROLLBACK'));doc.destroy();
@@ -404,14 +410,14 @@ async function editAs(member,project,{key,epoch,keys,lineage,text}){
 const textOf=doc=>doc.getText([...doc.share.keys()].find(k=>k.startsWith('text:'))).toString();
 
 test('removing an editor rotates the key: new entries use an epoch the removed device cannot open, and its injected entries are refused',async()=>{
- const s=await service({org:true});let engine;
+ const s=await orgService();let engine;
  try{
   await erase();
   const p=await localProject('Three editors','\\documentclass{article}\\begin{document}THREE\\end{document}');
-  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'three'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);
   const [{project}]=await engine.projects();
-  const ben=await rawMember(await engine.createInvite({}),'Ben'),cat=await rawMember(await engine.createInvite({}),'Cat');
+  const ben=await rawMember(s,'ben',engine),cat=await rawMember(s,'cat',engine);
   await engine.grant(project,ben.person,'editor');await engine.grant(project,cat.person,'editor');
   const k1=await ben.key(project,1),catK1=await cat.key(project,1),lineage=await ben.lineage(project,k1);
   // Three people edit under epoch 1.
@@ -452,14 +458,14 @@ test('removing an editor rotates the key: new entries use an epoch the removed d
 });
 
 test('a member whose change waited offline across a rotation re-encrypts it under the new epoch',async()=>{
- const s=await service({org:true}),net=lossy();let engine;
+ const s=await orgService(),net=lossy();let engine;
  try{
   await erase();
   const p=await localProject('Offline outbox','\\documentclass{article}\\begin{document}OUTBOX\\end{document}');
-  engine=orgBackup({fetchImpl:net.fetch});await engine.connect(await orgCreate(s,'outbox'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:net.fetch});await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);
   const [{project}]=await engine.projects();
-  const ben=await rawMember(await engine.createInvite({}),'Ben'),cat=await rawMember(await engine.createInvite({}),'Cat');
+  const ben=await rawMember(s,'ben',engine),cat=await rawMember(s,'cat',engine);
   await engine.grant(project,ben.person,'editor');await engine.grant(project,cat.person,'editor');await engine.setRole(ben.person,'admin');
   // Ana's change is sealed under epoch 1 and kept in her outbox: its upload never arrives.
   net.fail=(url,init)=>init?.method==='POST'&&/\/log$/.test(url);
@@ -486,14 +492,14 @@ test('a member whose change waited offline across a rotation re-encrypts it unde
 
 test('a removed member’s writes injected before the rotation are held, then refused; a cut that goes back stops sync instead of diverging',async()=>{
  // Review H1/H2/H3 of slice 7.
- const s=await service({org:true});let engine;
+ const s=await orgService();let engine;
  try{
   await erase();
   const p=await localProject('Held','\\documentclass{article}\\begin{document}HELD\\end{document}');
-  engine=orgBackup({fetchImpl:fetch});await engine.connect(await orgCreate(s,'held'));await engine.confirmKit();
+  engine=orgBackup({appOrigin:APP_ORIGIN,fetchImpl:fetch});await connect(engine,s);await engine.confirmKit();
   await engine.backUp(p.id);await settled(engine,p.id);
   const [{project}]=await engine.projects();
-  const ben=await rawMember(await engine.createInvite({}),'Ben'),cat=await rawMember(await engine.createInvite({}),'Cat');
+  const ben=await rawMember(s,'ben',engine),cat=await rawMember(s,'cat',engine);
   await engine.grant(project,ben.person,'editor');await engine.grant(project,cat.person,'editor');await engine.setRole(ben.person,'admin');
   const k1=await ben.key(project,1),catK1=await cat.key(project,1),lineage=await ben.lineage(project,k1);
   await editAs(cat,project,{key:catK1,epoch:1,keys:{1:catK1},lineage,text:'% CAT_BEFORE\n'});
@@ -510,7 +516,7 @@ test('a removed member’s writes injected before the rotation are held, then re
   try{assert.match(textOf(local),/CAT_BEFORE/);assert.doesNotMatch(textOf(local),/CAT_AFTER_REMOVAL/);}finally{local.destroy();}
   assert.match(engine.status(p.id).message,/1 change from removed devices/);
   // A rotation that cuts back further than what this browser accepted is a disagreement: stop.
-  const cat2=await rawMember(await engine.createInvite({}),'Cat2');await engine.grant(project,cat2.person,'editor');
+  const cat2=await rawMember(s,'dan',engine);await engine.grant(project,cat2.person,'editor');
   const k2=await cat2.key(project,2);
   await editAs(cat2,project,{key:k2,epoch:2,keys:{1:k1,2:k2},lineage,text:'% CAT2\n'});
   await engine.push(p.id);await settled(engine,p.id);

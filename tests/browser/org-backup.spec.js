@@ -1,9 +1,11 @@
-// Remote backup in the real app: connect with a setup code, keep the recovery kit, back
-// up a project with a comment, then restore it into a fresh browser profile from the kit.
+// Remote backup in the real app: the deployment's administrator signs in and creates the
+// organisation, keeps the recovery kit, backs up a project with a comment, then restores it into
+// a fresh browser profile with the kit after signing in there (a kit alone opens nothing).
 import {test,expect} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 import {build} from 'esbuild';
-import {service,orgCreate} from '../helpers/service.mjs';
+import {orgService} from '../helpers/idp.mjs';
+import {signIn} from '../helpers/org-browser.mjs';
 // The harness is served by routes, which a service worker's fetches would bypass.
 test.use({serviceWorkers:'block'});
 
@@ -20,7 +22,7 @@ const snapshot=()=>(async()=>{
 })();
 
 test('a project backs up end-to-end encrypted and restores into a fresh browser from the recovery kit',async({browser,page},info)=>{
- const s=await service({org:true});
+ const s=await orgService({shortcuts:false});
  try{
   if(info.project.name==='chromium')await page.context().grantPermissions(['local-network-access']).catch(()=>{});
   await harness(page);await page.goto('/');
@@ -34,10 +36,10 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   });
   // Off means off: nothing about remote backup exists until the person connects.
   expect(await page.evaluate(async()=>(await indexedDB.databases()).map(d=>d.name).filter(n=>n==='scribyra-org'||n==='scribyra-direct'))).toEqual([]);
-  await page.getByRole('button',{name:'Remote backup',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'Remote backup'});
-  await dialog.getByRole('textbox',{name:'Setup code'}).fill(await orgCreate(s,'browser'));
-  await dialog.getByRole('button',{name:'Connect'}).click();
+  await signIn(page,s,'ana');
+  await dialog.getByRole('textbox',{name:'Your name'}).fill('Ana');
+  await dialog.getByRole('button',{name:'Create organisation'}).click();
   const kitBlock=dialog.getByLabel('Recovery kit',{exact:true}).and(page.locator('pre'));
   await expect(kitBlock).toContainText('scribyra-recovery:1:');
   const kit=await kitBlock.textContent();
@@ -71,8 +73,10 @@ test('a project backs up end-to-end encrypted and restores into a fresh browser 
   try{
    if(info.project.name==='chromium')await fresh.grantPermissions(['local-network-access']).catch(()=>{});
    const other=await fresh.newPage();await harness(other);await other.goto('/');
-   await other.getByRole('button',{name:'Remote backup',exact:true}).click();
    const restoreDialog=other.getByRole('dialog',{name:'Remote backup'});
+   // The kit needs its person's sign-in: Ana signs in on the fresh profile first.
+   await signIn(other,s,'ana');
+   await expect(restoreDialog.getByRole('button',{name:'Ask one of my devices'})).toBeVisible();
    await restoreDialog.getByRole('textbox',{name:'Recovery kit'}).fill(kit);
    await restoreDialog.getByRole('button',{name:'Restore projects'}).click();
    await expect(restoreDialog.getByRole('status')).toContainText('Restored 1 project: Backed-up paper.');

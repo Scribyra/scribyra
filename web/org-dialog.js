@@ -1,7 +1,8 @@
-// "Remote backup" dialog: organisations on a self-hosted Scribyra service. Create one with an
-// operator's setup code (name, encryption mode, admin read access), join with an invitation or
-// the organisation's single sign-on, link another browser, keep a recovery kit, back up and share
-// projects, manage members and devices, or restore from a kit.
+// "Remote backup" dialog: an end-to-end encrypted organisation on a Scribyra deployment. It starts
+// from the deployment's address and its "Sign in with …" buttons; the first administrator then
+// creates the organisation, others ask to join and wait for an administrator, and a member's new
+// browser asks one of their devices (or uses their recovery kit). Then: keep a recovery kit, back
+// up and share projects, manage members and devices.
 import {openDialog} from './menu.js';
 import {STATUS_TEXT,MODE_TEXT} from './org-backup.js';
 import './org-dialog.css';
@@ -11,7 +12,7 @@ const ROLE_LABEL={owner:'Owner',admin:'Admin',member:'Member',editor:'Editor',re
 const POLL_MS=3000;
 
 export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>{},onChanged=()=>{}}){
- let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,deviceLink='',inviteLink='',drawing=null,redraw=false;
+ let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,drawing=null,redraw=false,offered=null,about=null,providers=null;
  const close=()=>session?.close('now');
  function button(label,fn,cls='secondary'){
   const b=element('button',label,'button compact '+cls);b.type='button';
@@ -40,8 +41,9 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
   const url=URL.createObjectURL(new Blob([text],{type:'text/plain'})),a=element('a');a.href=url;a.download='scribyra-recovery-kit.txt';
   document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
  }
- function linkBox(label,text){const box=textArea(label,'',text);box.input.readOnly=true;return box.row;}
- async function sso(service,org,purpose,carry){const url=await engine.ssoBegin({service,org,purpose,carry});location.assign(url);}
+ async function sso(service,provider,purpose='connect'){const url=await engine.ssoBegin({service,provider,purpose});location.assign(url);}
+ /** One "Sign in with …" button per provider of a deployment. */
+ const signInButtons=(service,list,purpose,again='')=>list.map(p=>button(`Sign in with ${p.label}${again}`,()=>sso(service,p.id,purpose),'primary'));
 
  dialog=element('dialog',null,'ui-popup org-dialog');dialog.setAttribute('aria-label','Remote backup');dialog.tabIndex=-1;
  const heading=element('div',null,'org-heading');heading.append(element('h2','Remote backup','ui-prompt-title'));
@@ -49,12 +51,8 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
  const body=element('div',null,'org-body'),status=element('p',null,'org-status');status.setAttribute('role','status');
  dialog.append(heading,body,status);
 
- // Not connected: create, join, sign in, link, restore.
- const setup=textArea('Setup code','scribyra-setup:1:…'),orgName=field('Organisation name','Personal'),ownerName=field('Your name','');
- const modeE2ee=check('End-to-end encrypted',true),modeManaged=check('Organisation-managed',false),adminRead=check('Administrators can read every project',true);
- modeE2ee.box.type=modeManaged.box.type='radio';modeE2ee.box.name=modeManaged.box.name='org-mode';
- const invite=textArea('Invitation link','https://…/#join=…',prefill.invite||''),joinName=field('Your name for this organisation','');
- const orgLink=textArea('Organisation link','https://…/#org=…',prefill.org||''),deviceText=textArea('Device link','https://…/#device=…',prefill.device||'');
+ // Not connected: a deployment's address, its sign-in, then create, join, add this browser or restore.
+ const address=field('Deployment address',prefill.service||'','url'),creatorName=field('Your name','');
  const recovery=textArea('Recovery kit','scribyra-recovery:1:…');
  const kitText=element('pre',null,'org-kit');kitText.setAttribute('aria-label','Recovery kit');kitText.tabIndex=0;
  const saved=check('I have saved my recovery kit somewhere safe');saved.box.onchange=()=>render();
@@ -67,53 +65,68 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
   if(result.admitted){feedback='You joined the organisation.';if(engine.needsKit)kit=await engine.replaceRecoveryKit().catch(()=>'');}
   else feedback='Waiting for an administrator (or your other device) to let this browser in.';
  }
- // Let in after waiting: a new member makes their recovery kit; a linked device keeps the person's.
+ // Let in after waiting: a new member makes their recovery kit; an added device keeps the person's.
  async function admittedNow(){onChanged();feedback='This browser is now connected.';if(engine.needsKit)kit=await engine.replaceRecoveryKit().catch(()=>'');}
+ /** After signing in: what this account can do here (create, ask to join, add this browser). */
+ async function signedIn(){
+  const login=engine.ssoLogin();if(!login)return;
+  if(login.state==='blocked'){feedback='Your organisation’s sign-in is disabled for you.';return;}
+  about=await engine.about();
+  // Someone without a person here asks to join at once (when the organisation exists).
+  if(login.state==='unlinked'&&about.genesis)await joined(await engine.requestJoin());
+ }
 
  function notConnected(){
   if(engine.waiting){
    body.append(element('p','This browser asked to join and is waiting to be let in.','org-help'));
-   if(engine.linkCode)body.append(element('p',engine.linkCode.includes('-')?'Type this code on your other device:':'Check that your other device shows this code:','org-help'),element('p',engine.linkCode,'org-code'));
+   if(engine.linkCode)body.append(element('p','Type this code on your other device:','org-help'),element('p',engine.linkCode,'org-code'));
    body.append(actions(button('Check again',async()=>{const admitted=await engine.checkAdmission();if(admitted)await admittedNow();}),button('Cancel',async()=>{await engine.forget();onChanged();})));
    return;
   }
-  body.append(element('p','Back up and share projects with a Scribyra service you or your organisation run. Nothing is sent until you choose to.','org-help'));
-  const create=section('Create an organisation',element('p','Paste the setup code from “scribyra-sync org create”. This creates keys in this browser.','org-help'),setup.row,orgName.row,ownerName.row,
-   element('p','Encryption','org-label'),modeE2ee.row,element('p',MODE_TEXT.e2ee,'org-help org-mode'),modeManaged.row,element('p',MODE_TEXT.managed,'org-help org-mode'),adminRead.row,
-   actions(button('Connect',async()=>{
-    kit=await engine.connect(setup.input.value,{name:orgName.input.value||'Personal',ownerName:ownerName.input.value||'Owner',mode:modeManaged.box.checked?'managed':'e2ee',adminRead:adminRead.box.checked});
-    setup.input.value='';onChanged();
-   },'primary')));
-  const join=section('Join with an invitation',invite.row,joinName.row,actions(
-   button('Join',async()=>{
-    try{await joined(await engine.join(invite.input.value,{name:joinName.input.value||'Member'}));invite.input.value='';}
-    catch(error){if(!error.sso)throw error;const about=await engine.describeInvite(invite.input.value);feedback=error.message;await sso(about.service,about.org,'join',{invite:invite.input.value,name:joinName.input.value||'Member'});}
-   },'primary'),
-   button('Sign in with your organisation',async()=>{const about=await engine.describeInvite(invite.input.value);await sso(about.service,about.org,'join',{invite:invite.input.value,name:joinName.input.value||'Member'});})));
-  const signIn=section('Sign in with your organisation (SSO)',element('p','Paste your organisation’s link. New people ask an administrator to let them in; members add this browser.','org-help'),orgLink.row,
-   actions(button('Sign in with your organisation',async()=>{const {parseOrgLink}=await import('./org-crypto.js');const link=parseOrgLink(orgLink.input.value);await sso(link.service,link.org,'org',{org:orgLink.input.value});},'primary')));
-  const link=section('Add this browser to your account',element('p','On a device that is already connected, choose “Link a device”, then paste the link here.','org-help'),deviceText.row,
-   actions(button('Link this browser',async()=>{await engine.acceptDeviceLink(deviceText.input.value);deviceText.input.value='';onChanged();},'primary')));
-  const restore=section('Restore on a new browser',element('p','Paste your recovery kit to restore every backed-up project into this browser.','org-help'),recovery.row,
-   actions(button('Restore projects',async()=>{
-    const result=await engine.restore(recovery.input.value);recovery.input.value='';onChanged();
-    report(result);remaining=(await engine.unrestored()).length;onRestored(result);
-   },'primary')));
-  // An invitation or link that opened the dialog goes first.
-  const order=prefill.invite?[join,create,signIn,link,restore]:prefill.device?[link,create,join,signIn,restore]:prefill.org?[signIn,create,join,link,restore]:[create,restore,join,signIn,link];
-  body.append(...order);
+  const login=engine.ssoLogin();
+  if(login){
+   if(!about&&login.state!=='blocked'){void engine.about().then(a=>{about=a;render();}).catch(error=>{feedback=error.message;render();});return;}
+   const who=login.subject?.email||login.subject?.name||'your account';
+   body.append(element('p',`${login.name||'Organisation'} · ${login.service}`,'org-service'),element('p',`Signed in as ${who}.`,'org-help'));
+   if(login.state==='linked'){
+    body.append(section('Add this browser',element('p','One of your devices that is already connected adds it: it asks you for the code this browser shows.','org-help'),
+     actions(button('Ask one of my devices',async()=>{await engine.requestDevice();onChanged();feedback='On one of your devices, open Remote backup and type the code this browser shows.';},'primary'))));
+    body.append(section('Restore with your recovery kit',element('p','Paste your recovery kit to add this browser and restore every backed-up project.','org-help'),recovery.row,
+     actions(button('Restore projects',async()=>{
+      const result=await engine.restore(recovery.input.value);recovery.input.value='';onChanged();
+      report(result);remaining=(await engine.unrestored()).length;onRestored(result);
+     },'primary'))));
+   }else if(login.state==='unlinked'&&!about?.genesis){
+    if(login.role==='admin'){
+     creatorName.input.value||=login.subject?.name||'';
+     body.append(section('Create the organisation',element('p',`You are an administrator of ${login.name||'this deployment'}. Creating its organisation makes keys in this browser; others then sign in and ask to join, and you approve them.`,'org-help'),creatorName.row,
+      actions(button('Create organisation',async()=>{kit=await engine.create({name:login.name,ownerName:creatorName.input.value||'Owner'});onChanged();},'primary'))));
+    }else body.append(element('p',`${login.name||'This organisation'} is not set up yet. An administrator signs in first to create it; then sign in again here.`,'org-help'));
+   }else if(login.state==='unlinked')body.append(actions(button('Ask to join',async()=>joined(await engine.requestJoin()),'primary')));
+   body.append(actions(button('Use another account',async()=>{engine.forgetLogin();about=null;})));
+   return;
+  }
+  body.append(element('p','Back up and share projects with your organisation’s Scribyra deployment. Nothing is sent until you sign in.','org-help'));
+  const connect=section('Connect to your organisation',element('p','Enter the address your organisation gave you, then sign in with your organisation’s account. New people ask an administrator to let them in; members add this browser from one of their devices or with their recovery kit.','org-help'),address.row,
+   actions(button('Continue',async()=>{offered=await engine.deployment(address.input.value);},'primary')));
+  body.append(connect);
+  if(offered){
+   const choose=section(offered.name,element('p',MODE_TEXT[offered.encryption]||'','org-help org-mode'));
+   if(offered.encryption!=='e2ee')choose.append(element('p',`${offered.name} keeps projects on its server. This version of Scribyra connects only to end-to-end encrypted deployments.`,'org-help'));
+   else choose.append(actions(...signInButtons(offered.service,offered.providers,'connect')));
+   body.append(choose);
+  }
  }
 
  async function connected(){
-  const info=engine.info,[name,members,orgProjects,local,links,devices,requests,policy]=await Promise.all([
-   engine.orgName(),engine.members(),engine.projects(),listProjects(),engine.links(),engine.devices(),engine.deviceRequests().catch(()=>[]),engine.ssoPolicy()]);
+  const info=engine.info,[name,members,orgProjects,local,links,devices,requests]=await Promise.all([
+   engine.orgName(),engine.members(),engine.projects(),listProjects(),engine.links(),engine.devices(),engine.deviceRequests().catch(()=>[])]);
   const linked=new Map(links.map(l=>[l.localId,l])),admin=['owner','admin'].includes(info.role),parts=[];
-  parts.push(element('p',`${name||'Organisation'} · ${info.service}`,'org-service'),element('p',(info.mode==='managed'?MODE_TEXT.managed:MODE_TEXT.e2ee),'org-help org-mode'));
-  if(info.adminRead)parts.push(element('p','This organisation’s administrators can read its projects.','org-help'));
-  if(policy?.enabled){
-   parts.push(info.ssoNeeded?actions(button('Sign in with your organisation',()=>sso(info.service,info.org,'signin',null),'primary')):actions(button('Sign out of your organisation',()=>engine.signOut())));
-   if(info.ssoNeeded)parts.push(element('p','Sign in again to keep syncing. Your projects stay on this device.','org-help'));
-  }
+  parts.push(element('p',`${name||info.name||'Organisation'} · ${info.service}`,'org-service'),element('p',MODE_TEXT.e2ee,'org-help org-mode'));
+  if(info.ssoNeeded){
+   providers??=await engine.deploymentInfo().then(d=>d.providers).catch(()=>info.provider?[{id:info.provider,label:info.providerLabel||'your organisation'}]:[]);
+   parts.push(actions(...signInButtons(info.service,providers,'signin',' again')),element('p','Sign in again to keep syncing. Your projects stay on this device.','org-help'));
+  }else parts.push(actions(button('Sign out',()=>engine.signOut())));
   // Projects: local ones (back up, share) and ones shared with this person (download).
   const list=element('ul',null,'org-projects');list.setAttribute('aria-label','Projects and their backup state');
   const byProject=new Map(orgProjects.map(p=>[p.project,p]));
@@ -154,31 +167,17 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
    }
    people.append(row);
   }
-  const inviteRole=select('Invite as',[['member','Member'],['admin','Admin']],'member'),inviteProject=select('Share a project with them',[['','No project'],...orgProjects.filter(p=>p.role==='editor').map(p=>[p.project,p.name])],''),inviteProjectRole=select('Their role on it',[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']],'editor');
-  const inviteApproval=check('Ask me to approve them',false),inviteSso=check('They must sign in with the organisation',!!policy?.required),inviteEmail=field('Their email at the organisation (optional)','','email');
-  const inviteParts=[people];
-  if(admin)inviteParts.push(element('p','Removing someone tells the service to stop their access at once, and the projects they could read get a new key before anyone writes to them again, so nothing written after the removal is readable with the keys they kept. What they already downloaded stays with them.','org-help'));
-  inviteParts.push(inviteRole.row,inviteProject.row,inviteProjectRole.row,inviteApproval.row);
-  if(policy?.enabled)inviteParts.push(inviteSso.row,inviteEmail.row);
-  inviteParts.push(actions(button('Create invitation link',async()=>{
-   inviteLink=await engine.createInvite({role:inviteRole.input.value,approval:inviteApproval.box.checked,sso:inviteSso.box.checked,email:inviteEmail.input.value,project:inviteProject.input.value||null,projectRole:inviteProject.input.value?inviteProjectRole.input.value:null});
-   feedback='Send this link to the person you invite. It works once and expires in 7 days.';
-  })));
-  if(inviteLink)inviteParts.push(linkBox('Invitation link to send',inviteLink),actions(button('Copy link',()=>navigator.clipboard.writeText(inviteLink))));
-  if(policy?.enabled&&admin)inviteParts.push(actions(button('Copy the organisation’s sign-in link',async()=>navigator.clipboard.writeText(await engine.orgLink()))));
-  parts.push(section('Members',...inviteParts));
+  const memberParts=[people,element('p',`New people sign in at ${info.service} and ask to join; ${admin?'approve them here, then share projects with them':'an administrator approves them'}.`,'org-help')];
+  if(admin)memberParts.push(element('p','Removing someone tells the service to stop their access at once, and the projects they could read get a new key before anyone writes to them again, so nothing written after the removal is readable with the keys they kept. What they already downloaded stays with them.','org-help'));
+  parts.push(section('Members',...memberParts));
   // This person's devices.
   const own=element('ul',null,'org-devices');own.setAttribute('aria-label','Your devices');
   for(const d of devices){const row=element('li',null,'org-device');row.append(element('span',d.me?`This browser (${d.short})`:`Device ${d.short}`,'org-name'));if(!d.me)row.append(button('Remove',()=>engine.removeDevice(d.key)));own.append(row);}
-  const deviceParts=[own,actions(button('Link a device',async()=>{deviceLink=await engine.linkDevice();feedback='Open this link on the new browser within 15 minutes.';}))];
-  if(deviceLink)deviceParts.push(linkBox('Device link to open on the new browser',deviceLink));
+  const deviceParts=[own,element('p','To add another browser, sign in there and choose “Ask one of my devices”; it then appears here.','org-help')];
   for(const r of requests){
-   const row=element('div',null,'org-request');
-   if(r.via==='sso'){
-    // The service only says who signed in; the code typed here proves which browser it is.
-    const typed=field('Code shown on the new browser','');
-    row.append(element('p',`A browser that signed in with your organisation (the service says: ${r.email||'you'}) asks to be added.`,'org-help'),typed.row,actions(button('Add this device',()=>engine.approveDevice(r,{code:typed.input.value}),'primary')));
-   }else row.append(element('p','A new browser answered your link. Check it shows this code:','org-help'),element('p',r.code,'org-code'),actions(button('Add this device',()=>engine.approveDevice(r),'primary')));
+   // The service only says who signed in; the code typed here proves which browser it is.
+   const row=element('div',null,'org-request'),typed=field('Code shown on the new browser','');
+   row.append(element('p',`A browser that signed in with your organisation (the service says: ${r.email||'you'}) asks to be added.`,'org-help'),typed.row,actions(button('Add this device',()=>engine.approveDevice(r,{code:typed.input.value}),'primary')));
    deviceParts.push(row);
   }
   parts.push(section('Your devices',...deviceParts));
@@ -188,7 +187,7 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
  function shareForm(project,members){
   const others=members.filter(m=>!m.me&&m.state==='active'&&!project.members.some(x=>x.person===m.person));
   const box=element('div',null,'org-share');
-  if(!others.length){box.append(element('p','Everyone in the organisation already has access. Invite someone under Members.','org-help'));return box;}
+  if(!others.length){box.append(element('p','Everyone in the organisation already has access. New people sign in and ask to join first.','org-help'));return box;}
   const who=select('Share with',others.map(m=>[m.person,m.name])),role=select('Role',[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']],'editor');
   box.append(who.row,role.row,actions(button('Share project',async()=>{await engine.grant(project.project,who.input.value,role.input.value);shown=null;feedback='Shared.';},'primary')));
   return box;
@@ -197,7 +196,9 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
  render=()=>{
   if(!dialog)return;
   const scroll=dialog.scrollTop;
-  body.replaceChildren();
+  // The connected view is built asynchronously and replaces the body when it is ready; the others
+  // are drawn at once.
+  if(kit||!engine.connected)body.replaceChildren();
   if(kit){
    body.append(element('p','Save this recovery kit now. It is the only way to restore your backups if this browser’s data is lost. It stays here until you confirm you saved it; you can make a new one later, which replaces it.','org-help'),kitText);
    kitText.textContent=kit;
@@ -223,13 +224,9 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
  if(prefill.ssoCode)void (async()=>{
   busy=true;render();
   try{
-   const flow=await engine.ssoFinish(prefill.ssoCode);
-   if(flow.purpose==='join')await joined(await engine.join(flow.carry.invite,{name:flow.carry.name}));
-   else if(flow.purpose==='org'){
-    if(flow.login.state==='linked'){await engine.requestDeviceBySso(flow.carry.org);feedback='On one of your devices, open Remote backup and type the code this browser shows.';}
-    else if(flow.login.state==='blocked')feedback='Your organisation’s sign-in is disabled for you.';
-    else{await joined(await engine.requestJoin(flow.carry.org));}
-   }else feedback='Signed in with your organisation.';
+   await engine.ssoFinish(prefill.ssoCode);
+   if(engine.connected)feedback='Signed in with your organisation.';
+   else await signedIn();
    onChanged();
   }catch(error){feedback=error?.message||String(error);}
   finally{busy=false;render();}

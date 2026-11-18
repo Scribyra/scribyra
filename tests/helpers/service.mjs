@@ -8,6 +8,8 @@ import { randomBytes, createHash } from 'node:crypto';
 export const id=()=>randomBytes(32).toString('hex');
 export const hash=bytes=>createHash('sha256').update(bytes).digest('hex');
 const run=promisify(execFile);
+/** The app origin the tests' services allow (the Playwright preview server's). */
+export const APP_ORIGIN=`http://127.0.0.1:${process.env.SCRIBYRA_TEST_PORT||4801}`;
 const freePort=()=>new Promise((resolve,reject)=>{const server=createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const {port}=server.address();server.close(()=>resolve(port));});});
 // A watchdog stops the server by PID and removes its directory once this test process exits.
 const WATCHDOG='owner=$1; dir=$2; shift 2; "$@" >"$dir/server.log" 2>&1 & child=$!; while kill -0 "$owner" 2>/dev/null && kill -0 "$child" 2>/dev/null; do sleep 0.2; done; kill -INT "$child" 2>/dev/null; wait "$child"; rm -rf "$dir"';
@@ -42,7 +44,7 @@ export async function service({org=false,...overrides}={},binary=resolve('target
   if(org){const port=await freePort();overrides={bind:`127.0.0.1:${port}`,public_url:`http://127.0.0.1:${port}`,...overrides};}
   await mkdir(resolve('tmp'),{recursive:true});
   const directory=await mkdtemp(resolve('tmp/service-')),bearer=id(),namespace=id(),database_url=await database();
-  const config={bind:'127.0.0.1:0',data:join(directory,'data'),database_url,origins:[`http://127.0.0.1:${process.env.SCRIBYRA_TEST_PORT||4801}`],principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}],...overrides};
+  const config={bind:'127.0.0.1:0',data:join(directory,'data'),database_url,origins:[APP_ORIGIN],principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}],...overrides};
   const path=join(directory,'config.json');await writeFile(path,JSON.stringify(config));
   let child,url,logs='';
   async function start(extraEnv={}) {
@@ -71,8 +73,3 @@ export async function service({org=false,...overrides}={},binary=resolve('target
   };
 }
 
-// `scribyra-sync org create`: resolves to the single-use setup code it prints.
-export async function orgCreate(s,label='test') {
-  const {stdout}=await run(resolve('target/debug/scribyra-sync'),['org','create','--label',label],{env:{...process.env,SCRIBYRA_SERVICE_CONFIG:join(s.directory,'config.json')}});
-  return JSON.parse(stdout.trim().split('\n').at(-1)).setup;
-}

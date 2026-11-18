@@ -5,7 +5,8 @@
 import {test,expect} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
 import {build} from 'esbuild';
-import {service,orgCreate} from '../helpers/service.mjs';
+import {orgService} from '../helpers/idp.mjs';
+import {create,join as admit,share} from '../helpers/org-browser.mjs';
 
 let bundle;
 async function harness(page){
@@ -20,12 +21,6 @@ async function profile(browser,info){
  return{context,page};
 }
 const dialogOf=page=>page.getByRole('dialog',{name:'Remote backup'});
-async function saveKit(page){
- const dialog=dialogOf(page);
- await expect(dialog.getByLabel('Recovery kit',{exact:true}).and(page.locator('pre'))).toContainText('scribyra-recovery:1:');
- await dialog.getByRole('checkbox',{name:'I have saved my recovery kit somewhere safe'}).check();
- await dialog.getByRole('button',{name:'Done'}).click();
-}
 async function openProject(page,name){
  const open=dialogOf(page);if(await open.isVisible())await open.getByRole('button',{name:'Close remote backup'}).click();
  await page.locator('.project-card').filter({hasText:name}).locator('.card-open').click();
@@ -38,13 +33,12 @@ const orgStore=(page,store)=>page.evaluate(store=>new Promise((resolve,reject)=>
  const open=indexedDB.open('scribyra-org');open.onerror=()=>reject(open.error);
  open.onsuccess=()=>{const db=open.result,request=db.transaction(store).objectStore(store).getAll();request.onsuccess=()=>{db.close();resolve(JSON.parse(JSON.stringify(request.result,(k,v)=>v instanceof Uint8Array?Array.from(v):v)));};request.onerror=()=>reject(request.error);};
 }),store);
-async function join(browser,info,invitation,name){
+/** `user` signs in on a new profile, asks to join, is approved by Ana, and gets the paper as an editor. */
+async function join(browser,info,s,ana,user){
  const member=await profile(browser,info);
- await member.page.goto(invitation);
+ await admit(member.page,s,user,ana);
+ await share(ana,'Rotating paper',`${user}@acme.test`,'editor');
  const dialog=dialogOf(member.page);
- await dialog.getByRole('textbox',{name:'Your name for this organisation'}).fill(name);
- await dialog.getByRole('button',{name:'Join'}).click();
- await saveKit(member.page);
  const offered=dialog.getByRole('listitem').filter({hasText:'Rotating paper'});
  await offered.getByRole('button',{name:'Download'}).click();
  await expect(dialog.getByRole('status')).toContainText('Downloaded Rotating paper.');
@@ -55,7 +49,7 @@ async function join(browser,info,invitation,name){
 const holdUploads=page=>page.route('**/v1/projects/*/log',route=>route.request().method()==='POST'?route.abort('connectionreset'):route.fallback());
 
 test('removing a member rotates the project key; their later uploads are refused even when injected; a waiting change is re-encrypted',async({browser},info)=>{
- const s=await service({org:true});const contexts=[];
+ const s=await orgService({shortcuts:false});const contexts=[];
  try{
   const ana=await profile(browser,info);contexts.push(ana.context);
   await ana.page.evaluate(async()=>{
@@ -63,26 +57,13 @@ test('removing a member rotates the project key; their later uploads are refused
    model.addFile(doc,'main.tex','\\documentclass{article}\n\\begin{document}\nROTATING_START\n\\end{document}\n');model.migrateProject(doc,id);doc.getMap('meta').set('name','Rotating paper');
    await storage.saveProject(id,doc);doc.destroy();await window.scribyra.action('home');
   });
-  await ana.page.getByRole('button',{name:'Remote backup',exact:true}).click();
   const dialog=dialogOf(ana.page);
-  await dialog.getByRole('textbox',{name:'Setup code'}).fill(await orgCreate(s,'rotating'));
-  await dialog.getByRole('textbox',{name:'Organisation name'}).fill('Acme Lab');
-  await dialog.getByRole('textbox',{name:'Your name',exact:true}).fill('Ana');
-  await dialog.getByRole('button',{name:'Connect'}).click();
-  await saveKit(ana.page);
+  await create(ana.page,s,'ana','Ana');
   const row=dialog.getByRole('listitem').filter({hasText:'Rotating paper'});
   await row.getByRole('button',{name:'Back up'}).click();
   await expect(row).toContainText(/Backed up remotely|Synced/);
-  const invite=async()=>{
-   await dialog.getByRole('combobox',{name:'Share a project with them'}).selectOption({label:'Rotating paper'});
-   await dialog.getByRole('combobox',{name:'Their role on it'}).selectOption('editor');
-   const box=dialog.getByRole('textbox',{name:'Invitation link to send'}),before=await box.count()?await box.inputValue():'';
-   await dialog.getByRole('button',{name:'Create invitation link'}).click();
-   await expect(box).not.toHaveValue(before);await expect(box).toHaveValue(/#join=/);
-   return box.inputValue();
-  };
-  const ben=await join(browser,info,await invite(),'Ben');contexts.push(ben.context);
-  const cat=await join(browser,info,await invite(),'Cat');contexts.push(cat.context);
+  const ben=await join(browser,info,s,ana.page,'ben');contexts.push(ben.context);
+  const cat=await join(browser,info,s,ana.page,'cat');contexts.push(cat.context);
   // Three people edit; everyone sees everyone's change.
   await openProject(ana.page,'Rotating paper');
   await type(ben.page,'% FROM_BEN\n');await type(cat.page,'% FROM_CAT\n');await type(ana.page,'% FROM_ANA\n');
@@ -98,7 +79,7 @@ test('removing a member rotates the project key; their later uploads are refused
   // Ana removes Cat. Her app creates epoch 2 at once, wrapped to Ana's and Ben's keys only.
   await ana.page.evaluate(()=>window.scribyra.action('remote-backup'));
   const members=dialog.getByRole('list',{name:'Members'});
-  await members.getByRole('listitem').filter({hasText:'Cat'}).getByRole('button',{name:'Remove'}).click();
+  await members.getByRole('listitem').filter({hasText:'cat@acme.test'}).getByRole('button',{name:'Remove'}).click();
   await expect.poll(()=>s.sql('SELECT epoch FROM projects'),{timeout:60000}).toBe('2');
   const catAgreement=(await orgStore(cat.page,'connection')).find(r=>r?.agreement)?.agreement.publicKey;
   expect(catAgreement).toMatch(/^[0-9a-f]{64}$/);

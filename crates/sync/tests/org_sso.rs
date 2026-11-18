@@ -70,6 +70,7 @@ fn no_route_accepts_a_device_key_without_its_persons_login() {
         ("PUT", format!("/v1/orgs/{o}/keys")),
         ("POST", format!("/v1/orgs/{o}/keys/report")),
         ("GET", format!("/v1/orgs/{o}/pending")),
+        ("GET", format!("/v1/orgs/{o}/people")),
         ("GET", format!("/v1/orgs/{o}/heads")),
         ("GET", format!("/v1/orgs/{o}/device-links")),
         ("GET", format!("/v1/projects/{project}/log")),
@@ -121,6 +122,10 @@ fn joins_link_identities_device_requests_and_blocking() {
     let bob_session = org.sign_in_with(&bob.seed, json!({}));
     assert_eq!(bob_session.status, 200);
     let bob_token = bob_session.json()["token"].as_str().unwrap().to_string();
+    // The member directory shows the email each person signed in with (names in the log are sealed).
+    let people = send("GET", &org.url(&format!("/v1/orgs/{}/people", org.id)), Some(&bob_token), "", b"").json();
+    assert_eq!(people["people"][org.person(&bob)]["email"], "bob@other.org");
+    assert_eq!(people["people"][org.owner_person.clone()]["email"], "alice@example.org");
 
     // A second browser of Bob's signs in and asks to be added; his first device approves it.
     let laptop = Device::new();

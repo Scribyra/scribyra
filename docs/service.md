@@ -130,33 +130,80 @@ Added with organisation sync; the organisation routes document their use.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `public_url` | none | The exact `https://` origin clients use for this service. Required to enable organisations |
-| `service_key_file` | none | A file with exactly 32 random bytes (`head -c 32 /dev/urandom`, mode 0400). With it, `org create` also makes a service key for each organisation, sealed under this file, so its owner can choose organisation-managed encryption. Without it only end-to-end encrypted organisations exist. Losing the file makes the service keys of managed organisations unusable; back it up separately from the database |
+| `public_url` | none | The exact `https://` origin clients use for this service. Required by `deployment` |
+| `deployment` | none | The organisation this service serves, its policy and its sign-in providers ([Deployment](#deployment)). Without it the service is a plain object store and relay: no sign-in, no organisation |
+| `service_key_file` | none | A file with exactly 32 random bytes (`head -c 32 /dev/urandom`, mode 0400): the deployment's master key. Required when `deployment.encryption` is `"server"` (server-readable projects are sealed under keys it wraps); checked at start. Losing it makes server-readable projects unreadable; back it up separately from the database |
 | `org_bytes` | 1073741824 | Default stored-bytes quota per organisation (1 GiB) |
 | `entry_inline_bytes` | 65536 | Log entries up to this size are stored inline in PostgreSQL; larger ones go to the blob store |
 | `sessions` | 10000 | Maximum live organisation sessions |
 | `sso_recheck_tick_seconds` | 60 | How often the single sign-on recheck runs (1–3600) |
 | `sso_jwks_refetch_seconds` | 60 | Minimum interval between key-set refetches caused by an unknown key ID (0–3600) |
 
-### Organisation routes
+### Deployment
+
+A deployment is one service, its database and its blob store, serving **one organisation**. Its
+policy is the `deployment` object of the configuration file (or `SCRIBYRA_SERVICE_DEPLOYMENT` as
+JSON); every field is validated at start, and an inconsistent file refuses to start with
+`{"event":"invalid_configuration","reason":"…"}` on stderr naming the field (never a value).
+
+```json
+"deployment": {
+  "name": "Acme Lab",
+  "encryption": "e2ee",
+  "admins": ["it-admin@acme.org"],
+  "providers": [
+    {"id": "acme", "label": "Acme account", "issuer": "https://login.acme.org/realms/lab",
+     "client_id": "scribyra", "client_secret_file": "/run/secrets/scribyra-oidc",
+     "email_domains": ["acme.org"], "groups_claim": "groups",
+     "admin_groups": ["scribyra-admins"], "member_groups": [],
+     "guest": {"claim": "acct", "equals": "1"}, "offline_access": true}
+  ]
+}
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` | required | 1–64 characters, shown in the app before and after sign-in |
+| `encryption` | `"server"` | `"server"` (server-readable; needs `service_key_file`) or `"e2ee"` (end to end). Recorded in the database at first start: a later start with the other mode refuses (`{"event":"deployment_encryption_changed"}`). Only `"e2ee"` serves the organisation routes below in this release |
+| `offline` | `true` | `false` makes the deployment online-only (used by server-readable mode) |
+| `compile` | `"browser"` | `"browser"`, `"server"` or `"both"`; the last two need `encryption: "server"` and `texlive` |
+| `link_sharing` | `false` | Whether editors may create share links (later slice) |
+| `guests` | `"off"` | `"off"` refuses provider guest accounts at sign-in; `"shared"` admits them as guests |
+| `admins` | `[]` | Lowercase verified emails, or `issuer#subject`, that are administrators whatever groups say. In an end-to-end deployment, only an administrator's sign-in may create the organisation (once) |
+| `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
+| `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
+| `audit_retention_days` | 400 | 30–3650 |
+| `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes`, `concurrency`, `queue`, `per_member_per_hour` |
+| `texlive` | none | A TeX Live tree, for server compile |
+
+The organisation's ID is random, made at first start and recorded with the mode (a database that
+already held exactly one organisation from before keeps it). `GET /v1/deployment` is public and
+answers `{name, encryption, offline, compile, linkSharing, providers: [{id, label}], org}`;
+issuers, client IDs and secrets never leave the service.
+
+### Organisation routes (end-to-end deployments)
 
 All bodies are JSON unless noted; every signed event and wrap is checked by the same Rust
-rules the browsers use (`crates/core/src/membership.rs`).
+rules the browsers use (`crates/core/src/membership.rs`). They serve the deployment's
+organisation only, and only when `deployment.encryption` is `"e2ee"` (otherwise `404`).
+Nothing here signs anyone in by itself: every device or recovery-key session needs the live
+sign-in (`ScribyraSSO` login token) of the person the key belongs to.
 
 | Route | Who | Purpose |
 | --- | --- | --- |
-| `POST /v1/auth/challenge`, `POST /v1/auth/session` | Anyone with an active device or recovery key | Device sign-in; the session request carries an SSO login token when the org requires SSO |
-| `GET /v1/orgs/{org}/info` | Anyone | Whether the org has a genesis, its log head and length, its sealed name, and the service key for managed mode |
-| `GET`/`POST /v1/orgs/{org}/events` | Members; joins and join requests without a session | The signed membership log (paged, with its length) |
+| `POST /v1/auth/challenge`, `POST /v1/auth/session` | An active device or recovery key, with its person's login | Device session. The key signs `scribyra-auth/2`, this service's `public_url`, the org, the key, the SHA-256 of the login token and the challenge; the request carries the login token (`sso`, required). A login that is missing, expired, someone else's or blocked at the provider is refused, and the session ends with the login |
+| `GET /v1/orgs/{org}/info` | Anyone | Whether the org has a genesis, its log head and length, its sealed name |
+| `GET`/`POST /v1/orgs/{org}/events` | Members; the genesis and join requests with a login instead of a session | The signed membership log (paged, with its length). The genesis is accepted once, only with a configured administrator's login, and links that login to the owner; a `person.request` needs a login nobody is linked to yet and links it |
+| `GET /v1/orgs/{org}/people` | Member devices | The email each person signed in with (`{person: {email}}`), for approving join requests and sharing |
 | `GET`/`PUT /v1/orgs/{org}/keys`, `POST /v1/orgs/{org}/keys/report` | Member devices | Key wraps (one per sender), and reporting a wrap that does not open |
 | `GET /v1/orgs/{org}/pending` | Member devices | Entitled keys that still lack a wrap, for the caller's projects (every epoch, so members keep earlier keys to read history) and the directory |
 | `GET /v1/orgs/{org}/heads?since=&wait=` | Member devices | Long-poll notice of membership and project head changes (at most 25 s) |
-| `GET`/`POST /v1/orgs/{org}/device-links`, `POST /v1/orgs/{org}/device-links/{link}`, `POST /v1/orgs/{org}/device-links/sso` | A device of the person; the new browser | One-time device links (15 minutes, four open per person) and SSO device requests |
+| `GET /v1/orgs/{org}/device-links`, `POST /v1/orgs/{org}/device-links/sso` | A device of the person; the new browser with the person's login | Device requests: a member's new browser signs in and asks (15 minutes, four open per person); one of their devices adds it with a signed `device.add` after the person types the code the new browser shows |
 | `GET`/`POST /v1/projects/{project}/log` | Project members (append: editors only) | Encrypted log entries, read to the `Scribyra-Log-Head` header. After a `project.epoch` event the service accepts only the new epoch: other new entries get `409 {"error":"epoch"}` (the client re-encrypts), identical repeats of entries it holds still get `200` |
 | `GET`/`PUT /v1/projects/{project}/objects/{id}?epoch=` | Project members (upload: editors only, under the current epoch) | Encrypted assets and history objects under keyed IDs (64 hex, an HMAC the service cannot invert). Uploads are write-once per ID (`204` for identical bytes, `409` for other bytes), at most `object_bytes`, stored content-addressed under the object namespace `p-<project>` and charged to the global, organisation (`org_bytes`) and project (`namespace_bytes`, `namespace_objects`; every ID counts) quotas, `507` when full. Downloads are checked against the stored ciphertext hash (`500` if the stored copy is damaged; an identical re-upload repairs it) |
 
 Project epochs: a signed `project.epoch {project, epoch, keyCommit, after}` event (from an
-editor, or an admin while admin read access is on) is appended only if `after` does not reach
+editor) is appended only if `after` does not reach
 past the project's log head; the service records the head at that moment in
 `projects.epoch_cutover`. Nothing old is deleted: earlier entries, objects and wraps stay so
 members can read the history.
@@ -306,46 +353,60 @@ Its direct data-channel traffic never passes through the service.
 
 ## Single sign-on (OIDC)
 
-Each organisation can use its own OpenID Connect identity provider. The service is a
-confidential relying party (authorization code flow, PKCE S256, `client_secret_basic`).
-An SSO login proves who someone is at the provider; it grants no project keys, and
-linking a provider account to an organisation member is the organisation's business.
-`public_url` and `origins` must be set: the app's origin must be in `origins`, because
-the service only ever redirects back to a configured origin.
+Signing in is OpenID Connect only, through the providers listed in `deployment.providers`
+(several per deployment). The service is a confidential relying party of each (authorization
+code flow, PKCE S256, `client_secret_basic`) and has no sign-in of its own: no passwords,
+passkeys, setup codes, invitation links or link codes. A login proves who someone is at the
+provider and carries their deployment role (administrator, member or guest); it grants no
+project keys. `public_url` and `origins` must be set: the app's origin must be in `origins`,
+because the service only ever redirects back to a configured origin.
 
-**Register the service at the provider** as a confidential web client with:
+**Register the service at each provider** as a confidential web client with:
 
-- redirect URI `<public_url>/v1/sso/callback` (exactly; `org sso` prints it),
+- redirect URI `<public_url>/v1/sso/callback` (exactly, the same for every provider),
 - grant types authorization code and refresh token,
 - optionally the back-channel logout URI `<public_url>/v1/sso/backchannel`.
 
-**Configure an organisation** (beside the running service, like `org create`):
+**Configure each provider** in `deployment.providers`:
 
-```sh
-scribyra-sync org sso --org <org-id> --issuer https://idp.example.org/realms/lab \
-  --client-id scribyra --client-secret-file /run/secrets/scribyra-oidc \
-  [--required] [--email-domain example.org] [--groups-claim groups] \
-  [--session-hours 12] [--recheck-minutes 10] [--offline-access]
-scribyra-sync org sso --org <org-id> --off
-```
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `id` | required | Short lowercase name (`a-z`, `0-9`, `-`), unique; the app sends it to `POST /v1/sso/start` |
+| `label` | required | Shown on the app's "Sign in with …" button |
+| `issuer` | required | `https://` (`http://` only on loopback), without query; must equal the `issuer` in the provider's `/.well-known/openid-configuration` character for character, including any trailing slash, or sign-in is refused |
+| `client_id`, `client_secret_file` | required | The client; the secret is read from its file (one line) when used, so a rotated file takes effect without a restart. It is never stored in the database, printed or logged; an unreadable file refuses start |
+| `email_domains` | `[]` | When set, only ID tokens with `email_verified: true` and an email in one of these lowercase domains are admitted (and, when the token has a Google `hd` claim, `hd` must be that email's domain) |
+| `groups_claim` | none | A claim holding an array of group names (at most 256 kept, longer than 256 bytes dropped); Entra ID app roles: `"roles"` |
+| `admin_groups` | `[]` | Members of these groups are administrators (needs `groups_claim`) |
+| `member_groups` | `[]` | When set, only members of these groups (or administrators) may sign in (needs `groups_claim`) |
+| `guest` | none | `{"claim", "equals"}`: the claim and value that mark a guest account (Entra `acct` = `1`). With `guests: "off"` such sign-ins are refused |
+| `offline_access` | `false` | Adds the `offline_access` scope, which some providers require before they issue refresh tokens |
+| `session_hours` | 12 | 1–720: how long a login lasts |
+| `recheck_minutes` | 10 | 1–1440: how often a login with a refresh token is rechecked |
+| `scopes` | `[]` | Extra scopes beyond `openid email profile` |
 
-The secret is read from a file (one line) and never printed or logged. The issuer must
-be `https://` (`http://` only on loopback) and must equal the `issuer` in the provider's
-`/.well-known/openid-configuration` character for character, including any trailing
-slash; a mismatch refuses sign-in. Running the command again replaces the settings.
-`--off` removes them and ends every SSO login of that organisation.
-`--required` is published to the app (`GET /v1/orgs/<org>/sso`); enforcing it at
-organisation sign-in belongs to the organisation routes, which do not yet consult it. `--email-domain` admits only ID tokens with `email_verified: true`
-and an email in exactly that domain (and, when the token has a Google `hd` claim, `hd`
-equal to the domain). `--groups-claim` names a claim holding an array of group names
-(at most 256 kept, longer than 256 bytes dropped). `--offline-access` adds the
-`offline_access` scope, which some providers require before they issue refresh tokens.
+Group, guest and member rules apply at sign-in (refused sign-ins return to the app with
+`#scribyra-sso-error=guest` or `not_member`), again whenever a login is used (so a configuration
+change takes effect at once), and at each recheck from a refreshed ID token's claims. A person's
+account is the pair (issuer, subject): the same email at two providers is two accounts.
 
-**What is stored.** In PostgreSQL: the provider settings **including the client secret
-in plain text** (table `org_sso`), each login's subject, email, name, groups and
-provider session ID, the SHA-256 of the login token (never the token), and the
+`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
+`/v1/sso/callback`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>`;
+`POST /v1/sso/redeem {code, verifier}` → `{token, expires, org, provider, role, subject, person,
+state}` (`state` is `unlinked`, `linked` or `blocked`); `GET /v1/sso/me` and
+`POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`.
+
+**Removed with slice 8** (no replacement command): `scribyra-sync org create` and setup codes,
+`scribyra-sync org sso` and its table `org_sso`, invitation links, link-code device linking
+(`POST /v1/orgs/{org}/device-links`, `…/device-links/{link}`), device-key-only sessions,
+organisation-managed mode and admin read access. Migration 0007 drops them from an existing
+database (pending link-code links are deleted; logins from before providers were configured are
+revoked).
+
+**What is stored.** In PostgreSQL: each login's provider, subject, email, name, groups, guest
+mark and provider session ID, the SHA-256 of the login token (never the token), and the
 provider's **refresh token in plain text** (table `sso_logins`), plus the links between
-provider subjects and members (`sso_links`). Protect database access and backups
+provider subjects and members (`sso_links`). Client secrets stay in their files. Protect database access and backups
 accordingly. Expired and revoked logins are deleted after a week. Discovery documents
 and key sets are cached in memory for an hour; an unknown key ID refetches the key set
 at most once per `sso_jwks_refetch_seconds`, so key rotation needs no restart.
@@ -358,18 +419,19 @@ not have passed (two minutes of clock skew allowed), `iat` must not be more than
 minutes ahead, and `nonce` must match the sign-in. Keep the service's clock synchronised.
 
 **Recheck and blocking.** Every `sso_recheck_tick_seconds`, logins that hold a refresh
-token and were last checked more than `--recheck-minutes` ago are refreshed at the
-provider (rotated refresh tokens are stored). If the provider answers `invalid_grant`
-(account disabled or deleted, consent or session revoked), every login of that person in
-the organisation is revoked and their link is **blocked**: they can sign in at the
-provider again, but stay blocked until an organisation admin unlinks them. Any other
+token and were last checked more than their provider's `recheck_minutes` ago are refreshed at
+the provider (rotated refresh tokens are stored). A refreshed ID token, when the provider sends
+one, is verified like a sign-in's (without the nonce) and updates the login's groups and guest
+mark; an account that no longer passes the group or guest rules has its logins revoked. If the
+provider answers `invalid_grant` (account disabled or deleted, consent or session revoked),
+every login of that person is revoked and their link is **blocked**: they can sign in at the
+provider again, but stay blocked until an administrator unlinks them. Any other
 client error (except 408 and 429) revokes only that login without blocking, so a
 wrong client secret does not block everyone. Network and server errors keep the login
 and retry on the next pass; the service logs only counters
 (`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
-simply expire after `--session-hours`. Each revocation of a linked member's login is
-published in-process (`Sso::revocations`) so the organisation module can close their
-device sessions; that wiring is not part of this change.
+simply expire after `session_hours`. Each revocation of a linked member's login (also a
+sign-out or a back-channel logout) closes their device sessions at once.
 
 **Back-channel logout** (OpenID Connect Back-Channel Logout 1.0) is accepted at
 `/v1/sso/backchannel`: a logout token signed like an ID token, with the back-channel
@@ -386,19 +448,19 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
 - *Microsoft Entra ID*: use the tenant-specific issuer
   `https://login.microsoftonline.com/<tenant-id>/v2.0`, never `common` or
   `organizations` (their discovery `issuer` is a template and will not match). Use
-  `--offline-access` to receive refresh tokens. The `email` claim may be missing or not
-  verified for many accounts, so `--email-domain` can refuse legitimate users; test it
+  `offline_access` to receive refresh tokens. The `email` claim may be missing or not
+  verified for many accounts, so `email_domains` can refuse legitimate users; test it
   with your tenant before relying on it. Group claims are object IDs by default, and a
-  user in too many groups gets an overage indicator instead of the list, so the groups
-  the service sees can be incomplete.
-- *Google Workspace*: issuer `https://accounts.google.com`. Use `--email-domain` with
+  user in too many groups gets an overage indicator instead of the list, so prefer app roles
+  (`groups_claim: "roles"`). Mark guests with `guest: {"claim": "acct", "equals": "1"}`.
+- *Google Workspace*: issuer `https://accounts.google.com`. Use `email_domains` with
   your Workspace domain: the `hd` claim is checked too. Google sends no groups claim.
   Google issues refresh tokens only for offline access requests, which this service
-  does not make, so Google logins are not rechecked and last for `--session-hours`.
+  does not make, so Google logins are not rechecked and last for `session_hours`.
 - *Okta*: use a custom authorization server's issuer
   (`https://<org>.okta.com/oauth2/<server-id>`, or `/oauth2/default`). Groups appear
   only after you add a groups claim to that authorization server; name it with
-  `--groups-claim`. Use `--offline-access` for refresh tokens.
+  `groups_claim`. Use `offline_access` for refresh tokens.
 - *Keycloak*: issuer `https://<host>/realms/<realm>`. Add a "Group Membership" mapper
   to the client to get a groups claim. Keycloak issues refresh tokens without
   `offline_access` and supports back-channel logout (set the client's back-channel

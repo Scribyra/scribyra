@@ -5,10 +5,9 @@
 // derived keys, ephemeral wrap keys, project keys in use) pass through WASM memory.
 import {
  org_canonical,org_seal,org_open,org_hkdf,org_sha256_hex,org_ed25519_public,org_ed25519_sign,org_x25519_public,org_x25519_shared,
- org_enrol_seed,org_enrol_message,org_recovery_secrets,org_encode_recovery_code,org_decode_recovery_code,org_key_commit,org_project_subkey,
+ org_recovery_secrets,org_encode_recovery_code,org_decode_recovery_code,org_key_commit,org_project_subkey,
  org_person_id,org_event_signing_message,org_device_proof_message,org_recovery_proof_message,org_wrap_signing_message,org_wrap_context,org_check_wrap,
- org_entry_signing_message,org_verify_entry,org_entry_hash,org_chain_next,org_apply_events,
- org_invite_message,org_device_request_message,org_wrap_recipients,
+ org_entry_signing_message,org_verify_entry,org_entry_hash,org_chain_next,org_apply_events,org_wrap_recipients,
  org_seal_object,org_open_object,org_object_parts,org_object_variants,org_check_blobref,
 } from './pkg/scribyra_app.js';
 
@@ -30,7 +29,7 @@ const u32=n=>{const b=new Uint8Array(4);new DataView(b.buffer).setUint32(0,n);re
 export const canonical=value=>org_canonical(JSON.stringify(value));
 export const sha256Hex=bytes=>org_sha256_hex(bytes);
 
-// --- Service addresses, setup codes and recovery kits
+// --- Deployment addresses and recovery kits
 
 export function serviceOrigin(text){
  let url;try{url=new URL(text);}catch{throw Error('The service address is not a valid URL.');}
@@ -38,14 +37,6 @@ export function serviceOrigin(text){
  if(url.username||url.password||url.search||url.hash||(url.pathname!=='/'&&url.pathname!==''))throw Error('Use the service address only, such as https://sync.example.org.');
  if(url.protocol!=='https:'&&!(url.protocol==='http:'&&local))throw Error('The service must use https (plain http only on this computer).');
  return url.origin;
-}
-/** `scribyra-setup:1:<base64url service origin>:<org hex>:<base64url 32-byte secret>` from `scribyra-sync org create`. */
-export function parseSetupCode(text){
- const parts=String(text||'').trim().split(':');
- if(parts.length!==5||parts[0]!=='scribyra-setup'||parts[1]!=='1')throw Error('This is not a Scribyra setup code. Copy the whole line printed by “scribyra-sync org create”.');
- const service=serviceOrigin(decoder.decode(unb64url(parts[2]))),org=parts[3],secret=unb64url(parts[4]);
- unhex(org,32);if(secret.length!==32)throw Error('The setup code is incomplete.');
- return{service,org,secret};
 }
 /** The kit holds what a fresh browser needs: where the service is, which org, which genesis, and the code. */
 export function formatKit({service,org,genesis,code}){
@@ -122,17 +113,12 @@ export async function signEvent({org,prev,type,body},signer){
  return canonical(event);
 }
 /**
- * The owner's genesis: their device, the org's encryption mode and admin read access, the
- * directory key's commitment and the org's and owner's names sealed under it; the setup
- * code's key signs all of it.
+ * The owner's genesis: their device, the directory key's commitment, and the org's and owner's
+ * names sealed under it. The service accepts it only with a deployment administrator's sign-in.
  */
-export function genesisBody({org,secret,device,agreement,adminRead=true,mode='e2ee',serviceKey=null,directoryKey,name,ownerName}){
- const enrol=org_enrol_seed(secret),person=org_person_id(org,device);
- const body={person,device,agreement,enrol:org_ed25519_public(enrol),enrolSig:'',mode,adminRead:!!adminRead,
-  name:sealName(directoryKey,org,'org',name),directoryCommit:org_key_commit(directoryKey),ownerName:sealName(directoryKey,org,person,ownerName)};
- if(mode==='managed'){if(!serviceKey)throw Error('This service does not offer organisation-managed encryption.');body.serviceKey=serviceKey;}
- body.enrolSig=org_ed25519_sign(enrol,org_enrol_message(org,JSON.stringify(body)));
- return body;
+export function genesisBody({org,device,agreement,directoryKey,name,ownerName}){
+ const person=org_person_id(org,device);
+ return{person,device,agreement,name:sealName(directoryKey,org,'org',name),directoryCommit:org_key_commit(directoryKey),ownerName:sealName(directoryKey,org,person,ownerName)};
 }
 
 // --- Names: sealed under the directory key (people, the org) or a project's name key.
@@ -156,39 +142,8 @@ export function openProjectName(projectKey,org,project,sealed){if(!sealed)return
 /** The X25519 keys entitled to a project's key (or the directory key: project = org ID). */
 export const wrapRecipients=(state,project)=>JSON.parse(org_wrap_recipients(JSON.stringify(state),project));
 
-// --- Invitation links and device links (fragments: they never reach the app's host).
+// --- Device requests
 
-const seedFrom=(secret,purpose)=>org_hkdf(secret,new Uint8Array(0),encoder.encode(`scribyra/1/${purpose}`),32);
-export function inviteSeed(secret){return seedFrom(secret,'invite');}
-export function inviteMessage(org,prev,invite,person,device,agreement){return org_invite_message(org,prev,invite,person,device,agreement);}
-export function linkSeed(secret){return seedFrom(secret,'device-link');}
-export function deviceRequestMessage(org,link,person,device,agreement){return org_device_request_message(org,link,person,device,agreement);}
-/** `https://app/#join=…`: everything a joiner needs, including the directory key. */
-export function formatInvite(origin,{service,org,genesis,invite,secret,directoryKey}){
- return `${origin}/#join=${b64url(encoder.encode(canonical({v:1,service,org,genesis,invite,secret:hex(secret),directory:hex(directoryKey)})))}`;
-}
-function fragmentValue(text,name){
- const value=String(text||'').trim(),at=value.indexOf(`#${name}=`);
- const raw=at>=0?value.slice(at+name.length+2):value;
- let parsed;try{parsed=JSON.parse(decoder.decode(unb64url(raw.split(/[&\s]/)[0])));}catch{throw Error('This is not a Scribyra link. Copy the whole link you were sent.');}
- if(!parsed||parsed.v!==1)throw Error('This link is from an unsupported version of Scribyra.');
- return parsed;
-}
-export function parseInvite(text){
- const p=fragmentValue(text,'join'),service=serviceOrigin(p.service);
- unhex(p.org,32);unhex(p.genesis,32);unhex(p.invite,16);
- return{service,org:p.org,genesis:p.genesis,invite:p.invite,secret:unhex(p.secret,32),directoryKey:unhex(p.directory,32)};
-}
-export function formatDeviceLink(origin,{service,org,genesis,person,link,secret}){
- return `${origin}/#device=${b64url(encoder.encode(canonical({v:1,service,org,genesis,person,link,secret:hex(secret)})))}`;
-}
-export function parseDeviceLink(text){
- const p=fragmentValue(text,'device'),service=serviceOrigin(p.service);
- unhex(p.org,32);unhex(p.genesis,32);unhex(p.link,16);
- if(typeof p.person!=='string'||!/^[0-9a-f-]{36}$/.test(p.person))throw Error('This device link is damaged.');
- return{service,org:p.org,genesis:p.genesis,person:p.person,link:p.link,secret:unhex(p.secret,32)};
-}
-/** The code both devices show while linking: it depends on the link secret and the new keys. */
 /** A 12-character code (60 bits) the new browser shows when asking through SSO, and the keyed
  * check over its keys that the existing device verifies after the person types the code. */
 const CROCKFORD='0123456789ABCDEFGHJKMNPQRSTVWXYZ';
@@ -204,16 +159,9 @@ export function signInUrl(text){
  if(url.protocol!=='https:'&&!(url.protocol==='http:'&&local))throw Error('The service sent a sign-in address that is not https. Nothing was opened.');
  return url.href;
 }
-/** `https://app/#org=…`: where to sign in with an organisation's SSO (to ask to join, or to add a browser). */
-export function formatOrgLink(origin,{service,org,genesis}){return `${origin}/#org=${b64url(encoder.encode(canonical({v:1,service,org,genesis})))}`;}
-export function parseOrgLink(text){const p=fragmentValue(text,'org'),service=serviceOrigin(p.service);unhex(p.org,32);unhex(p.genesis,32);return{service,org:p.org,genesis:p.genesis};}
-export function linkCode(secret,device,agreement){
- const digest=org_sha256_hex(concat(encoder.encode('scribyra-device-compare/1'),secret,unhex(device,32),unhex(agreement,32)));
- return(parseInt(digest.slice(0,10),16)%1e8).toString().padStart(8,'0').replace(/(\d{4})(\d{4})/,'$1 $2');
-}
-export const enrolPublic=secret=>org_ed25519_public(org_enrol_seed(secret));
 export const personId=(org,device)=>org_person_id(org,device);
-/** Signed by the new device's own key; binds its person, agreement key and log position. */
+/** Signed by the new device's own key; binds its person, agreement key and log position (or, for
+ * a device request, the request's ID). */
 export async function deviceProof({org,prev,link,person,device,agreement},identity){
  if(link)prev=`link:${link}`;
  return sign(identity,org_device_proof_message(org,prev,person,device,agreement));
@@ -223,8 +171,8 @@ export function recoveryProof({org,prev,person,signing,agreement},seed){
  return org_ed25519_sign(seed,org_recovery_proof_message(org,prev,person,signing,agreement));
 }
 /** Replays canonical event strings with the Rust rules; throws on the first invalid one. */
-export function applyEvents(state,org,events,expectedEnrol){
- return JSON.parse(org_apply_events(state?JSON.stringify(state):'',org,JSON.stringify(events),expectedEnrol));
+export function applyEvents(state,org,events){
+ return JSON.parse(org_apply_events(state?JSON.stringify(state):'',org,JSON.stringify(events)));
 }
 
 // --- Project keys and wraps
@@ -277,7 +225,7 @@ export function epochCommit(state,project,epoch){
 }
 const keyEntitled=(state,person,project)=>{
  const p=state.projects?.[project],who=state.persons?.[person];
- return!!p&&who?.state==='active'&&(!!p.members[person]||(!!state.adminRead&&['owner','admin'].includes(who.role)));
+ return!!p&&who?.state==='active'&&!!p.members[person];
 };
 const deviceEntitled=(state,device,project)=>{const person=state.devices?.[device]?.person;return!!person&&keyEntitled(state,person,project);};
 /** Whether readers refuse an entry: a rotation cut its device off after an earlier client

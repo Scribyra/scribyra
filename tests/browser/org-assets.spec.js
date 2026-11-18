@@ -8,7 +8,8 @@ import {readFile,readdir} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {build} from 'esbuild';
-import {service,orgCreate} from '../helpers/service.mjs';
+import {orgService} from '../helpers/idp.mjs';
+import {signIn,create,join as admit,share} from '../helpers/org-browser.mjs';
 
 let bundle;
 async function harness(page){
@@ -26,23 +27,6 @@ async function profile(browser,info){
 const image=(marker,size=4096)=>{const bytes=new Uint8Array(size);bytes.set([137,80,78,71,13,10,26,10]);bytes.set(new TextEncoder().encode(marker),8);for(let i=9+marker.length;i<size;i++)bytes[i]=(i*31)&255;return bytes;};
 const sha=bytes=>createHash('sha256').update(bytes).digest('hex');
 const dialogOf=page=>page.getByRole('dialog',{name:'Remote backup'});
-async function saveKit(page){
- const dialog=dialogOf(page),kit=dialog.getByLabel('Recovery kit',{exact:true}).and(page.locator('pre'));
- await expect(kit).toContainText('scribyra-recovery:1:');
- const text=await kit.textContent();
- await dialog.getByRole('checkbox',{name:'I have saved my recovery kit somewhere safe'}).check();
- await dialog.getByRole('button',{name:'Done'}).click();
- return text;
-}
-async function connect(page,setup,owner){
- await page.getByRole('button',{name:'Remote backup',exact:true}).click();
- const dialog=dialogOf(page);
- await dialog.getByRole('textbox',{name:'Setup code'}).fill(setup);
- await dialog.getByRole('textbox',{name:'Organisation name'}).fill('Acme Lab');
- await dialog.getByRole('textbox',{name:'Your name',exact:true}).fill(owner);
- await dialog.getByRole('button',{name:'Connect'}).click();
- return saveKit(page);
-}
 /** What a profile holds for a project: its current figures and its named versions' figures. */
 async function figures(page,name){
  return page.evaluate(async name=>{
@@ -68,7 +52,7 @@ async function filesUnder(dir){
 }
 
 test('images and named versions back up encrypted, reach a colleague (a damaged file is refused and fetched again), sync, and restore on a fresh profile',async({browser},info)=>{
- const s=await service({org:true});const contexts=[];
+ const s=await orgService({shortcuts:false});const contexts=[];
  try{
   const ana=await profile(browser,info);contexts.push(ana.context);
   await ana.page.evaluate(async()=>{
@@ -87,17 +71,14 @@ test('images and named versions back up encrypted, reach a colleague (a damaged 
   });
   const expected={current:{'figure.png':'NEW_FIGURE_MARKER'},versions:{'Before the new figure':{'figure.png':'OLD_FIGURE_MARKER'}}};
   expect(await figures(ana.page,'Figures paper')).toEqual(expected);
-  const kit=await connect(ana.page,await orgCreate(s,'figures'),'Ana');
+  const kit=await create(ana.page,s,'ana','Ana');
   const dialog=dialogOf(ana.page),row=dialog.getByRole('listitem').filter({hasText:'Figures paper'});
   await row.getByRole('button',{name:'Back up'}).click();
   await expect(row).toContainText(/Backed up remotely|Synced/,{timeout:30000});
   expect(Number(await s.sql('SELECT count(*) FROM project_objects'))).toBeGreaterThanOrEqual(4);
 
-  // Ben joins as an editor of the paper. His first download meets a damaged file: refused.
-  await dialog.getByRole('combobox',{name:'Share a project with them'}).selectOption({label:'Figures paper'});
-  await dialog.getByRole('combobox',{name:'Their role on it'}).selectOption('editor');
-  await dialog.getByRole('button',{name:'Create invitation link'}).click();
-  const invitation=await dialog.getByRole('textbox',{name:'Invitation link to send'}).inputValue();
+  // Ben joins and Ana shares the paper with him as an editor. His first download meets a damaged
+  // file: refused.
   const ben=await profile(browser,info);contexts.push(ben.context);
   let damage=1;
   await ben.page.route('**/v1/projects/*/objects/*',async route=>{
@@ -105,11 +86,9 @@ test('images and named versions back up encrypted, reach a colleague (a damaged 
    damage--;const response=await route.fetch(),bytes=Buffer.from(await response.body());bytes[bytes.length-1]^=1;
    await route.fulfill({response,body:bytes});
   });
-  await ben.page.goto(invitation);
+  await admit(ben.page,s,'ben',ana.page);
+  await share(ana.page,'Figures paper','ben@acme.test','editor');
   const benDialog=dialogOf(ben.page);
-  await benDialog.getByRole('textbox',{name:'Your name for this organisation'}).fill('Ben');
-  await benDialog.getByRole('button',{name:'Join'}).click();
-  await saveKit(ben.page);
   const offered=benDialog.getByRole('listitem').filter({hasText:'Figures paper'});
   await offered.getByRole('button',{name:'Download'}).click();
   await expect(benDialog.getByRole('status')).toContainText('refused');
@@ -133,9 +112,10 @@ test('images and named versions back up encrypted, reach a colleague (a damaged 
    expect(await s.sql(`SELECT count(*) FROM ${table} t WHERE ${hashes.map(h=>`position('${h}' in t::text) > 0`).join(' OR ')}`)).toBe('0');
   for(const bytes of await filesUnder(s.config.data))for(const marker of ['FIGURE_MARKER','FIGURES_TEXT_MARKER','Before the new figure'])expect(bytes.includes(Buffer.from(marker))).toBe(false);
 
-  // A fresh profile restores Ana's projects from her recovery kit alone, old version included.
+  // A fresh profile restores Ana's projects from her recovery kit after she signs in there, old
+  // version included.
   const fresh=await profile(browser,info);contexts.push(fresh.context);
-  await fresh.page.getByRole('button',{name:'Remote backup',exact:true}).click();
+  await signIn(fresh.page,s,'ana');
   const freshDialog=dialogOf(fresh.page);
   await freshDialog.getByRole('textbox',{name:'Recovery kit'}).fill(kit);
   await freshDialog.getByRole('button',{name:'Restore projects'}).click();
@@ -145,7 +125,7 @@ test('images and named versions back up encrypted, reach a colleague (a damaged 
 });
 
 test('when the organisation’s storage is full, backup waits with a plain message and local saving keeps working',async({browser},info)=>{
- const s=await service({org:true,org_bytes:64*1024});const contexts=[];
+ const s=await orgService({shortcuts:false,org_bytes:64*1024});const contexts=[];
  try{
   const ana=await profile(browser,info);contexts.push(ana.context);
   await ana.page.evaluate(async()=>{
@@ -153,7 +133,7 @@ test('when the organisation’s storage is full, backup waits with a plain messa
    model.addEntries(doc,[{path:'main.tex',content:'\\documentclass{article}\n\\begin{document}\nFULL\n\\end{document}\n'},{path:'big.png',content:image('BIG_FIGURE_MARKER',200*1024)}]);
    model.migrateProject(doc,id);doc.getMap('meta').set('name','Big figure');await storage.saveProject(id,doc);doc.destroy();await window.scribyra.action('home');
   });
-  await connect(ana.page,await orgCreate(s,'full'),'Ana');
+  await create(ana.page,s,'ana','Ana');
   const dialog=dialogOf(ana.page),row=dialog.getByRole('listitem').filter({hasText:'Big figure'});
   await row.getByRole('button',{name:'Back up'}).click();
   await expect(row).toContainText('Waiting to back up',{timeout:30000});

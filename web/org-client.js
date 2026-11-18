@@ -1,6 +1,6 @@
-// HTTP client for the organisation routes of a self-hosted scribyra-sync service.
-// It carries only signed events, signed key wraps and encrypted log entries.
-import {sign,signerPublic} from './org-crypto.js';
+// HTTP client for a Scribyra deployment's sign-in and end-to-end organisation routes.
+// It carries only sign-in tokens, signed events, signed key wraps and encrypted log entries.
+import {sign,signerPublic,sha256Hex} from './org-crypto.js';
 
 const encoder=new TextEncoder();
 export class ServiceError extends Error{
@@ -8,7 +8,7 @@ export class ServiceError extends Error{
 }
 const messages={
  400:'The service refused a malformed request.',401:'The service did not accept this browser’s sign-in.',403:'The service refused access.',
- 404:'The service does not know this organisation or project.',409:'The service already has a different change at this position.',
+ 404:'The service does not know this deployment, organisation or project.',409:'The service already has a different change at this position.',
  413:'This change is larger than the service allows.',429:'The service is busy. Retrying shortly.',503:'The service is unavailable. Retrying shortly.',
  507:'The service’s storage is full. Your changes stay saved on this device.',
 };
@@ -32,12 +32,14 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
   service,
   get token(){return token;},
   forget(){token=null;},
-  /** Challenge-response sign-in with a device identity or a recovery seed; `sso` is an SSO login token. */
+  /** Opens a device session: the device identity (or a recovery seed) signs a challenge together
+   * with the hash of `sso`, the login token of the person it belongs to. A key alone never signs in. */
   async signIn(org,signer,{sso}={}){
+   if(typeof sso!=='string'||!sso)throw new ServiceError(401,'Sign in with your organisation first. (single sign-on is required)');
    const {challenge}=await json('/v1/auth/challenge',{method:'POST',type:'application/json',body:JSON.stringify({org}),auth:false});
    if(typeof challenge!=='string'||!/^[0-9a-f]{64}$/.test(challenge))throw new ServiceError(0,'The service sent an invalid sign-in challenge.');
-   const key=signerPublic(signer),sig=await sign(signer,encoder.encode(`scribyra-auth/1\n${service}\n${org}\n${key}\n${challenge}`));
-   const session=await json('/v1/auth/session',{method:'POST',type:'application/json',body:JSON.stringify({org,key,challenge,sig,...(sso?{sso}:{})}),auth:false});
+   const key=signerPublic(signer),login=sha256Hex(encoder.encode(sso)),sig=await sign(signer,encoder.encode(`scribyra-auth/2\n${service}\n${org}\n${key}\n${login}\n${challenge}`));
+   const session=await json('/v1/auth/session',{method:'POST',type:'application/json',body:JSON.stringify({org,key,challenge,sig,sso}),auth:false});
    if(typeof session?.token!=='string'||!/^[0-9a-f]{64}$/.test(session.token))throw new ServiceError(0,'The service sent an invalid session.');
    token=session.token;return session;
   },
@@ -58,19 +60,25 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
    }
   },
   async postEvent(org,raw,{auth=true,sso}={}){return json(`/v1/orgs/${org}/events`,{method:'POST',type:'application/json',body:raw,auth,sso});},
-  /** Unauthenticated: whether the org has a genesis, its log head, and the managed-mode service key. */
+  /** Unauthenticated: whether the org has a genesis, and its log head and length. */
   async info(org){const r=await json(`/v1/orgs/${org}/info`,{auth:false});if(typeof r?.head!=='string'||!Number.isSafeInteger(r.count))throw new ServiceError(0,'The service sent invalid organisation details.');return r;},
-  async ssoPolicy(org){return json(`/v1/orgs/${org}/sso`,{auth:false});},
-  async ssoStart(org,returnTo,challenge){return json('/v1/sso/start',{method:'POST',type:'application/json',body:JSON.stringify({org,return:returnTo,challenge}),auth:false});},
+  /** Unauthenticated: the deployment's name, encryption mode, providers and organisation. */
+  async deployment(){
+   const d=await json('/v1/deployment',{auth:false});
+   if(typeof d?.name!=='string'||!['server','e2ee'].includes(d.encryption)||!Array.isArray(d.providers)||!d.providers.length||!d.providers.every(p=>typeof p?.id==='string'&&typeof p.label==='string')||typeof d.org!=='string'||!/^[0-9a-f]{64}$/.test(d.org))
+    throw new ServiceError(0,'This address does not answer like a Scribyra deployment.');
+   return d;
+  },
+  async ssoStart(provider,returnTo,challenge){return json('/v1/sso/start',{method:'POST',type:'application/json',body:JSON.stringify({provider,return:returnTo,challenge}),auth:false});},
   async ssoRedeem(code,verifier){return json('/v1/sso/redeem',{method:'POST',type:'application/json',body:JSON.stringify({code,verifier}),auth:false});},
   async ssoMe(sso){return json('/v1/sso/me',{sso});},
   async ssoLogout(sso){await request('/v1/sso/logout',{method:'POST',type:'application/json',body:'{}',sso});},
   async reportWrap(org,project,epoch,sender){await request(`/v1/orgs/${org}/keys/report`,{method:'POST',type:'application/json',body:JSON.stringify({project,epoch,sender})});},
   async pending(org){return(await json(`/v1/orgs/${org}/pending`)).pending;},
+  /** The email each person signed in with, as the service knows it: {person: {email}}. */
+  async people(org){const r=await json(`/v1/orgs/${org}/people`);return r&&typeof r.people==='object'?r.people:{};},
   async heads(org,since,wait,signal){return json(`/v1/orgs/${org}/heads?${since===undefined?'':`since=${since}&`}wait=${wait}`,{timeout:(wait+15)*1000,signal});},
-  async createLink(org,link,key){return json(`/v1/orgs/${org}/device-links`,{method:'POST',type:'application/json',body:JSON.stringify({link,key})});},
   async links(org){return(await json(`/v1/orgs/${org}/device-links`)).links;},
-  async answerLink(org,link,body){return json(`/v1/orgs/${org}/device-links/${link}`,{method:'POST',type:'application/json',body:JSON.stringify(body),auth:false});},
   async ssoDeviceRequest(org,body,sso){return json(`/v1/orgs/${org}/device-links/sso`,{method:'POST',type:'application/json',body:JSON.stringify(body),sso});},
   async putWraps(org,wraps){await request(`/v1/orgs/${org}/keys`,{method:'PUT',type:'application/json',body:JSON.stringify(wraps)});},
   async wraps(org){

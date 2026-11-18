@@ -1,7 +1,9 @@
-// Organisation sync with a self-hosted scribyra-sync service: encrypted backups, organisations
-// with invitations, roles and project sharing, single sign-on, linked devices and sync between
-// them. Nothing here runs, opens a database or creates a key until the person connects, joins
-// or signs in (off means off).
+// End-to-end encrypted organisations on a Scribyra deployment: encrypted backups, roles and
+// project sharing, devices and sync between them. Everyone signs in with one of the
+// deployment's OpenID Connect providers: the first administrator creates the organisation,
+// others ask to join and an administrator approves them, and a new browser of a member is added
+// by one of their devices (or their recovery kit). Nothing here runs, opens a database or
+// creates a key until the person signs in (off means off).
 //
 // Every step that the service commits is prepared locally first (connection record, outbox
 // entry, pending recovery kit, pending project), so a crash or a lost answer is resumed with
@@ -18,21 +20,19 @@ import {validateReplica} from './replication.js';
 import {validateRetainedState,MAX_RETAINED_BYTES} from './model.js';
 import {orgClient,ServiceError} from './org-client.js';
 import {
- parseSetupCode,parseKit,formatKit,newRecoveryCode,recoverySecrets,recoveryProof,newAgreementKey,openAgreementKey,newStorageKey,sealAtRest,openAtRest,
- signEvent,genesisBody,enrolPublic,deviceProof,applyEvents,newProjectKey,wrapProjectKey,unwrapProjectKey,personId,
- sealEntry,openEntry,verifyEntryBody,entryHash,chainNext,randomBytes,hex,unhex,sha256Hex,
- sealName,openName,sealProjectName,openProjectName,wrapRecipients,
- parseInvite,formatInvite,inviteSeed,inviteMessage,formatDeviceLink,parseDeviceLink,linkSeed,deviceRequestMessage,linkCode,
- formatOrgLink,parseOrgLink,newDeviceCode,deviceCodeMac,signInUrl,keyCommit,
+ parseKit,formatKit,newRecoveryCode,recoverySecrets,recoveryProof,newAgreementKey,openAgreementKey,newStorageKey,sealAtRest,openAtRest,
+ signEvent,genesisBody,deviceProof,applyEvents,newProjectKey,wrapProjectKey,unwrapProjectKey,personId,serviceOrigin,
+ sealEntry,openEntry,verifyEntryBody,entryHash,chainNext,randomBytes,hex,sha256Hex,
+ sealName,openName,sealProjectName,openProjectName,wrapRecipients,newDeviceCode,deviceCodeMac,signInUrl,keyCommit,
  sealObject,openObjectPart,objectParts,objectVariants,blobrefPayload,checkBlobref,entryCutOff,entryHeld,rotationCuts,
 } from './org-crypto.js';
-import {org_ed25519_public,org_ed25519_sign,org_ed25519_verify,org_object_id,blob_hash,history_validate_manifest} from './pkg/scribyra_app.js';
+import {org_object_id,blob_hash,history_validate_manifest} from './pkg/scribyra_app.js';
 
 export const ORG_CONNECTED='scribyra:org-connected';
 export function orgConnected(){try{return globalThis.localStorage?.getItem(ORG_CONNECTED)==='true';}catch{return false;}}
 const ORG_JOINING='scribyra:org-joining';
 const markConnected=on=>{try{localStorage.removeItem(ORG_JOINING);if(on)localStorage.setItem(ORG_CONNECTED,'true');else localStorage.removeItem(ORG_CONNECTED);}catch{}};
-/** A join or device link was started here and waits for approval. */
+/** A join request or device request was made here and waits for approval. */
 export function orgJoining(){try{return globalThis.localStorage?.getItem(ORG_JOINING)==='true';}catch{return false;}}
 const markJoining=()=>{try{localStorage.setItem(ORG_JOINING,'true');}catch{}};
 const DB='scribyra-org';
@@ -58,14 +58,15 @@ const KEY_WAIT_MS=10*60*1000;
 const isHash=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value);
 const QUOTA_TEXT='The organisation’s storage on the service is full. Your changes are saved on this device and will back up when space is freed.';
 const WRAP_BATCH=64;
-const INVITE_DAYS=7;
-const LINK_MS=15*60*1000;
 const keyContext=(org,project,epoch)=>`scribyra-org-key/1\n${org}\n${project}\n${epoch}`;
 const kitContext=org=>`scribyra-org-kit/1\n${org}`;
 const agreementContext=(org,device)=>`scribyra-org-agreement/1\n${org}\n${device}`;
 const SSO_FLOW='scribyra:sso-flow',SSO_LOGIN='scribyra:sso-login';
-const readSession=key=>{try{return JSON.parse(globalThis.sessionStorage?.getItem(key)||'null');}catch{return null;}};
-const writeSession=(key,value)=>{try{if(value)globalThis.sessionStorage.setItem(key,JSON.stringify(value));else globalThis.sessionStorage.removeItem(key);}catch{}};
+// The sign-in in progress and the tab's login live in sessionStorage (a reopened tab resumes; the
+// next tab signs in again); where there is none (Node), in memory.
+const memory=new Map();
+const readSession=key=>{try{const store=globalThis.sessionStorage;return JSON.parse((store?store.getItem(key):memory.get(key))||'null');}catch{return null;}};
+const writeSession=(key,value)=>{try{const store=globalThis.sessionStorage,text=value?JSON.stringify(value):null;if(store){if(text)store.setItem(key,text);else store.removeItem(key);}else if(text)memory.set(key,text);else memory.delete(key);}catch{}};
 
 export const STATUS_TEXT={
  'backed-up':'Backed up remotely','synced':'Synced','backing-up':'Backing up…','waiting':'Waiting to back up','paused':'Backup paused',
@@ -73,11 +74,11 @@ export const STATUS_TEXT={
 };
 export const MODE_TEXT={
  e2ee:'End-to-end encrypted. Only members’ devices (and their recovery kits) can read these projects. The service stores ciphertext; its operator can see who is a member, sizes and timing.',
- managed:'Organisation-managed. The service holds the keys to these projects: its operator and the organisation’s administrators can read them.',
+ server:'Projects are kept on the server, which can read them.',
 };
 export const ROLE_MODES={editor:['editing','reviewing','viewing'],reviewer:['reviewing','viewing'],viewer:['viewing']};
 const fault=message=>Object.assign(Error(message),{fatal:true});
-const ssoNeeded=error=>error instanceof ServiceError&&error.status===401&&/single sign-on (is required|expired)/.test(error.message);
+const ssoNeeded=error=>error instanceof ServiceError&&(error.status===401&&/single sign-on (is required|expired)/.test(error.message)||error.status===403&&/identity provider/.test(error.message));
 /** Merges two encoded Yjs state vectors (the larger clock per client), in Yjs's encoding. */
 function mergeVectors(a,b){
  const out=Y.decodeStateVector(a);
@@ -123,7 +124,11 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  }
  async function signIn(){
   try{return await client.signIn(connection.org,await deviceIdentity(),{sso:connection.ssoToken});}
-  catch(error){if(ssoNeeded(error)){connection.ssoToken=null;connection.ssoNeeded=true;await saveConnection();onMembership();}throw error;}
+  catch(error){
+   // Said once, when it happens: a dialog that redraws on the notice must not ask again and again.
+   if(ssoNeeded(error)){const already=connection.ssoNeeded&&!connection.ssoToken;connection.ssoToken=null;connection.ssoNeeded=true;await saveConnection();if(!already)onMembership();}
+   throw error;
+  }
  }
  // Every request signs in again once if the service forgot this browser's session.
  async function authed(task){
@@ -183,8 +188,8 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  async function putWraps(wraps){for(let i=0;i<wraps.length;i+=WRAP_BATCH){const part=wraps.slice(i,i+WRAP_BATCH);await authed(()=>client.putWraps(connection.org,part));}}
  /**
   * Wraps every key this browser holds to the entitled keys the service says still lack it: a
-  * new member, a new device, a replaced recovery kit, the service key of a managed org. The
-  * recipients are checked against this browser's own replay of the membership log.
+  * new member, a new device, a replaced recovery kit. The recipients are checked against this
+  * browser's own replay of the membership log.
   */
  async function fulfilPending(){
   const pending=await authed(()=>client.pending(connection.org)),identity=await deviceIdentity(),wraps=[];
@@ -648,7 +653,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  }
  const mayRotate=project=>{
   const s=connection.state,me=s.persons[connection.person],p=s.projects[project];
-  return!!p&&me?.state==='active'&&(p.members[connection.person]==='editor'||(s.adminRead&&['owner','admin'].includes(me.role)));
+  return!!p&&me?.state==='active'&&p.members[connection.person]==='editor';
  };
  /** A rotation whose answer was lost: keep its key if the log took it, discard it otherwise. */
  async function settleRotation(project){
@@ -930,39 +935,52 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  async function freshConnection(service,org,person,identity,extra={}){
   const storageKey=await newStorageKey(),agreement=await newAgreementKey(await mustSealAgreement()?{sealWith:storageKey,context:agreementContext(org,identity.publicKey)}:{});
   connection={service,org,person,device:identity.publicKey,agreement,storageKey,state:null,ready:false,...extra};
-  await saveConnection();if(extra.joined||extra.genesisExpected)markJoining();return connection;
+  await saveConnection();if(extra.joined)markJoining();return connection;
  }
  /**
-  * After joining (or being linked): wait until the service lets this device in, read and verify
-  * the whole membership log from the genesis the link named, and become connected.
+  * After asking to join (or to be added as a device): wait until the service lets this device
+  * in, read and verify the whole membership log, and become connected. A browser that joins has
+  * no link naming the organisation's genesis, so it trusts the one the service shows it first;
+  * a recovery kit names its genesis and is checked against it.
   */
  async function admit(genesis,{sso}={}){
   client.forget();
   const identity=await deviceIdentity();
   try{await client.signIn(connection.org,identity,{sso:sso||connection.ssoToken});}
-  catch(error){if(error instanceof ServiceError&&error.status===403){connection.waiting=true;await saveConnection();return false;}throw error;}
+  catch(error){if(error instanceof ServiceError&&error.status===403&&/not active/.test(error.message)){connection.waiting=true;await saveConnection();return false;}throw error;}
   const state=applyEvents(null,connection.org,await client.events(connection.org,0));
-  if(state.genesis!==genesis)throw Error('This service’s organisation does not match the link you used.');
+  if(genesis&&state.genesis!==genesis)throw Error('This service’s organisation does not match the one this browser knew.');
   if(state.devices[connection.device]?.person!==connection.person)throw Error('This browser was not added to the organisation.');
   delete connection.waiting;delete connection.linkCode;
-  // A directory key that came with an invitation must be the one the genesis committed to.
   connection.state=state;
-  if(await hasKey(connection.org,1)){const key=await projectKey(connection.org,1);try{if(keyCommit(key)!==state.directoryCommit)await db.delete('keys',[connection.org,1]);}finally{key.fill(0);}}
   await adopt(state);
   await exchangeKeys().catch(()=>{});
   return true;
  }
- /** The SSO login this tab finished, if it belongs to `org` on `service`. */
- function ssoLogin(service,org){const login=readSession(SSO_LOGIN);return login&&login.service===service&&login.org===org&&login.expires*1000>Date.now()?login:null;}
+ /** The login this tab finished, if it belongs to `org` on `service` (any, without them). */
+ function ssoLogin(service,org){const login=readSession(SSO_LOGIN);return login&&(!service||login.service===service)&&(!org||login.org===org)&&login.expires*1000>Date.now()?login:null;}
+ /** The tab's login now belongs to `person` (after a genesis or a join request linked it). */
+ function markLinked(person){const login=readSession(SSO_LOGIN);if(login){writeSession(SSO_LOGIN,{...login,state:'linked',person});}}
+ function requireLogin(){const login=ssoLogin();if(!login)throw Object.assign(Error('Sign in with your organisation first.'),{sso:true});return login;}
+ /** Records a finished sign-in for this tab, and hands it to a connection of the same organisation. */
+ async function useLogin(flow,login){
+  const record={service:flow.service,org:login.org,provider:flow.provider,label:flow.label,name:flow.name,token:login.token,expires:login.expires,subject:login.subject,person:login.person,state:login.state,role:login.role};
+  writeSession(SSO_LOGIN,record);
+  if(orgConnected()&&!connection)await load().catch(()=>{});
+  if(connection?.ready&&connection.org===login.org){connection.ssoToken=login.token;connection.ssoNeeded=false;connection.provider=flow.provider;connection.providerLabel=flow.label;await saveConnection();client?.forget();follow();for(const link of await db.getAll('links'))schedule(link.localId,100);onMembership();}
+  else if(connection&&!connection.ready&&connection.org===login.org){connection.ssoToken=login.token;await saveConnection();}
+  return record;
+ }
 
  const api={
   get connected(){return !!connection?.ready;},
   get info(){
    if(!connection?.ready)return null;
-   const state=connection.state,person=me();
-   return{service:connection.service,org:connection.org,mode:state.mode,adminRead:state.adminRead,person:connection.person,role:person?.role,state:person?.state,ssoNeeded:!!connection.ssoNeeded};
+   const person=me();
+   return{service:connection.service,org:connection.org,name:connection.deploymentName||null,provider:connection.provider||null,providerLabel:connection.providerLabel||null,
+    person:connection.person,role:person?.role,state:person?.state,ssoNeeded:!!connection.ssoNeeded||!connection.ssoToken};
   },
-  /** Joined or linked, and waiting for an admin or another device to let this browser in. */
+  /** Asked to join or to be added, and waiting for an admin or another device to let this browser in. */
   get waiting(){return !!(connection&&!connection.ready&&connection.joined);},
   get linkCode(){return connection&&!connection.ready?connection.linkCode||null:null;},
   /** Connected, but this person has no recovery kit yet (a new member). */
@@ -986,48 +1004,47 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** The recovery kit made last, until the person confirms they saved it. */
   pendingKit,
   async confirmKit(){pendingKitText='';if(connection?.pendingKit){delete connection.pendingKit;await saveConnection();}},
-  /** What an operator's setup code offers: its service, and whether organisation-managed mode is available. */
-  async setupInfo(setupText){const setup=parseSetupCode(setupText);try{const info=await orgClient(setup.service,{fetchImpl}).info(setup.org);return{service:setup.service,managed:!!info.serviceKey,used:info.genesis};}finally{setup.secret.fill(0);}},
   /**
-   * Creates the organisation an operator's setup code stands for: its name, encryption mode and
-   * admin read access, the directory key, and a recovery kit for its owner.
+   * Creates the organisation as the deployment administrator this tab is signed in as: the
+   * owner's device, the directory key, the genesis (accepted once, from an administrator's
+   * sign-in), and a recovery kit for the owner.
    */
-  async connect(setupText,{name='Personal',ownerName='Owner',mode='e2ee',adminRead=true}={}){
-   const setup=parseSetupCode(setupText);
-   try{
-    if(orgConnected())throw Error('This browser is already connected to a service.');
-    const identity=await withCreatedKeys();await open();
-    client=orgClient(setup.service,{fetchImpl});
-    // A previous attempt for this organisation left its keys and genesis here: resume it.
-    const previous=await readConnection();
-    let raw,state;
-    if(previous&&!previous.ready&&previous.org===setup.org&&previous.device===identity.publicKey&&previous.genesis){connection=previous;raw=previous.genesis;state=previous.pendingState;}
-    else{
-     const info=await client.info(setup.org);
-     if(info.genesis)throw Error('This setup code was already used. Ask the operator for a new one, or restore with your recovery kit.');
-     const directory=randomBytes(32);
-     try{
-      await freshConnection(setup.service,setup.org,null,identity);
-      const body=genesisBody({org:setup.org,secret:setup.secret,device:identity.publicKey,agreement:connection.agreement.publicKey,adminRead,mode,serviceKey:info.serviceKey,directoryKey:directory,name,ownerName});
-      raw=await signEvent({org:setup.org,prev:setup.org,type:'genesis',body},identity);
-      state=applyEvents(null,setup.org,[raw],enrolPublic(setup.secret));
-      Object.assign(connection,{person:body.person,genesis:raw,pendingState:state});
-      await storeKey(setup.org,1,directory);await saveConnection();
-     }finally{directory.fill(0);}
-    }
-    try{await client.postEvent(setup.org,raw,{auth:false});}
-    catch(error){
-     if(!(error instanceof ServiceError&&(error.status===409||error.status===401)))throw error;
-     // Already committed by an attempt whose answer was lost? Then the genesis is ours.
-     let events=[];
-     try{await client.signIn(setup.org,identity);events=await client.events(setup.org,0);}catch{}
-     if(events[0]!==raw)throw Error('This setup code was already used. Ask the operator for a new one, or restore with your recovery kit.');
-     state=applyEvents(null,setup.org,events,enrolPublic(setup.secret));
-    }
-    delete connection.genesis;delete connection.pendingState;await adopt(state);
-    await fulfilPending().catch(()=>{});
-    return newRecovery();
-   }finally{setup.secret.fill(0);}
+  async create({name,ownerName}={}){
+   if(orgConnected())throw Error('This browser is already connected to a service.');
+   const login=requireLogin();
+   if(login.role!=='admin')throw Error('Only an administrator of this deployment can create its organisation.');
+   const {service,org}=login,identity=await withCreatedKeys();await open();
+   client=orgClient(service,{fetchImpl});
+   // A previous attempt for this organisation left its keys and genesis here: resume it.
+   const previous=await readConnection();
+   let raw,state;
+   if(previous&&!previous.ready&&previous.org===org&&previous.device===identity.publicKey&&previous.genesis){connection=previous;raw=previous.genesis;state=previous.pendingState;}
+   else{
+    const info=await client.info(org);
+    if(info.genesis)throw Error('This organisation was already created. Ask an administrator to let you in.');
+    const directory=randomBytes(32);
+    try{
+     await freshConnection(service,org,null,identity,{ssoToken:login.token,provider:login.provider,providerLabel:login.label,deploymentName:login.name});
+     const body=genesisBody({org,device:identity.publicKey,agreement:connection.agreement.publicKey,directoryKey:directory,name:name||login.name||'Organisation',ownerName:ownerName||login.subject?.name||'Owner'});
+     raw=await signEvent({org,prev:org,type:'genesis',body},identity);
+     state=applyEvents(null,org,[raw]);
+     Object.assign(connection,{person:body.person,genesis:raw,pendingState:state});
+     await storeKey(org,1,directory);await saveConnection();
+    }finally{directory.fill(0);}
+   }
+   connection.ssoToken=login.token;
+   try{await client.postEvent(org,raw,{auth:false,sso:login.token});}
+   catch(error){
+    if(!(error instanceof ServiceError&&(error.status===409||error.status===401)))throw error;
+    // Already committed by an attempt whose answer was lost? Then the genesis is ours.
+    let events=[];
+    try{await client.signIn(org,identity,{sso:login.token});events=await client.events(org,0);}catch{}
+    if(events[0]!==raw)throw Error('This organisation was already created. Ask an administrator to let you in.');
+    state=applyEvents(null,org,events);
+   }
+   delete connection.genesis;delete connection.pendingState;markLinked(connection.person);await adopt(state);
+   await fulfilPending().catch(()=>{});
+   return newRecovery();
   },
   /** Replaces the recovery kit; the previous kit stops working on this service. */
   async replaceRecoveryKit(){await load();await refreshMembership();return newRecovery();},
@@ -1048,14 +1065,19 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    await db.put('links',{localId,project,epoch:1,keyCommit:commit,name:name||'Untitled project',lineage,created:false,seq:0,chain:project,devices:{},clientSeq:0,acked:0,vector:new Uint8Array([0]),pushedSequence:-1});
    return push(localId);
   },
-  /** A fresh browser: enrol it with the recovery kit and restore every backed-up project. */
+  /**
+   * A fresh browser of a signed-in member: enrol it with the recovery kit and restore every
+   * backed-up project. The kit opens a session only together with its person's sign-in.
+   */
   async restore(kitText){
    if(orgConnected())throw Error('This browser is already connected to a service.');
-   const kit=parseKit(kitText),secrets=recoverySecrets(kit.code);
+   const kit=parseKit(kitText),login=ssoLogin(kit.service,kit.org);
+   if(!login)throw Object.assign(Error('Sign in with your organisation at '+kit.service+' first, then restore with your kit.'),{sso:true,service:kit.service});
+   const secrets=recoverySecrets(kit.code);
    try{
     client=orgClient(kit.service,{fetchImpl});
-    try{await client.signIn(kit.org,secrets.signing);}
-    catch(error){if(error instanceof ServiceError&&(error.status===403||error.status===404))throw Error('This recovery kit is not active on this service: it was replaced by a newer one, or belongs to another organisation.');throw error;}
+    try{await client.signIn(kit.org,secrets.signing,{sso:login.token});}
+    catch(error){if(error instanceof ServiceError&&(error.status===403||error.status===404))throw Error('This recovery kit is not active for the account you signed in with: it was replaced by a newer one, or belongs to someone else.');throw error;}
     let state=applyEvents(null,kit.org,await client.events(kit.org,0));
     if(state.genesis!==kit.genesis)throw Error('This service’s organisation does not match your recovery kit.');
     const person=Object.entries(state.persons).find(([,p])=>p.recoverySigning===secrets.signingPublic)?.[0];
@@ -1067,13 +1089,13 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
     const previous=await readConnection();
     if(previous&&!previous.ready&&previous.org===kit.org&&previous.device===identity.publicKey&&state.devices[identity.publicKey]?.agreement===previous.agreement.publicKey)connection={...previous,state};
     else{
-     await freshConnection(kit.service,kit.org,person,identity);
+     await freshConnection(kit.service,kit.org,person,identity,{ssoToken:login.token,provider:login.provider,providerLabel:login.label,deploymentName:login.name});
      const proof=await deviceProof({org:kit.org,prev:state.head,person,device:identity.publicKey,agreement:connection.agreement.publicKey},identity);
      const raw=await signEvent({org:kit.org,prev:state.head,type:'device.add',body:{person,device:identity.publicKey,agreement:connection.agreement.publicKey,proof}},secrets.signing);
      state=applyEvents(state,kit.org,[raw]);await client.postEvent(kit.org,raw);
     }
     client.forget();
-    connection.state=state;
+    connection.state=state;connection.ssoToken=login.token;
     // Every key the kit can open is kept first, so restoring can be resumed later without the kit.
     const failures=[];let opened=0;
     for(const raw of await authed(()=>client.wraps(kit.org))){
@@ -1101,10 +1123,13 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
 
   async orgName(){return connection?.ready?nameOf('org',connection.state.name):null;},
   async members(){
-   await load();const out=[];
+   await load();const out=[],people=await authed(()=>client.people(connection.org)).catch(()=>({}));
    for(const [person,p] of Object.entries(connection.state.persons)){
     if(p.state==='removed')continue;
-    out.push({person,name:await nameOf(person,p.name)||(p.via==='sso'?'Asked to join with single sign-on':'Unnamed member'),role:p.role,state:p.state,via:p.via,me:person===connection.person,
+    // A join request's name is sealed for nobody (the joiner has no directory key yet): the
+    // service's word for who signed in stands in, and says so.
+    const email=typeof people[person]?.email==='string'?people[person].email:null;
+    out.push({person,name:await nameOf(person,p.name)||email||'Unnamed member',email,role:p.role,state:p.state,via:p.via,me:person===connection.person,
      devices:Object.values(connection.state.devices).filter(d=>d.person===person).length});
    }
    return out.sort((a,b)=>Number(b.me)-Number(a.me)||a.name.localeCompare(b.name));
@@ -1125,80 +1150,32 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   /** The role this person has on a linked local project, or null if it is not an org project. */
   async projectRole(localId){if(!connection?.ready)return null;const link=await db.get('links',localId);return link?role(link.project):null;},
   async allowedModes(localId){const r=await api.projectRole(localId);return r?ROLE_MODES[r]:null;},
-  async createInvite({role:orgRole='member',approval=false,sso=false,email='',project=null,projectRole=null,days=INVITE_DAYS}={}){
-   await load();await refreshMembership();
-   const secret=randomBytes(32),seed=inviteSeed(secret),invite=hex(randomBytes(16)),directory=await projectKey(connection.org,1);
-   try{
-    const emailHash=email?sha256Hex(new TextEncoder().encode(email.trim().toLowerCase())):undefined;
-    const isAdmin=['owner','admin'].includes(me()?.role);
-    await post('invite.create',()=>({invite,inviteKey:org_ed25519_public(seed),role:orgRole,expires:Math.floor(Date.now()/1000)+days*86400,
-     approval:orgRole==='admin'||!isAdmin||!!approval,sso:!!(sso||emailHash),...(emailHash?{emailHash}:{}),...(project?{project,projectRole}:{})}));
-    return formatInvite(appOrigin,{service:connection.service,org:connection.org,genesis:connection.state.genesis,invite,secret,directoryKey:directory});
-   }finally{secret.fill(0);seed.fill(0);directory.fill(0);}
-  },
-  async revokeInvite(invite){await load();await post('invite.revoke',()=>({invite}));},
   async approve(person,orgRole='member'){await load();await post('person.approve',()=>({person,role:orgRole}));await fulfilPending().catch(()=>{});},
   async setRole(person,orgRole){await load();await post('person.role',()=>({person,role:orgRole}));await fulfilPending().catch(()=>{});await rotateStale();},
   async removePerson(person){await load();await post('person.remove',()=>({person}));await rotateStale();},
   async grant(project,person,projectRole){await load();await post('project.grant',()=>({project,person,role:projectRole}));await fulfilPending();},
   async revoke(project,person){await load();await post('project.revoke',()=>({project,person}));await rotateStale();},
-  /** The org link (no secret): where people sign in with the organisation's SSO. */
-  async orgLink(){await load();return formatOrgLink(appOrigin,{service:connection.service,org:connection.org,genesis:connection.state.genesis});},
-  async ssoPolicy(){await load();return client.ssoPolicy(connection.org).catch(()=>({enabled:false}));},
+  /** The deployment this browser is connected to: its name and sign-in providers. */
+  async deploymentInfo(){await load();return orgClient(connection.service,{fetchImpl}).deployment();},
 
   // --- Joining
 
-  /** What an invitation link says, before anything is created. */
-  async describeInvite(text){
-   const invite=parseInvite(text),c=orgClient(invite.service,{fetchImpl});
-   try{
-    const [info,sso]=await Promise.all([c.info(invite.org),c.ssoPolicy(invite.org).catch(()=>({enabled:false}))]);
-    return{service:invite.service,org:invite.org,sso,exists:info.genesis,name:openName(invite.directoryKey,invite.org,'org',info.name)};
-   }finally{invite.secret.fill(0);invite.directoryKey.fill(0);}
+  /** What a deployment address offers before anyone signs in: its name, mode and providers. */
+  async deployment(address){
+   const service=serviceOrigin(String(address||'').trim());
+   return{service,...await orgClient(service,{fetchImpl}).deployment()};
   },
-  /** Joins with an invitation link: new device keys, a signed join, then (once admitted) the org. */
-  async join(text,{name}={}){
+  /** Whether the organisation of the tab's login exists yet (an administrator creates it first). */
+  async about(){const login=requireLogin();const info=await orgClient(login.service,{fetchImpl}).info(login.org);return{genesis:info.genesis,login};},
+  /** Asks to join as the person this tab is signed in as: pending until an administrator approves. */
+  async requestJoin(){
    if(orgConnected())throw Error('This browser is already connected to a service.');
-   const invite=parseInvite(text);
-   try{
-    const identity=await withCreatedKeys();await open();
-    client=orgClient(invite.service,{fetchImpl});
-    const previous=await readConnection();
-    if(previous&&!previous.ready&&previous.org===invite.org&&previous.device===identity.publicKey&&previous.joined)connection=previous;
-    else{
-     const login=ssoLogin(invite.service,invite.org),person=personId(invite.org,identity.publicKey);
-     await freshConnection(invite.service,invite.org,person,identity,{ssoToken:login?.token||null,genesisExpected:invite.genesis});
-     await storeKey(invite.org,1,invite.directoryKey);
-     for(let attempt=0;;attempt++){
-      const {head}=await client.info(invite.org),agreement=connection.agreement.publicKey;
-      const proof=await deviceProof({org:invite.org,prev:head,person,device:identity.publicKey,agreement},identity);
-      const seed=inviteSeed(invite.secret);
-      let inviteSig;try{inviteSig=org_ed25519_sign(seed,inviteMessage(invite.org,head,invite.invite,person,identity.publicKey,agreement));}finally{seed.fill(0);}
-      const raw=await signEvent({org:invite.org,prev:head,type:'person.join',body:{invite:invite.invite,person,device:identity.publicKey,agreement,proof,inviteSig,name:sealName(invite.directoryKey,invite.org,person,name)}},identity);
-      try{await client.postEvent(invite.org,raw,{auth:false,sso:login?.token});break;}
-      catch(error){
-       if(error instanceof ServiceError&&error.status===409&&attempt<3&&/head/.test(error.message))continue;
-       db?.close();db=null;connection=null;await deleteDB(DB).catch(()=>{});markConnected(false);
-       if(error instanceof ServiceError&&error.status===403&&/single sign-on|email/.test(error.message))throw Object.assign(Error(/email/.test(error.message)?'This invitation is for another email address.':'This invitation needs you to sign in with your organisation first.'),{sso:true});
-       if(error instanceof ServiceError&&error.status===410)throw Error('This invitation has expired. Ask for a new one.');
-       if(error instanceof ServiceError&&(error.status===400||error.status===409))throw Error('This invitation was already used or withdrawn. Ask for a new one.');
-       throw error;
-      }
-     }
-     connection.joined=true;await saveConnection();markJoining();
-    }
-    return{admitted:await admit(invite.genesis,{sso:connection.ssoToken})};
-   }finally{invite.secret.fill(0);invite.directoryKey.fill(0);}
-  },
-  /** Asks to join through the organisation's SSO (no invitation): pending until an admin approves. */
-  async requestJoin(orgText){
-   if(orgConnected())throw Error('This browser is already connected to a service.');
-   const link=parseOrgLink(orgText),login=ssoLogin(link.service,link.org);
-   if(!login)throw Object.assign(Error('Sign in with your organisation first.'),{sso:true});
+   const login=requireLogin(),link={service:login.service,org:login.org};
+   if(login.state!=='unlinked')throw Error(login.state==='blocked'?'Your organisation’s sign-in is disabled for you.':'You are already a member. Add this browser from one of your devices, or with your recovery kit.');
    const identity=await withCreatedKeys();await open();
    client=orgClient(link.service,{fetchImpl});
    const person=personId(link.org,identity.publicKey);
-   await freshConnection(link.service,link.org,person,identity,{ssoToken:login.token,genesisExpected:link.genesis});
+   await freshConnection(link.service,link.org,person,identity,{ssoToken:login.token,provider:login.provider,providerLabel:login.label,deploymentName:login.name});
    // Without the directory key the name can only be sealed for nobody; admins see the
    // person's identity-provider email and name instead.
    const throwaway=randomBytes(32);
@@ -1211,40 +1188,44 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
      catch(error){if(error instanceof ServiceError&&error.status===409&&attempt<3&&/head/.test(error.message))continue;db?.close();db=null;connection=null;await deleteDB(DB).catch(()=>{});markConnected(false);throw error;}
     }
    }finally{throwaway.fill(0);}
-   connection.joined=true;await saveConnection();markJoining();
-   return{admitted:await admit(link.genesis,{sso:login.token})};
+   connection.joined=true;await saveConnection();markJoining();markLinked(person);
+   return{admitted:await admit(null,{sso:login.token})};
   },
-  /** A join or device link waiting for approval: try to get in now. */
+  /** A join request or device request waiting for approval: try to get in now. */
   async checkAdmission(){
    await open();connection??=await readConnection();
    if(!connection||connection.ready)return!!connection?.ready;
    client??=orgClient(connection.service,{fetchImpl});
-   return admit(connection.genesisExpected,{sso:connection.ssoToken});
+   return admit(null,{sso:connection.ssoToken});
   },
 
   // --- Single sign-on
 
-  /** Starts SSO for an org: remembers the verifier in this tab and returns the IdP URL to open. */
-  async ssoBegin({service,org,purpose,carry=null}){
+  /**
+   * Starts signing in at a deployment with one of its providers: remembers the verifier in this
+   * tab and returns the provider's address to open.
+   */
+  async ssoBegin({service,provider,purpose='connect',carry=null}){
+   const c=orgClient(service,{fetchImpl}),deployment=await c.deployment(),chosen=deployment.providers.find(p=>p.id===provider);
+   if(!chosen)throw Error('This deployment does not offer that sign-in.');
    const verifier=randomBytes(32);
-   const {url}=await orgClient(service,{fetchImpl}).ssoStart(org,appOrigin,sha256Hex(verifier));
+   const {url}=await c.ssoStart(provider,appOrigin,sha256Hex(verifier));
    const checked=signInUrl(url);
-   writeSession(SSO_FLOW,{service,org,purpose,carry,verifier:hex(verifier),started:Date.now()});
+   writeSession(SSO_FLOW,{service,org:deployment.org,provider,label:chosen.label,name:deployment.name,purpose,carry,verifier:hex(verifier),started:Date.now()});
    return checked;
   },
-  /** Finishes SSO after the redirect back (`#scribyra-sso=…`). Returns the flow it belonged to. */
+  /** Finishes signing in after the redirect back (`#scribyra-sso=…`). Returns the flow and the login. */
   async ssoFinish(code){
    const flow=readSession(SSO_FLOW);writeSession(SSO_FLOW,null);
    if(!flow||!(Date.now()-flow.started<15*60*1000))throw Error('This sign-in was not started in this tab, or took too long. Start it again.');
    const login=await orgClient(flow.service,{fetchImpl}).ssoRedeem(code,flow.verifier);
    if(login.org!==flow.org)throw Error('The sign-in came back for another organisation.');
-   writeSession(SSO_LOGIN,{service:flow.service,org:flow.org,token:login.token,expires:login.expires,subject:login.subject,person:login.person,state:login.state});
-   if(orgConnected()&&!connection)await load().catch(()=>{});
-   if(connection?.ready&&connection.org===flow.org){connection.ssoToken=login.token;connection.ssoNeeded=false;await saveConnection();client?.forget();follow();for(const link of await db.getAll('links'))schedule(link.localId,100);onMembership();}
-   else if(connection&&!connection.ready&&connection.org===flow.org){connection.ssoToken=login.token;await saveConnection();}
-   return{...flow,login};
+   return{...flow,login:await useLogin(flow,login)};
   },
+  /** The login this tab holds (for the given deployment and organisation, if named). */
   ssoLogin,
+  /** Forgets this tab's login (to sign in with another account). */
+  forgetLogin(){writeSession(SSO_LOGIN,null);},
   async signOut(){await load();if(!connection.ssoToken)return;try{await client.ssoLogout(connection.ssoToken);}finally{connection.ssoToken=null;connection.ssoNeeded=true;await saveConnection();writeSession(SSO_LOGIN,null);client.forget();onMembership();}},
 
   // --- Devices
@@ -1253,75 +1234,38 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    await load();
    return Object.entries(connection.state.devices).filter(([,d])=>d.person===connection.person).map(([key])=>({key,me:key===connection.device,short:key.slice(0,8)}));
   },
-  /** Opens a one-time link for a new device of this person; returns the link to open there. */
-  async linkDevice(){
-   await load();
-   const secret=randomBytes(32),seed=linkSeed(secret),link=hex(randomBytes(16));
-   try{
-    await authed(()=>client.createLink(connection.org,link,org_ed25519_public(seed)));
-    const now=Date.now(),kept=Object.fromEntries(Object.entries(connection.deviceLinks||{}).filter(([,l])=>now-l.created<LINK_MS));
-    connection.deviceLinks={...kept,[link]:{sealed:await sealAtRest(connection.storageKey,secret,`scribyra-device-link/1\n${link}`),created:now}};await saveConnection();
-    return formatDeviceLink(appOrigin,{service:connection.service,org:connection.org,genesis:connection.state.genesis,person:connection.person,link,secret});
-   }finally{seed.fill(0);secret.fill(0);}
-  },
-  /** New devices (by link or SSO) waiting for this person's approval. Link answers come with the
-   * code both screens show; SSO requests need the code the new browser shows typed in here. */
+  /** New browsers of this person that signed in and wait to be added; each needs the code its
+   * browser shows typed in here. */
   async deviceRequests(){
    await load();
    const out=[];
    for(const {link,request} of await authed(()=>client.links(connection.org))){
-    if(!request)continue;
-    if(request.via==='sso'){out.push({link,via:'sso',device:request.device,agreement:request.agreement,proof:request.proof,mac:request.mac,email:request.email||null,code:null});continue;}
-    const stored=connection.deviceLinks?.[link];
-    if(!stored||Date.now()-stored.created>=LINK_MS)continue;
-    const secret=await openAtRest(connection.storageKey,stored.sealed,`scribyra-device-link/1\n${link}`),seed=linkSeed(secret);
-    // The link key, known only to both devices, must have signed the new keys.
-    let ok=false;
-    try{ok=org_ed25519_verify(org_ed25519_public(seed),deviceRequestMessage(connection.org,link,connection.person,request.device,request.agreement),request.sig);
-     if(ok)out.push({link,via:'link',device:request.device,agreement:request.agreement,proof:request.proof,code:linkCode(secret,request.device,request.agreement)});}
-    finally{seed.fill(0);secret.fill(0);}
+    if(request?.via!=='sso')continue;
+    out.push({link,via:'sso',device:request.device,agreement:request.agreement,proof:request.proof,mac:request.mac,email:request.email||null});
    }
    return out;
   },
   /**
-   * Adds exactly the device the person was shown (never whatever the service answers now). An
-   * SSO request also needs the code its browser shows, checked against the keys it asked with.
+   * Adds exactly the device the person was shown (never whatever the service answers now), once
+   * the code its browser shows was typed here and matches the keys it asked with.
    */
   async approveDevice(shown,{code}={}){
    await load();
    const request=(await api.deviceRequests()).find(r=>r.link===shown.link);
-   if(!request||request.device!==shown.device||request.agreement!==shown.agreement||request.proof!==shown.proof)throw Error('That device request changed or is gone. Start linking again.');
-   if(request.via==='sso'&&deviceCodeMac(code,request.device,request.agreement)!==request.mac)throw Error('That code does not match the new browser. Check the code it shows and type it again.');
+   if(!request||request.device!==shown.device||request.agreement!==shown.agreement||request.proof!==shown.proof)throw Error('That device request changed or is gone. Ask again from the new browser.');
+   if(deviceCodeMac(code,request.device,request.agreement)!==request.mac)throw Error('That code does not match the new browser. Check the code it shows and type it again.');
    await post('device.add',()=>({person:connection.person,device:request.device,agreement:request.agreement,proof:request.proof,link:request.link}));
-   if(connection.deviceLinks?.[request.link]){delete connection.deviceLinks[request.link];await saveConnection();}
    await fulfilPending();
   },
   async removeDevice(device){await load();await post('device.remove',()=>({device}));await rotateStale();},
-  /** On the new device: answers a device link and shows the code to compare. */
-  async acceptDeviceLink(text){
+  /** On a new browser signed in as an existing member: asks one of their devices to add it. */
+  async requestDevice(){
    if(orgConnected())throw Error('This browser is already connected to a service.');
-   const link=parseDeviceLink(text);
-   try{
-    const identity=await withCreatedKeys();await open();
-    client=orgClient(link.service,{fetchImpl});
-    await freshConnection(link.service,link.org,link.person,identity,{genesisExpected:link.genesis,joined:true});
-    const agreement=connection.agreement.publicKey,seed=linkSeed(link.secret);
-    let sig;try{sig=org_ed25519_sign(seed,deviceRequestMessage(link.org,link.link,link.person,identity.publicKey,agreement));}finally{seed.fill(0);}
-    const proof=await deviceProof({org:link.org,link:link.link,person:link.person,device:identity.publicKey,agreement},identity);
-    try{await client.answerLink(link.org,link.link,{device:identity.publicKey,agreement,proof,sig});}
-    catch(error){db?.close();db=null;connection=null;await deleteDB(DB).catch(()=>{});markConnected(false);if(error instanceof ServiceError&&(error.status===404||error.status===409))throw Error('This device link was already used or has expired. Make a new one.');throw error;}
-    connection.linkCode=linkCode(link.secret,identity.publicKey,agreement);await saveConnection();
-    return{code:connection.linkCode};
-   }finally{link.secret.fill(0);}
-  },
-  /** On the new device, signed in with SSO as an existing member: asks to be added. */
-  async requestDeviceBySso(orgText){
-   if(orgConnected())throw Error('This browser is already connected to a service.');
-   const org=parseOrgLink(orgText),login=ssoLogin(org.service,org.org);
-   if(!login?.person)throw Error('Sign in with your organisation first.');
+   const login=requireLogin(),org={service:login.service,org:login.org};
+   if(login.state!=='linked'||!login.person)throw Error('This account is not a member yet. Ask to join instead.');
    const identity=await withCreatedKeys();await open();
    client=orgClient(org.service,{fetchImpl});
-   await freshConnection(org.service,org.org,login.person,identity,{genesisExpected:org.genesis,joined:true,ssoToken:login.token});
+   await freshConnection(org.service,org.org,login.person,identity,{joined:true,ssoToken:login.token,provider:login.provider,providerLabel:login.label,deploymentName:login.name});
    const agreement=connection.agreement.publicKey,link=hex(randomBytes(16));
    const proof=await deviceProof({org:org.org,link,person:login.person,device:identity.publicKey,agreement},identity),code=newDeviceCode();
    await client.ssoDeviceRequest(org.org,{link,device:identity.publicKey,agreement,proof,mac:deviceCodeMac(code,identity.publicKey,agreement)},login.token);

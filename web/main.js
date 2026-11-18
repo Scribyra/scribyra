@@ -194,20 +194,19 @@ function remoteBackup(){
   return orgEngine;
 }
 // The organisation engine signs, verifies and seals with the WASM core: nothing of it runs before
-// the module is initialised (an invitation link can be opened, and acted on, before that).
+// the module is initialised (the return from a sign-in can arrive before that).
 const wasmReady=init();
 if(orgConnected()||orgJoining())void wasmReady.then(()=>remoteBackup().start()).catch(error=>notice('Remote backup could not start: '+error.message));
-// Organisation links arrive in the fragment (never sent to the app's host): an invitation, a
-// device link, an org's sign-in link, or the return from the org's single sign-on.
+// The return from the organisation's sign-in arrives in the fragment (never sent to the app's host).
 function openOrgPanel(prefill={}){orgPanel?.close();orgPanel=orgDialog({engine:remoteBackup(),anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});}
+const SIGN_IN_ERRORS={guest:'Guest accounts can’t use this organisation’s Scribyra.',not_member:'Your account is not in a group that may use this organisation’s Scribyra. Ask your administrator.'};
 function takeOrgFragment(){
   const hash=location.hash;
-  const kind=['#join=','#device=','#org=','#scribyra-sso=','#scribyra-sso-error='].find(prefix=>hash.startsWith(prefix));
+  const kind=['#scribyra-sso=','#scribyra-sso-error='].find(prefix=>hash.startsWith(prefix));
   if(!kind)return;
-  const text=location.href;history.replaceState(null,'',location.pathname+location.search);
-  if(kind==='#scribyra-sso-error=')return void notice('Signing in with your organisation did not work ('+hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')+'). Try again.');
-  if(kind==='#scribyra-sso='){const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code});return;}
-  openOrgPanel({[kind==='#join='?'invite':kind==='#device='?'device':'org']:text});
+  history.replaceState(null,'',location.pathname+location.search);
+  if(kind==='#scribyra-sso-error=')return void notice(SIGN_IN_ERRORS[hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')]||'Signing in with your organisation did not work ('+hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')+'). Try again.');
+  const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code});
 }
 window.addEventListener('hashchange',()=>void wasmReady.then(takeOrgFragment,()=>{}));
 void wasmReady.then(takeOrgFragment,()=>{});
