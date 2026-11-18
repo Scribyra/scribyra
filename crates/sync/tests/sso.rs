@@ -243,6 +243,11 @@ fn discovery_issuer_must_match_exactly() {
     let service = Service::new(json!({"bind": format!("127.0.0.1:{port}"), "public_url": public, "origins": [APP], "deployment": deployment}));
     let c = Client { base: service.url.clone(), provider: "test".into(), idp: &idp };
     assert_eq!(c.start_with("test", APP, &sha256(&random_bytes(32))).status, 502);
+    // The log line is read from the service's stdout by another thread: it may land just after the answer.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while !service.logs.lock().unwrap().contains("discovery_issuer") && std::time::Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
     assert!(service.logs.lock().unwrap().contains("discovery_issuer"));
 }
 
