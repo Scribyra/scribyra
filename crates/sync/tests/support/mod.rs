@@ -413,8 +413,12 @@ impl Service {
     }
     /// Start the service; `Err` carries the exit status and output if it did not start.
     pub fn start(&mut self) -> Result<(), String> {
+        self.start_with(&[])
+    }
+    /// Start a command that prints a `listening` event (`serve`, `compile-worker`).
+    pub fn start_with(&mut self, args: &[&str]) -> Result<(), String> {
         let mut child = self
-            .command(&[])
+            .command(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
