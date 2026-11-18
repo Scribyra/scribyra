@@ -13,8 +13,8 @@ fn parse(args: &[String]) -> Option<Command> {
     match args {
         [] => Some(Command::Serve),
         [cmd] if cmd == "serve" => Some(Command::Serve),
+        [cmd] if cmd == scribyra_sync::deploy::COMMAND_MIGRATE => Some(Command::Migrate),
         [cmd] if cmd == "verify" => Some(Command::Verify),
-        [cmd] if cmd == "migrate" => Some(Command::Migrate),
         [cmd, dir] if cmd == "migrate-sqlite" => Some(Command::MigrateSqlite(dir.into())),
         _ => None,
     }

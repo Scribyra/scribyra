@@ -241,6 +241,7 @@ fn blob_store(sr: &Sr) -> Box<dyn scribyra_sync::blobs::BlobStore> {
                     access_key_id: c["s3_access_key_id"].as_str().unwrap().into(),
                     secret_access_key: std::fs::read_to_string(c["s3_secret_access_key_file"].as_str().unwrap()).unwrap().trim().into(),
                     path_style: true,
+                    ca_pem: None,
                 })
                 .unwrap(),
             )

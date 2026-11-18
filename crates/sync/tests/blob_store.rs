@@ -134,6 +134,7 @@ fn s3_settings_refuse_remote_plain_http_and_credentials_in_url() {
         access_key_id: "k".into(),
         secret_access_key: "s".into(),
         path_style: false,
+        ca_pem: None,
     };
     assert!(S3BlobStore::new(base.clone()).is_ok());
     for endpoint in [

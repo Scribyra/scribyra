@@ -117,6 +117,7 @@ Configuration reload is a restart.
 | `s3_access_key_id` | none | Access key ID |
 | `s3_secret_access_key_file` | none | File holding the secret access key |
 | `s3_path_style` | `false` | `true` for path-style URLs (Garage, MinIO, IP endpoints); `false` for virtual-host style (AWS, R2) |
+| `s3_ca_file` | none | PEM file with the only certificate authority trusted for `s3_endpoint`, instead of the platform trust store. The Kubernetes operator sets it for its in-cluster Garage, which it serves over TLS with a private CA ([operator](operator.md)) |
 
 All S3 fields are required when `blob_store` is `"s3"`. The S3 key needs only
 object read, write and delete on its bucket, plus `HeadBucket` for readiness.
@@ -921,7 +922,11 @@ install the new binary, start it (or run `scribyra-sync migrate` first and start
 embedded in the binary and recorded in the `_sqlx_migrations` table with
 checksums) run automatically at startup. A database with a migration the binary
 does not know (a newer schema) or an applied migration whose checksum differs
-is refused; startup exits 1. Migrations are append-only. For rollback restore
+is refused; startup exits 1. Migrations are append-only. `scribyra-sync migrate` applies pending migrations and exits
+(`{"event":"migrated","applied":n,"schema":N}`) without opening the blob store or serving; it
+takes no ownership lock (the migrator serialises itself), so it can run as a Job while replicas
+of the previous version serve, as long as each release's migrations are additive. The Kubernetes
+operator runs it as a Job before rolling out a new version ([operator](operator.md)). For rollback restore
 the pre-upgrade backup with the old binary; never run an old binary against a
 newer schema.
 
