@@ -575,6 +575,11 @@ impl Sso {
     /// and server errors keep the login and retry on the next pass. A refreshed ID token updates
     /// the login's groups and guest mark, and an account that no longer passes the group and
     /// guest rules has its logins revoked (not blocked: the provider still vouches for it).
+    ///
+    /// Every replica runs this pass; a due login is claimed before its provider is called (`FOR
+    /// UPDATE SKIP LOCKED`, and `checked` moved in the same statement), so only one replica ever
+    /// uses a given refresh token (review H3: two using it looked like token theft to providers
+    /// with reuse detection, and the `invalid_grant` that followed revoked and blocked the person).
     pub async fn recheck(&self) {
         // Expired or revoked logins are kept a week for operators, then deleted.
         let _ = sqlx::query("DELETE FROM sso_logins WHERE expires < now() - interval '7 days' OR (revoked AND created < now() - interval '7 days')")
@@ -584,10 +589,13 @@ impl Sso {
         let (mut checked, mut refreshed, mut revoked, mut failed) = (0usize, 0u32, 0u32, 0u32);
         for configured in &deployment.providers {
             let rows = sqlx::query(
-                "SELECT token_hash, issuer, subject, refresh_token FROM sso_logins
-                 WHERE org = $1 AND provider = $2 AND NOT revoked AND refresh_token IS NOT NULL AND expires > now()
-                   AND checked <= now() - make_interval(secs => $3)
-                 ORDER BY checked LIMIT $4",
+                "UPDATE sso_logins l SET checked = now() FROM (
+                   SELECT token_hash, checked FROM sso_logins
+                   WHERE org = $1 AND provider = $2 AND NOT revoked AND refresh_token IS NOT NULL AND expires > now()
+                     AND checked <= now() - make_interval(secs => $3)
+                   ORDER BY checked LIMIT $4 FOR UPDATE SKIP LOCKED) due
+                 WHERE l.token_hash = due.token_hash
+                 RETURNING l.token_hash, l.issuer, l.subject, l.refresh_token, extract(epoch FROM due.checked)::float8",
             )
             .bind(org)
             .bind(&configured.id)
@@ -602,14 +610,15 @@ impl Sso {
             checked += rows.len();
             for row in &rows {
                 let (token_hash, issuer, subject, refresh): (String, String, String, String) = (row.get(0), row.get(1), row.get(2), row.get(3));
-                if issuer != configured.issuer {
-                    failed += 1;
-                    continue;
-                }
-                match self.recheck_one(deployment, configured, org, &token_hash, &subject, refresh).await {
+                let outcome = if issuer != configured.issuer { Ok(Recheck::Retry) } else { self.recheck_one(deployment, configured, org, &token_hash, &subject, refresh).await };
+                match outcome {
                     Ok(Recheck::Kept) => refreshed += 1,
                     Ok(Recheck::Revoked) => revoked += 1,
-                    Ok(Recheck::Retry) | Err(_) => failed += 1,
+                    Ok(Recheck::Retry) | Err(_) => {
+                        failed += 1;
+                        // Not checked after all: due again on the next pass (on any replica).
+                        let _ = sqlx::query("UPDATE sso_logins SET checked = to_timestamp($2) WHERE token_hash = $1").bind(&token_hash).bind(row.get::<f64, _>(4)).execute(&self.store.pool).await;
+                    }
                 }
             }
         }

@@ -516,3 +516,49 @@ fn each_provider_has_its_own_redirect_uri_and_a_response_counts_only_there() {
     // The path without a provider is gone.
     assert_eq!(fetch(&c.url("/v1/sso/callback?code=x&state=y"), None).status, 404);
 }
+
+/// Review H3: every replica ran the recheck over the same due logins. Two of them refreshing the
+/// same (rotating) refresh token meant one got `invalid_grant` for the other's use, and that
+/// revoked every login of the person and blocked them. Due logins are now claimed (`FOR UPDATE
+/// SKIP LOCKED`, `checked` moved in the same statement) before the provider is called.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_replicas_never_refresh_the_same_token() {
+    use scribyra_sync::{config::Config, listener, service, sso::Sso, store::Store};
+    use std::sync::Arc;
+    let port = free_port();
+    let public = format!("http://127.0.0.1:{port}");
+    let dir = temp_dir("scribyra-sso-claim-");
+    let public2 = public.clone();
+    let idp = Arc::new(tokio::task::spawn_blocking(move || Idp::start("RS256", &public2, default_users())).await.unwrap());
+    let config = Config {
+        bind: format!("127.0.0.1:{port}").parse().unwrap(),
+        data: dir.join("data"),
+        database_url: Some(tokio::task::spawn_blocking(|| postgres().database()).await.unwrap()),
+        origins: vec![APP.into()],
+        public_url: Some(public.clone()),
+        deployment: Some(serde_json::from_value(deployment(&idp, json!({"provider": {"offline_access": true}}))).unwrap()),
+        ..Config::default()
+    };
+    let store = Store::open(config.clone()).await.unwrap();
+    let s = service::state(store).unwrap();
+    let tcp = tokio::net::TcpListener::bind(config.bind).await.unwrap();
+    tokio::spawn(axum::serve(listener::Listener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(64)) }, service::router(s.clone()).into_make_service_with_connect_info::<listener::Connection>()).into_future());
+    // A second replica's sign-in module on the same database.
+    let other = Sso::new(s.store.clone());
+    let (i, base) = (idp.clone(), public.clone());
+    let token = tokio::task::spawn_blocking(move || Client { base, provider: "test".into(), idp: &i }.login("alice")["token"].as_str().unwrap().to_owned()).await.unwrap();
+    let refresh = || sqlx::query_scalar::<_, String>("SELECT refresh_token FROM sso_logins WHERE token_hash = $1").bind(sha256(token.as_bytes())).fetch_one(&s.store.pool);
+    let before = refresh().await.unwrap();
+    // The provider answers refresh grants slowly, so both passes are in flight at once.
+    let i = idp.clone();
+    assert_eq!(tokio::task::spawn_blocking(move || i.control("delay?ms=1500").status).await.unwrap(), 200);
+    for round in 0..2 {
+        sqlx::query("UPDATE sso_logins SET checked = now() - interval '1 day'").execute(&s.store.pool).await.unwrap();
+        tokio::join!(s.sso.recheck(), other.recheck());
+        assert!(s.sso.login(&token).await.unwrap().is_some(), "round {round}: the login was revoked");
+        assert_eq!(sqlx::query_scalar::<_, String>("SELECT state FROM accounts WHERE subject = 'sub-alice'").fetch_one(&s.store.pool).await.unwrap(), "active");
+    }
+    assert_ne!(refresh().await.unwrap(), before, "no refresh happened");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}

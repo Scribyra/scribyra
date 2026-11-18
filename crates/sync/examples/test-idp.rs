@@ -24,7 +24,8 @@
 //! nonce), `/end_session`. A user's `claims` object adds claims to their ID tokens (for example
 //! a guest marker). On a loopback bind only, `/control/disable?user=`, `/control/enable?user=`,
 //! `/control/groups?user=&groups=a,b` (the user's groups from now on), `/control/rotate[?drop=1]`,
-//! `/control/fault?kind=` (the next ID token is defective: `bad_signature`, `wrong_aud`,
+//! `/control/delay?ms=` (refresh grants wait this long before they are answered, so two callers
+//! can race with the same refresh token), `/control/fault?kind=` (the next ID token is defective: `bad_signature`, `wrong_aud`,
 //! `wrong_iss`, `wrong_nonce`, `expired`, `alg_none`, `alg_hs256`, `unknown_kid`,
 //! `no_kid_multi_key` or `email_unverified`) and `/control/backchannel?user=` (posts a signed
 //! logout token to each client's `backchannel_logout_uri`).
@@ -194,6 +195,8 @@ struct Idp {
     groups: Mutex<HashMap<String, Vec<String>>>,
     sids: Mutex<HashMap<String, String>>,
     fault: Mutex<Option<String>>,
+    /// How long refresh grants wait (`/control/delay`).
+    delay: Mutex<Duration>,
 }
 type Shared = Arc<Idp>;
 
@@ -432,7 +435,10 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
             }
         }
         "refresh_token" => {
-            // Refresh tokens rotate: each one works once.
+            let delay = *idp.delay.lock().unwrap();
+            tokio::time::sleep(delay).await;
+            // Refresh tokens rotate: each one works once; a reused one is refused (as providers
+            // with reuse detection do).
             let refresh = idp.refresh.lock().unwrap().remove(&get("refresh_token"));
             let Some(refresh) = refresh.filter(|r| r.client_id == client.client_id) else { return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant") };
             match idp.user(&refresh.username).filter(|u| idp.enabled(u)) {
@@ -467,6 +473,9 @@ async fn control(State(idp): State<Shared>, ConnectInfo(peer): ConnectInfo<Socke
         "groups" => {
             let groups = arg("groups").split(',').filter(|g| !g.is_empty()).map(str::to_owned).collect();
             idp.groups.lock().unwrap().insert(arg("user"), groups);
+        }
+        "delay" => {
+            *idp.delay.lock().unwrap() = Duration::from_millis(arg("ms").parse().unwrap_or(0));
         }
         "fault" => {
             const KINDS: [&str; 10] = ["bad_signature", "wrong_aud", "wrong_iss", "wrong_nonce", "expired", "alg_none", "alg_hs256", "unknown_kid", "no_kid_multi_key", "email_unverified"];
@@ -564,6 +573,7 @@ async fn main() {
         groups: Mutex::default(),
         sids: Mutex::default(),
         fault: Mutex::default(),
+        delay: Mutex::default(),
     });
     let mut app = Router::new()
         .route("/.well-known/openid-configuration", get(discovery))
