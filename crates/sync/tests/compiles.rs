@@ -303,7 +303,7 @@ fn status_of(url: &str) -> u16 {
 #[test]
 fn the_queue_is_bounded_a_newer_request_replaces_a_queued_one_and_members_are_rate_limited() {
     // No worker: jobs stay queued.
-    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"queue": 2, "per_member_per_hour": 5}));
+    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"queue": 2, "per_member_per_hour": 7}));
     let ana = sr.api(&sr.login("alice"));
     let ((p1, d1), (p2, _), (p3, _)) = (paper(&ana, "One", &hello("1")), paper(&ana, "Two", &hello("2")), paper(&ana, "Three", &hello("3")));
     let a = ana.compile(&p1, None).json()["job"].as_str().unwrap().to_owned();
@@ -328,7 +328,8 @@ fn the_queue_is_bounded_a_newer_request_replaces_a_queued_one_and_members_are_ra
     // Replacing does not grow the queue, so it is still allowed.
     edit(&ana);
     assert_eq!(ana.compile(&p1, None).status, 202);
-    // Five requests this hour (a, b, two, the latest one, and this one); the sixth is refused.
+    // Seven requests this hour (every answer counts: a, the same again, b, two, three, the
+    // latest one, and this one); the eighth is refused.
     edit(&ana);
     assert_eq!(ana.compile(&p1, None).status, 202);
     edit(&ana);
@@ -340,7 +341,7 @@ fn the_queue_is_bounded_a_newer_request_replaces_a_queued_one_and_members_are_ra
     assert_eq!(ben.compile(&p1, None).status, 202);
     assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compiles WHERE state = 'queued'"), "2");
     // A version past the head or before the floor is refused.
-    assert_eq!(ana.compile(&p2, Some(99)).status, 400);
+    assert_eq!(ben.compile(&p1, Some(99)).status, 400);
 }
 
 #[test]
@@ -550,4 +551,29 @@ fn one_member_or_owner_cannot_monopolise_the_queue_and_workers_take_requesters_i
         order
     });
     assert_eq!(order, vec![j1, k1, j2]);
+}
+
+#[test]
+fn requests_are_counted_before_the_project_is_materialised_whatever_they_answer() {
+    // Review M2: every request replayed the whole project before any limit, and answers that
+    // queued nothing (cached, existing, errors) were never counted.
+    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"per_member_per_hour": 2, "per_project_per_minute": 3}));
+    let (ana, ben, cat, dan) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")), sr.api(&sr.login("cat")), sr.api(&sr.login("dan")));
+    let notes = ana.create("No main file");
+    assert_eq!(ana.append(&notes, "a", 1, &Project::new().add_text("f1", "notes.tex", None, "x")).status, 201);
+    assert_eq!(ana.compile(&notes, None).status, 400);
+    assert_eq!(ana.compile(&notes, None).status, 400);
+    let limited = ana.compile(&notes, None);
+    assert_eq!((limited.status, limited.header("retry-after")), (429, Some("60")));
+    // Per project, from all its members together: queued, then the same files twice.
+    let (p, _) = paper(&ben, "Busy", &hello("x"));
+    for who in ["cat", "dan"] {
+        assert_eq!(ben.invite(&p, &format!("{who}@example.org"), "editor").status, 201);
+    }
+    assert_eq!(ben.compile(&p, None).status, 202);
+    assert_eq!(ben.compile(&p, None).status, 200);
+    assert_eq!(cat.compile(&p, None).status, 200);
+    assert_eq!(dan.compile(&p, None).status, 429);
+    // Refused requests are not recorded.
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compile_requests"), "5");
 }

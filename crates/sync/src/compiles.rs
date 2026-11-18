@@ -248,8 +248,33 @@ impl Compiles {
         self.projects.store.config.deployment.as_ref().map(|d| d.compile).unwrap_or_default()
     }
 
+    /// Counts a request against `per_member_per_hour` and `per_project_per_minute` before
+    /// anything is materialised (review M2: every request replayed the whole project first, and
+    /// cached, existing and failed answers were free). Refused requests are not recorded.
+    async fn admit(&self, project: &str, account: &str) -> Result<(), RequestError> {
+        let mut tx = self.pool().begin().await?;
+        let (member, recent): (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM compile_requests WHERE account = $1 AND at > now() - interval '1 hour'),
+                    (SELECT count(*) FROM compile_requests WHERE project = $2 AND at > now() - interval '1 minute')",
+        )
+        .bind(account)
+        .bind(project)
+        .fetch_one(&mut *tx)
+        .await?;
+        if member >= self.limits.per_member_per_hour as i64 || recent >= self.limits.per_project_per_minute as i64 {
+            return Err(RequestError::RateLimited);
+        }
+        let n = sqlx::query("INSERT INTO compile_requests (account, project) SELECT $1, project FROM sr_projects WHERE project = $2 AND deleted IS NULL").bind(account).bind(project).execute(&mut *tx).await?.rows_affected();
+        if n == 0 {
+            return Err(RequestError::NotFound);
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Queues a compile of `project` at `seq` (its head when `None`) for `account`.
     pub async fn request(&self, project: &str, account: &str, seq: Option<i64>) -> Result<Requested, RequestError> {
+        self.admit(project, account).await?;
         let m = match self.projects.materialise_at(project, seq, false).await {
             Ok(m) => m,
             Err(e) if e.to_string() == server_projects::COMPACTED => return Err(RequestError::Compacted),
@@ -282,10 +307,6 @@ impl Compiles {
             .await?;
         if let Some((job, state)) = same {
             return Ok(Requested::Existing { job, state });
-        }
-        let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM compiles WHERE requested_by = $1 AND queued > now() - interval '1 hour'").bind(account).fetch_one(&mut *tx).await?;
-        if recent >= self.limits.per_member_per_hour as i64 {
-            return Err(RequestError::RateLimited);
         }
         // The queue lock serialises the bounds below (the queue, each member's and each owner's
         // active jobs) across projects and replicas.
@@ -363,6 +384,8 @@ impl Compiles {
     }
     /// Takes back running jobs whose worker stopped heartbeating: requeued once, then failed.
     pub async fn reap(&self) -> Result<u64, Error> {
+        // Request records only count for an hour.
+        sqlx::query("DELETE FROM compile_requests WHERE at < now() - interval '1 hour'").execute(self.pool()).await?;
         let expired: Vec<(String, String)> = sqlx::query_as("SELECT job, project FROM compiles WHERE state = 'running' AND heartbeat < now() - make_interval(secs => $1)")
             .bind(self.heartbeat_timeout as f64)
             .fetch_all(self.pool())
