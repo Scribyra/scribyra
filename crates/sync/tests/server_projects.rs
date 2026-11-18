@@ -641,3 +641,28 @@ fn a_client_id_belongs_to_the_account_that_uses_it() {
     // Within one account a slot still holds one update.
     assert_eq!(ana.append(&p, "browser-a", 2, &squat).status, 409);
 }
+
+#[test]
+fn emails_are_normalised_once_and_compared_as_stored() {
+    // Review L2: invitations lowercased emails in Rust (Unicode) but matched accounts with
+    // PostgreSQL's lower() (by the database's locale: ASCII only under C), so a person whose
+    // provider sends `Émile@…` was never matched by an invitation to `émile@…`. Emails are now
+    // normalised once (trimmed, Unicode lowercase) when stored and compared as stored.
+    let mut users = users();
+    for (name, email) in [("emile", "Émile@Example.org"), ("odon", "ÖDÖN@example.org")] {
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name}));
+    }
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Accents");
+    // An account that exists is shared at once, whatever case the inviter types.
+    let emile = sr.api(&sr.login("emile"));
+    assert_eq!(postgres().psql(&sr.db(), "SELECT email FROM accounts WHERE subject = 'sub-emile'"), "émile@example.org");
+    assert_eq!(ana.invite(&p, " ÉMILE@example.ORG ", "viewer").json()["status"], "shared");
+    assert_eq!(emile.details(&p).json()["role"], "viewer");
+    // A pending invitation is accepted at the first sign-in.
+    assert_eq!(ana.invite(&p, "ödön@EXAMPLE.org", "editor").json()["invitation"]["email"], "ödön@example.org");
+    let odon = sr.api(&sr.login("odon"));
+    assert_eq!(odon.details(&p).json()["role"], "editor");
+    assert_eq!(sr.env.client().me(&odon.token).json()["email"], "ödön@example.org");
+}

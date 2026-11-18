@@ -130,6 +130,14 @@ fn admin_email_matches(entry: &str, provider: &Configured, email: &str) -> bool 
         None => entry == email && vouches(provider, email),
     }
 }
+/// The one form an email is stored and compared in (review L2): surrounding space trimmed and
+/// Unicode lowercase (Rust's, which does not depend on a locale). Accounts, logins and
+/// invitations store it; SQL compares stored values with `=` and never calls `lower()`, whose
+/// result depends on the database's locale. No Unicode normalisation (NFC) is applied: an
+/// address is matched in the form its provider sends.
+pub fn normalise_email(text: &str) -> String {
+    text.trim().to_lowercase()
+}
 /// Whether this provider's `email_domains` include the (normalised) email's domain: only then
 /// does a plain email name its accounts there (admins, invitations).
 pub fn vouches(provider: &Configured, email: &str) -> bool {
@@ -148,7 +156,7 @@ pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, emai
         };
     }
     let pair = format!("{}#{subject}", provider.issuer);
-    let email = email.filter(|_| email_verified).map(str::to_lowercase);
+    let email = email.filter(|_| email_verified).map(normalise_email);
     let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)));
     let admin = listed || groups.iter().any(|g| provider.admin_groups.contains(g));
     if !admin && !provider.member_groups.is_empty() && !groups.iter().any(|g| provider.member_groups.contains(g)) {
@@ -702,7 +710,8 @@ impl Sso {
                     .bind(rotated)
                     .execute(&self.store.pool)
                     .await?;
-                let Some(id) = identity else { return Ok(Recheck::Kept) };
+                let Some(mut id) = identity else { return Ok(Recheck::Kept) };
+                id.email = id.email.as_deref().map(normalise_email);
                 sqlx::query("UPDATE sso_logins SET email = $4, email_verified = $5, name = $6, groups = $7::jsonb, guest = $8 WHERE org = $1 AND issuer = $2 AND subject = $3 AND NOT revoked")
                     .bind(org)
                     .bind(&configured.issuer)
@@ -1041,7 +1050,7 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     .bind(sha256_hex(request.code.as_bytes()))
     .fetch_optional(&s.store.pool)
     .await;
-    let grant = match grant {
+    let mut grant = match grant {
         Ok(Some((provider, challenge, identity, refresh_token, session_seconds))) => match identity_from_json(&identity) {
             Some(identity) => Grant { provider, challenge, identity, refresh_token, session_seconds },
             None => return internal(()),
@@ -1058,6 +1067,7 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     }
     let (Some((deployment, configured)), Some(org)) = (s.configured(&grant.provider), s.org.clone()) else { return error(StatusCode::UNAUTHORIZED, "unknown or expired grant") };
     let token = random_hex();
+    grant.identity.email = grant.identity.email.as_deref().map(normalise_email);
     let id = &grant.identity;
     let Ok(role) = admit(deployment, configured, &id.subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest) else {
         return error(StatusCode::FORBIDDEN, "this account cannot sign in here");

@@ -683,8 +683,9 @@ pub async fn notify_account(tx: &mut sqlx::PgConnection, account: &str) -> Resul
 /// `email_domains` vouch for the email (review H2).
 pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate::config::Deployment) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let row: Option<(String, String)> = sqlx::query_as("SELECT lower(email), provider FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
+    let row: Option<(String, String)> = sqlx::query_as("SELECT email, provider FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
     let Some((email, provider)) = row else { return Ok(()) };
+    let email = crate::sso::normalise_email(&email);
     let vouched = deployment.provider(&provider).is_some_and(|p| crate::sso::vouches(p, &email));
     let accepted: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p
@@ -1373,10 +1374,10 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
     let text = request.email.trim();
     let (named, email) = match text.split_once(':') {
         Some((id, email)) => match deployment.provider(id) {
-            Some(provider) => (Some(provider), email.to_lowercase()),
+            Some(provider) => (Some(provider), crate::sso::normalise_email(email)),
             None => return error(StatusCode::BAD_REQUEST, "unknown provider"),
         },
-        None => (None, text.to_lowercase()),
+        None => (None, crate::sso::normalise_email(text)),
     };
     if !valid_email(&email) || Access::share(&request.role).is_none() {
         return error(StatusCode::BAD_REQUEST, "invalid email or role");
@@ -1397,7 +1398,7 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
         let owner: String = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(&p).fetch_one(&mut *tx).await?;
-        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE lower(email) = $1 AND email_verified AND state = 'active' AND provider = ANY($2) ORDER BY account")
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE email = $1 AND email_verified AND state = 'active' AND provider = ANY($2) ORDER BY account")
             .bind(&email)
             .bind(&providers)
             .fetch_all(&mut *tx)
