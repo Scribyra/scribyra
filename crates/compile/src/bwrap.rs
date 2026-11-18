@@ -268,11 +268,13 @@ fn lossy(b: &[u8]) -> String { String::from_utf8_lossy(b).into_owned() }
 
 fn memfd(name: &str, bytes: &[u8]) -> io::Result<OwnedFd> {
   let n = CString::new(name).unwrap();
-  let fd = unsafe { libc::memfd_create(n.as_ptr(), libc::MFD_CLOEXEC) };
+  let fd = unsafe { libc::memfd_create(n.as_ptr(), libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING) };
   if fd < 0 { return Err(io::Error::last_os_error()); }
   let mut f = unsafe { File::from_raw_fd(fd) };
   f.write_all(bytes)?;
   f.seek(SeekFrom::Start(0))?;
+  let seals = libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+  if unsafe { libc::fcntl(f.as_raw_fd(), libc::F_ADD_SEALS, seals) } < 0 { return Err(io::Error::last_os_error()); }
   Ok(f.into())
 }
 
@@ -359,5 +361,14 @@ mod tests {
   fn reads_children_cpu_time_from_times() {
     assert_eq!(super::children_cpu_ms("pass 1\ntimes\n0m0.010s 0m0.002s\n0m1.5s 0m0.250s\ntimes\n0m0.011s 0m0.002s\n1m2.345s 0m0.010s\ndone"), 62_355);
     assert_eq!(super::children_cpu_ms("pass 1"), 0);
+  }
+
+  #[test]
+  fn inputs_are_sealed_memfds() {
+    use std::os::fd::AsRawFd;
+    let fd = super::memfd("t", b"hello").unwrap();
+    let seals = unsafe { libc::fcntl(fd.as_raw_fd(), libc::F_GET_SEALS) };
+    assert_eq!(seals, libc::F_SEAL_SEAL | libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE);
+    assert!(unsafe { libc::write(fd.as_raw_fd(), b"x".as_ptr().cast(), 1) } < 0);
   }
 }
