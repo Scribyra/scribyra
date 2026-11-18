@@ -413,21 +413,42 @@ at the top of `crates/sync/examples/test-idp.rs`. It is not for production use.
 `crates/compile` (`scribyra-compile`) runs one TeX Live compile per sandbox; the compile
 worker (design section 6, slice 11) will call it. Each job is a `bwrap` process with new
 user, mount, PID, network (empty but for loopback), IPC, UTS and cgroup namespaces; a
-read-only root holding exactly the TeX Live store closure, a minimal `/dev`, a new `/proc`
-and a tmpfs `/work` of `scratch_mib` as the only writable path. The project's files enter
-`/work` from memory (no host disk is touched) and only the PDF and the log leave it, both
-size-bounded; the scratch vanishes with the namespace. A seccomp filter built in Rust refuses
-`ptrace`, `mount` and the new mount API, `unshare`, `setns`, namespace `clone` flags (`clone3`
-gets `ENOSYS`), key, `bpf`, `perf_event_open`, `userfaultfd`, `io_uring`, `personality`,
-module, reboot and `kexec` calls, `socket` for every family except `AF_UNIX`, and foreign
-ABIs. TeX runs with `-no-shell-escape -interaction=nonstopmode -halt-on-error`,
-`shell_escape=f`, `openout_any=p`, `openin_any=p` (`r` for LuaTeX), a fixed
-`SOURCE_DATE_EPOCH`, and reruns while the log asks, running BibTeX when the `.aux` has
-`\bibdata` (Biber only if the TeX Live tree has it).
+read-only root holding exactly the TeX Live store closure, a minimal `/dev`, no `/proc`, and
+a tmpfs `/work` of `scratch_mib` as the only writable path. The project's files enter `/work`
+from sealed memfds (no host disk is touched); only the PDF and the log leave it, read as
+regular files through `O_NOFOLLOW` and size-bounded; the scratch vanishes with the namespace.
+The seccomp filter, built in Rust, is an allow list (what bash, coreutils, the three engines,
+BibTeX and xdvipdfmx call, traced with `crates/compile/tools/strace-syscalls.py`; anything
+else gets `ENOSYS`). Checked before it and answered with `EPERM`: `ptrace`, `mount` and the
+new mount API, `unshare`, `setns`, namespace `clone` flags (`clone3` gets `ENOSYS`), key,
+`bpf`, `perf_event_open`, `userfaultfd`, `io_uring`, `personality`, module, reboot, `kexec`
+and `memfd_create` calls, `socket` for every family except `AF_UNIX`, and foreign ABIs. TeX
+runs with `-no-shell-escape -interaction=nonstopmode -halt-on-error`, `shell_escape=f`,
+`openout_any=p`, `openin_any=p` (`r` for LuaTeX), a fixed `SOURCE_DATE_EPOCH`, and reruns
+while the log asks, running BibTeX when the `.aux` has `\bibdata`. Biber (Perl, with many
+modules) runs only if the configured TeX Live tree has it; it is not in `texliveSmall` and
+adds attack surface inside the same sandbox.
 
-Requirements: Linux with unprivileged user namespaces (`unshare -Urn true` works); on
-Kubernetes the worker pod runs with `hostUsers: false` and a seccomp profile allowing user
-namespaces (design section 10). `bwrap`'s `--disable-userns` is not used because it must write
+Every job also gets its own **cgroup v2**: `memory.max` = `memory_mib` (the scratch tmpfs and
+any shared memory count), `memory.swap.max` 0, `memory.oom.group` 1, `pids.max` and one CPU
+(`cpu.max`). The runner reads CPU time from its `cpu.stat` (orphans included), kills the job
+with `cgroup.kill` when that passes `cpu_seconds`, and removes the cgroup afterwards. Where
+the cgroups come from (`Confinement`):
+
+- `SCRIBYRA_COMPILE_CGROUP=<dir>`: a delegated, writable cgroup v2 directory with the
+  `memory`, `pids` and `cpu` controllers: a systemd unit with `Delegate=yes`, or on
+  Kubernetes the worker pod's own cgroup through its cgroup namespace (mounted writable for
+  the worker). Processes already in it (the worker) are moved to a `supervisor` leaf.
+- otherwise a transient `systemd-run --user --scope -p Delegate=yes` scope made at startup
+  (development; needs the user's systemd manager), held by a `cat` that exits with the runner;
+- otherwise nothing runs, unless `SCRIBYRA_COMPILE_UNCONFINED_MEMORY=1`
+  (`Confinement::UnconfinedMemory`): development only, with per-process rlimits but no
+  job-wide memory, process or CPU bound.
+
+Requirements: Linux with unprivileged user namespaces (`unshare -Urn true` works) and a
+delegated cgroup v2 subtree as above; on Kubernetes the worker pod runs with
+`hostUsers: false`, its own cgroup namespace and a seccomp profile allowing user namespaces
+(design section 10). `bwrap`'s `--disable-userns` is not used because it must write
 `/proc/sys/user/max_user_namespaces`, which LXC and pods mount read-only; the seccomp filter
 refuses nested namespaces instead. The runner needs `bwrap`, the TeX Live store path and its
 closure: `SCRIBYRA_BWRAP`, `SCRIBYRA_TEXLIVE` and `SCRIBYRA_TEXLIVE_CLOSURE` (a
@@ -436,21 +457,22 @@ development shell sets all three (`bubblewrap`, `texliveSmall`).
 
 | Limit (default) | Enforced by |
 | --- | --- |
-| `cpu_seconds` 60 | `RLIMIT_CPU` per process (each TeX or BibTeX run) |
-| `wall_seconds` 120 | the runner kills the sandbox (and with it the PID namespace) |
-| `memory_mib` 2048 | `RLIMIT_AS` per process |
+| `cpu_seconds` 60 | the job's cgroup CPU time (all processes); `RLIMIT_CPU` per process too |
+| `wall_seconds` 120 | the runner kills the job's cgroup and the sandbox |
+| `memory_mib` 2048 | the job's `memory.max` (scratch included, no swap); `RLIMIT_AS` per process too |
 | `output_mib` 64 | `RLIMIT_FSIZE` per file; also the PDF read back |
-| `scratch_mib` 512 | tmpfs size of `/work` (counts against the pod's memory) |
-| `processes` 64, `open_files` 256 | `RLIMIT_NPROC`, `RLIMIT_NOFILE`; core dumps off |
+| `scratch_mib` 512 | tmpfs size of `/work` (also counts against `memory_mib`) |
+| `processes` 64, `open_files` 256 | `pids.max` (plus bwrap's own), `RLIMIT_NPROC`, `RLIMIT_NOFILE`; core dumps off |
 | `passes` 5, `files` 2000, `input_mib` 128, `log_kib` 1024 | the runner |
 
 `RLIMIT_NPROC` is set inside the job's user namespace, where it counts only the job's
 processes (set outside, it would count every process of the service's user). The other
-rlimits are set on `bwrap` before it starts and inherited. Because the PID namespace hides
-the job from `wait4`, the CPU time recorded per job comes from the driver's `times`.
-Paths are refused before anything is written: absolute, empty, `.` or `..` components, dot
-files, control characters, backslashes, duplicates and file/folder clashes. Test with
-`nix develop -c cargo test -p scribyra-compile`.
+rlimits are set on `bwrap` before it starts and inherited. The driver's report on its pipe
+only classifies TeX's outcome; the runner's own kills and the cgroup's OOM and `pids.max`
+events take precedence, success needs a `%PDF` the runner received, and without `/proc` job
+code cannot reopen the driver's descriptors. Paths are refused before anything is written:
+absolute, empty, `.` or `..` components, dot files, control characters, backslashes,
+duplicates and file/folder clashes. Test with `nix develop -c cargo test -p scribyra-compile`.
 
 ## TLS, logging and supervision
 
