@@ -172,10 +172,10 @@ async fn controller_against_a_real_api_server() {
     }
     // Provisioned PostgreSQL: first without CloudNativePG, then with its CRDs installed (they
     // are cluster-wide, so this runs after the others).
-    if failed.is_empty() {
-        if let Err(e) = tokio::spawn(cloudnativepg(admin.clone(), operator.clone())).await {
-            failed.push(format!("cloudnativepg: {e}"));
-        }
+    if failed.is_empty()
+        && let Err(e) = tokio::spawn(cloudnativepg(admin.clone(), operator.clone())).await
+    {
+        failed.push(format!("cloudnativepg: {e}"));
     }
     assert!(failed.is_empty(), "{failed:#?}\ncontrol plane logs: {}", plane.logs());
 }

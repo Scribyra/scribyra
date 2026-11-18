@@ -30,7 +30,7 @@ impl Drop for ControlPlane {
 
 /// `name` from `$KUBEBUILDER_ASSETS`, `$ENVTEST_BIN_DIR` or `PATH`.
 pub fn binary(name: &str) -> Option<PathBuf> {
-    let mut dirs: Vec<PathBuf> = ["KUBEBUILDER_ASSETS", "ENVTEST_BIN_DIR"].iter().filter_map(|v| std::env::var_os(v)).map(PathBuf::from).collect();
+    let mut dirs: Vec<PathBuf> = ["KUBEBUILDER_ASSETS", "ENVTEST_BIN_DIR"].iter().filter_map(std::env::var_os).map(PathBuf::from).collect();
     dirs.extend(std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()));
     dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
 }

@@ -55,7 +55,11 @@ pub async fn proxy(routes: Vec<(String, String)>, cert_pem: &[u8], key_pem: &[u8
         let acceptor = acceptor.clone();
         tasks.push(tokio::spawn(async move {
             loop {
-                let Ok((socket, _)) = listener.accept().await else { continue };
+                let Ok((socket, _)) = listener.accept().await else {
+                    // For example too many open files: back off instead of spinning.
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    continue;
+                };
                 let acceptor = acceptor.clone();
                 let upstream = upstream.clone();
                 tokio::spawn(async move {
@@ -66,8 +70,8 @@ pub async fn proxy(routes: Vec<(String, String)>, cert_pem: &[u8], key_pem: &[u8
             }
         }));
     }
-    for t in tasks {
-        t.await?;
-    }
-    Ok(())
+    // The listeners run until the process stops; one ending (a panic) ends the proxy.
+    let (result, _, _) = futures::future::select_all(tasks).await;
+    result?;
+    Err("a proxy listener stopped".into())
 }
