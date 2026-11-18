@@ -686,3 +686,45 @@ fn a_cancelled_or_failed_compaction_does_not_leave_the_project_claimed() {
         assert_eq!(projects.compact(&p).await.unwrap(), Some(1));
     });
 }
+
+#[test]
+fn a_floor_that_moves_during_a_read_answers_410_not_500() {
+    // Review L4: a log page whose entry bodies were collected (the floor moved and garbage
+    // removal ran) between reading the rows and reading the blobs answered 500. The read is
+    // paused there by locking `sr_entries` while the floor moves and the blobs go.
+    let sr = Sr::start(Blobs::Fs, users(), json!({"entry_inline_bytes": 64}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Racing");
+    let doc = Project::new();
+    assert_eq!(ana.append(&p, "a", 1, &doc.add_text("f1", "a.tex", None, &"x".repeat(200))).status, 201);
+    assert_eq!(ana.append(&p, "a", 2, &doc.type_text("f1", &"y".repeat(200))).status, 201);
+    let keys = blob_keys(&sr);
+    assert_eq!(keys.len(), 2);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut lock = runtime.block_on(async {
+        use sqlx::Connection;
+        let mut c = sqlx::PgConnection::connect(&sr.db()).await.unwrap();
+        sqlx::query("BEGIN").execute(&mut c).await.unwrap();
+        sqlx::query("LOCK TABLE sr_entries IN ACCESS EXCLUSIVE MODE").execute(&mut c).await.unwrap();
+        c
+    });
+    let reader = {
+        let ana = ana.clone();
+        let p = p.clone();
+        std::thread::spawn(move || ana.log(&p, 0))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    postgres().psql(&sr.db(), &format!("UPDATE sr_projects SET floor_seq = 2 WHERE project = '{p}'"));
+    let store = blob_store(&sr);
+    runtime.block_on(async {
+        for key in &keys {
+            store.delete(&scribyra_sync::blobs::BlobKey::new(key.clone()).unwrap()).await.unwrap();
+        }
+        sqlx::query("ROLLBACK").execute(&mut lock).await.unwrap();
+    });
+    let reply = reader.join().unwrap();
+    assert_eq!((reply.status, reply.json()["error"].as_str(), reply.json()["floor"].as_i64()), (410, Some("compacted"), Some(2)));
+    // A body that is gone without the floor having moved is still a server error.
+    postgres().psql(&sr.db(), &format!("UPDATE sr_projects SET floor_seq = 0 WHERE project = '{p}'"));
+    assert_eq!(ana.log(&p, 0).status, 500);
+}

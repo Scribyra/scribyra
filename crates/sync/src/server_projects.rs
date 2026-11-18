@@ -1246,10 +1246,22 @@ async fn read_log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Que
         Err(e) => return internal(e),
     };
     let (head, floor, snapshot, wrapped): (i64, i64, i64, Option<Vec<u8>>) = (row.get(0), row.get(1), row.get(2), row.get(3));
-    let compacted = || (StatusCode::GONE, log_headers(head, floor, snapshot), Json(json!({"error": "compacted", "floor": floor, "snapshot": snapshot}))).into_response();
+    let compacted = |floor: i64, snapshot: i64| (StatusCode::GONE, log_headers(head, floor, snapshot), Json(json!({"error": "compacted", "floor": floor, "snapshot": snapshot}))).into_response();
     if q.after < floor {
-        return compacted();
+        return compacted(floor, snapshot);
     }
+    // A body that cannot be read because the floor has passed it since (garbage removal ran
+    // meanwhile) is `410` like any compacted read, not `500` (review L4).
+    let lost = |seq: i64| {
+        let p = p.clone();
+        async move {
+            match sqlx::query_as::<_, (i64, i64)>("SELECT floor_seq, snapshot_seq FROM sr_projects WHERE project = $1 AND deleted IS NULL").bind(&p).fetch_optional(pool).await {
+                Ok(Some((floor, snapshot))) if floor >= seq => compacted(floor, snapshot),
+                Ok(None) => not_found(),
+                _ => internal(()),
+            }
+        }
+    };
     let Some(key) = projects.data_key(&p, wrapped.as_deref()) else { return internal(()) };
     let limit = q.limit.unwrap_or(DEFAULT_LOG_PAGE).clamp(1, MAX_LOG_PAGE);
     let rows = match sqlx::query("SELECT seq, size, inline_sealed, blob FROM sr_entries WHERE project = $1 AND seq > $2 AND seq <= $3 ORDER BY seq LIMIT $4").bind(&p).bind(q.after).bind(head).bind(limit).fetch_all(pool).await {
@@ -1262,9 +1274,9 @@ async fn read_log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Que
         let (inline, blob_key): (Option<Vec<u8>>, Option<String>) = (r.get(2), r.get(3));
         if inline.is_none() && blob_key.is_none() {
             // The floor moved while this page was read.
-            return compacted();
+            return lost(seq).await;
         }
-        let Ok(sealed) = projects.read_body(inline, blob_key, r.get(1)).await else { return internal(()) };
+        let Ok(sealed) = projects.read_body(inline, blob_key, r.get(1)).await else { return lost(seq).await };
         let Some(body) = open(&key, &item_ad(&p, "update", &seq.to_string()), &sealed) else { return internal(()) };
         if !out.is_empty() && out.len() + body.len() > MAX_LOG_PAGE_BYTES {
             break;
@@ -1301,7 +1313,18 @@ async fn snapshot(State(sr): State<Shared>, Path(p): Path<String>, headers: Head
     };
     let (head, floor, seq): (i64, i64, i64) = (row.get(0), row.get(1), row.get(3));
     let Some(key) = projects.data_key(&p, row.get::<Option<Vec<u8>>, _>(2).as_deref()) else { return internal(()) };
-    let Ok(sealed) = projects.read_body(row.get(5), row.get(6), row.get(4)).await else { return internal(()) };
+    let Ok(sealed) = projects.read_body(row.get(5), row.get(6), row.get(4)).await else {
+        // A newer snapshot replaced this one (and its blob went) while it was read: `410`, so
+        // the reader asks again (review L4).
+        let newer: Result<Option<(i64, i64)>, _> = sqlx::query_as("SELECT p.floor_seq, max(s.seq) FROM sr_projects p JOIN sr_snapshots s USING (project) WHERE p.project = $1 AND p.deleted IS NULL GROUP BY p.floor_seq")
+            .bind(&p)
+            .fetch_optional(pool)
+            .await;
+        return match newer {
+            Ok(Some((floor, latest))) if latest > seq => (StatusCode::GONE, log_headers(head, floor, latest), Json(json!({"error": "compacted", "floor": floor, "snapshot": latest}))).into_response(),
+            _ => internal(()),
+        };
+    };
     let Some(state) = open(&key, &item_ad(&p, "snapshot", &seq.to_string()), &sealed) else { return internal(()) };
     let mut response = (StatusCode::OK, log_headers(head, floor, seq), state).into_response();
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
