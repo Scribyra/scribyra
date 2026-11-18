@@ -82,7 +82,7 @@ export const ROLE_MODES={editor:['editing','reviewing','viewing'],reviewer:['rev
 const fault=message=>Object.assign(Error(message),{fatal:true});
 const ssoNeeded=error=>error instanceof ServiceError&&(error.status===401&&/single sign-on (is required|expired)/.test(error.message)||error.status===403&&/identity provider/.test(error.message));
 /** Merges two encoded Yjs state vectors (the larger clock per client), in Yjs's encoding. */
-function mergeVectors(a,b){
+export function mergeVectors(a,b){
  const out=Y.decodeStateVector(a);
  for(const [client,clock] of Y.decodeStateVector(b))if((out.get(client)||0)<clock)out.set(client,clock);
  const bytes=[],varUint=n=>{while(n>0x7f){bytes.push(0x80|(n&0x7f));n=Math.floor(n/128);}bytes.push(n);};

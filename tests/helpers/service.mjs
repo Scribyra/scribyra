@@ -36,6 +36,8 @@ export async function database() {
   await run('createdb',['-h','127.0.0.1','-p',String(pg.port),'-U','postgres',name]);
   return pg.url(name);
 }
+/** The whole database as `pg_dump` writes it (plain SQL; bytea as hex), for plaintext checks. */
+export async function pgDump(url) {return (await run('pg_dump',['--no-owner','--data-only',url],{maxBuffer:256*1024*1024,encoding:'buffer'})).stdout;}
 export async function psql(url,sql) {return (await run('psql',['-X','-q','-A','-t','-v','ON_ERROR_STOP=1',url,'-c',sql])).stdout.trim();}
 // Each call gets a fresh database in the shared cluster and a private filesystem blob directory.
 // A `deployment` with `encryption:'server'` gets a fresh master key (`service_key_file`) unless one
