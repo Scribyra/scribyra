@@ -49,6 +49,16 @@ export async function orgService({users=people(['ana','ben','cat','dan','eve','f
  return Object.assign(s,{provider,async close(){await close();await provider.close();}});
 }
 
+/**
+ * A service whose server-readable deployment "Acme Lab" stores projects the server can read (a
+ * fresh master key is made for it), signing in with its own test provider as in `orgService`.
+ * Snapshots come after 50 entries and the floor follows at once, so compaction shows in tests;
+ * `deployment` and the other options are as for `orgService` (for example `{offline:false}`).
+ */
+export function serverService({deployment={},...options}={}){
+ return orgService({sr_snapshot_entries:50,sr_retention_seconds:0,sr_maintenance_seconds:1,...options,deployment:{encryption:'server',...deployment}});
+}
+
 /** Follows the provider (test shortcut) and the service's callback; returns the grant. */
 async function authorize(url,user){
  const at=await fetch(`${url}&login_hint=${encodeURIComponent(user)}&test_password=pw-${encodeURIComponent(user)}`,{redirect:'manual'}),callback=at.headers.get('location');

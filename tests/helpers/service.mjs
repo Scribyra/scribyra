@@ -38,13 +38,16 @@ export async function database() {
 }
 export async function psql(url,sql) {return (await run('psql',['-X','-q','-A','-t','-v','ON_ERROR_STOP=1',url,'-c',sql])).stdout.trim();}
 // Each call gets a fresh database in the shared cluster and a private filesystem blob directory.
-// `org:true` binds a fixed free port and sets `public_url` to it, so organisation sign-in works.
+// A `deployment` with `encryption:'server'` gets a fresh master key (`service_key_file`) unless one
+// is given. `org:true` binds a fixed free port and sets `public_url` to it, so organisation sign-in works.
 export async function service({org=false,...overrides}={},binary=resolve('target/debug/scribyra-sync')) {
   const pg=await postgres();
   if(org){const port=await freePort();overrides={bind:`127.0.0.1:${port}`,public_url:`http://127.0.0.1:${port}`,...overrides};}
   await mkdir(resolve('tmp'),{recursive:true});
   const directory=await mkdtemp(resolve('tmp/service-')),bearer=id(),namespace=id(),database_url=await database();
   const config={bind:'127.0.0.1:0',data:join(directory,'data'),database_url,origins:[APP_ORIGIN],principals:[{token_hash:hash(bearer),namespace,storage:true,relay:true}],...overrides};
+  // A server-readable deployment needs the master key that seals its projects: one per service.
+  if(config.deployment?.encryption==='server'&&!config.service_key_file){config.service_key_file=join(directory,'master.key');await writeFile(config.service_key_file,randomBytes(32),{mode:0o600});}
   const path=join(directory,'config.json');await writeFile(path,JSON.stringify(config));
   let child,url,logs='';
   async function start(extraEnv={}) {
@@ -70,6 +73,32 @@ export async function service({org=false,...overrides}={},binary=resolve('target
     async close(){await stop();await rm(directory,{recursive:true,force:true});},
     object(bytes,ns=namespace){return `${url}/v1/objects/${ns}/${hash(bytes)}`;},
     headers:{Authorization:`Bearer ${bearer}`,'Content-Type':'application/octet-stream'},
+  };
+}
+/**
+ * A minimal client for a server-readable deployment's `/v1/sr/` routes (see docs/service.md), for
+ * Node tests and browser-spec setup: `token` is a session from `ssoLogin`. JSON routes resolve to
+ * `{status, body, headers}`; `append` sends a raw Yjs update; `log` parses the frames.
+ */
+export function srClient(url,token){
+  const auth={Authorization:`ScribyraSSO ${token}`};
+  const call=async(method,path,body)=>{const r=await fetch(url+path,{method,headers:{...auth,...(body===undefined?{}:{'Content-Type':'application/json'})},body:body===undefined?undefined:JSON.stringify(body)});const text=await r.text();let json=null;try{json=JSON.parse(text);}catch{}return{status:r.status,body:json,headers:r.headers};};
+  return{call,
+    projects:()=>call('GET','/v1/sr/projects'),
+    create:(name,extra={})=>call('POST','/v1/sr/projects',{name,...extra}),
+    project:p=>call('GET',`/v1/sr/projects/${p}`),
+    invite:(p,email,role)=>call('POST',`/v1/sr/projects/${p}/invitations`,{email,role}),
+    heads:(since,wait=0)=>call('GET',`/v1/sr/heads?wait=${wait}${since?`&since=${since}`:''}`),
+    async append(p,client,seq,update){const r=await fetch(`${url}/v1/sr/projects/${p}/log`,{method:'POST',headers:{...auth,'Scribyra-Client':client,'Scribyra-Client-Seq':String(seq),'Content-Type':'application/octet-stream'},body:update});return{status:r.status,body:await r.json().catch(()=>null)};},
+    async log(p,after=0){
+      const r=await fetch(`${url}/v1/sr/projects/${p}/log?after=${after}`,{headers:auth});
+      if(!r.ok)return{status:r.status,body:await r.json().catch(()=>null),frames:[]};
+      const bytes=new Uint8Array(await r.arrayBuffer()),view=new DataView(bytes.buffer),frames=[];
+      for(let at=0;at<bytes.length;){const seq=Number(view.getBigUint64(at)),len=view.getUint32(at+8);frames.push({seq,update:bytes.slice(at+12,at+12+len)});at+=12+len;}
+      return{status:r.status,head:Number(r.headers.get('scribyra-log-head')),floor:Number(r.headers.get('scribyra-log-floor')),frames};
+    },
+    putObject:async(p,bytes)=>(await fetch(`${url}/v1/sr/projects/${p}/objects/${hash(bytes)}`,{method:'PUT',headers:auth,body:bytes})).status,
+    async getObject(p,sha){const r=await fetch(`${url}/v1/sr/projects/${p}/objects/${sha}`,{headers:auth});return{status:r.status,bytes:new Uint8Array(await r.arrayBuffer())};},
   };
 }
 
