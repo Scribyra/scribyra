@@ -268,7 +268,7 @@ impl Projects {
         Ok(true)
     }
 
-    /// Appends one update (already checked to decode). Idempotent per (client, client_seq):
+    /// Appends one update (already checked to decode). Idempotent per (account, client, client_seq):
     /// identical bytes get the original sequence number, other bytes `Conflict`. The answer is
     /// given only after commit, with the body durable (inline, or in the blob store first).
     pub async fn append(&self, project: &str, account: &str, client: &str, client_seq: i64, body: &[u8]) -> Result<Appended, AppendError> {
@@ -281,16 +281,18 @@ impl Projects {
             .await?
             .ok_or(AppendError::NotFound)?;
         let (head, wrapped, owner, project_bytes): (i64, Option<Vec<u8>>, String, i64) = (row.get(0), row.get(1), row.get(2), row.get(3));
-        let existing: Option<(i64, String, Option<String>)> = sqlx::query_as("SELECT seq, body_hash, account FROM sr_entries WHERE project = $1 AND client = $2 AND client_seq = $3")
+        // A slot is (account, client, client sequence): another member reusing this client ID
+        // has slots of their own and cannot block these (review L1).
+        let existing: Option<(i64, String)> = sqlx::query_as("SELECT seq, body_hash FROM sr_entries WHERE project = $1 AND account = $2 AND client = $3 AND client_seq = $4")
             .bind(project)
+            .bind(account)
             .bind(client)
             .bind(client_seq)
             .fetch_optional(&mut *tx)
             .await?;
-        if let Some((seq, hash, by)) = existing {
+        if let Some((seq, hash)) = existing {
             let _ = tx.rollback().await;
-            // Only the account that sent it gets the acknowledgement of a repeat.
-            return if hash == body_hash && by.as_deref() == Some(account) { Ok(Appended::Repeated(seq)) } else { Err(AppendError::Conflict) };
+            return if hash == body_hash { Ok(Appended::Repeated(seq)) } else { Err(AppendError::Conflict) };
         }
         let key = self.data_key(project, wrapped.as_deref()).ok_or(AppendError::Internal)?;
         let seq = head + 1;

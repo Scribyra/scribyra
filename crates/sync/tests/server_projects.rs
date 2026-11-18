@@ -31,12 +31,6 @@ fn appends_are_durable_idempotent_and_gap_free() {
         assert_eq!((ana.append(&p, "browser-a", 1, &first).status, ana.append(&p, "browser-a", 1, &first).json()["seq"].as_i64()), (200, Some(1)));
         let other = doc.type_text("f1", " more");
         assert_eq!(ana.append(&p, "browser-a", 1, &other).status, 409);
-        // Another account repeating the same client slot is refused, even with the same bytes.
-        if blobs == Blobs::Fs {
-            let ben = sr.api(&sr.login("ben"));
-            assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
-            assert_eq!(ben.append(&p, "browser-a", 1, &first).status, 409);
-        }
         // Malformed requests are refused before anything is stored.
         assert_eq!(ana.append(&p, "browser-a", 2, b"not a yjs update at all").status, 400);
         assert_eq!(request("POST", &format!("{}/v1/sr/projects/{p}/log", sr.url()), Some(&ana.token), &[], other.clone()).status, 400);
@@ -622,4 +616,28 @@ fn an_account_keeps_at_most_four_heads_polls_waiting() {
         assert!(took < std::time::Duration::from_secs(15), "{took:?}");
         assert_eq!((answer["projects"][&p]["head"].as_i64(), answer["superseded"].as_bool()), (Some(1), None));
     }
+}
+
+#[test]
+fn a_client_id_belongs_to_the_account_that_uses_it() {
+    // Review L1: client IDs were unique per project, so an editor who appended with another
+    // member's `Scribyra-Client` at a future sequence number made that member's own append
+    // there fail with 409. Slots are now per (project, account, client, client sequence).
+    let sr = start(Blobs::Fs);
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    let p = ana.create("Squatted");
+    assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+    let doc = Project::new();
+    let first = doc.add_text("f1", "main.tex", None, "x");
+    assert_eq!(ana.append(&p, "browser-a", 1, &first).status, 201);
+    // Ben takes Ana's client ID at her next sequence numbers, with his own bytes and with hers.
+    let (squat, next) = (doc.type_text("f1", " squat"), doc.type_text("f1", " mine"));
+    assert_eq!(ben.append(&p, "browser-a", 2, &squat).json()["seq"], 2);
+    assert_eq!(ben.append(&p, "browser-a", 1, &first).json()["seq"], 3);
+    // Ana's own appends at those slots still go through, and her retries get her own entries.
+    assert_eq!((ana.append(&p, "browser-a", 2, &next).status, ana.append(&p, "browser-a", 2, &next).json()["seq"].as_i64()), (201, Some(4)));
+    assert_eq!(ana.append(&p, "browser-a", 1, &first).json()["seq"], 1);
+    assert_eq!(ben.append(&p, "browser-a", 2, &squat).json()["seq"], 2);
+    // Within one account a slot still holds one update.
+    assert_eq!(ana.append(&p, "browser-a", 2, &squat).status, 409);
 }
