@@ -31,12 +31,6 @@ fn appends_are_durable_idempotent_and_gap_free() {
         assert_eq!((ana.append(&p, "browser-a", 1, &first).status, ana.append(&p, "browser-a", 1, &first).json()["seq"].as_i64()), (200, Some(1)));
         let other = doc.type_text("f1", " more");
         assert_eq!(ana.append(&p, "browser-a", 1, &other).status, 409);
-        // Another account repeating the same client slot is refused, even with the same bytes.
-        if blobs == Blobs::Fs {
-            let ben = sr.api(&sr.login("ben"));
-            assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
-            assert_eq!(ben.append(&p, "browser-a", 1, &first).status, 409);
-        }
         // Malformed requests are refused before anything is stored.
         assert_eq!(ana.append(&p, "browser-a", 2, b"not a yjs update at all").status, 400);
         assert_eq!(request("POST", &format!("{}/v1/sr/projects/{p}/log", sr.url()), Some(&ana.token), &[], other.clone()).status, 400);
@@ -81,19 +75,30 @@ fn creating_with_an_initial_state_and_an_id_is_idempotent() {
     doc.add_text("f1", "main.tex", None, "hello");
     use yrs::ReadTxn;
     let state = yrs::Transact::transact(&doc.doc).encode_state_as_update_v1(&yrs::StateVector::default());
-    let id = random_hex(32);
-    let body = json!({"id": id, "name": "Imported", "state": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &state), "client": "browser-a", "clientSeq": 1});
+    let key = random_hex(32);
+    let body = json!({"id": key, "name": "Imported", "state": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &state), "client": "browser-a", "clientSeq": 1});
     let first = ana.call("POST", "/v1/sr/projects", Some(body.clone()));
     assert_eq!((first.status, first.json()["seq"].as_i64(), first.json()["project"]["head"].as_i64()), (201, Some(1), Some(1)));
+    // The project's ID is derived from the account and the request's `id`, so the app can
+    // compute it before the request and a retry finds the same project.
+    let id = first.json()["project"]["id"].as_str().unwrap().to_owned();
+    let me = sr.env.client().me(&ana.token).json()["account"].as_str().unwrap().to_owned();
+    assert_eq!(id, sha256(format!("scribyra-sr-project/1\n{me}\n{key}").as_bytes()));
     let again = ana.call("POST", "/v1/sr/projects", Some(body.clone()));
-    assert_eq!((again.status, again.json()["seq"].as_i64()), (200, Some(1)));
+    assert_eq!((again.status, again.json()["seq"].as_i64(), again.json()["project"]["id"].as_str()), (200, Some(1), Some(id.as_str())));
     assert_eq!(text_of(&[ana.log(&id, 0).frames()[0].1.clone()], "f1"), "hello");
-    // Another person cannot claim the ID; a state that is not Yjs is refused.
+    // Review L5: another person sending the same `id` used to get 409, learning that the
+    // project exists. They now get a project of their own, whatever anyone else did.
     let ben = sr.api(&sr.login("ben"));
-    assert_eq!(ben.call("POST", "/v1/sr/projects", Some(body)).status, 409);
+    let theirs = ben.call("POST", "/v1/sr/projects", Some(body));
+    assert_eq!(theirs.status, 201);
+    assert_ne!(theirs.json()["project"]["id"].as_str(), Some(id.as_str()));
+    assert_eq!(ben.log(&id, 0).status, 404);
+    assert_eq!(ana.details(&id).json()["head"], 1);
+    // A state that is not Yjs is refused.
     assert_eq!(ben.call("POST", "/v1/sr/projects", Some(json!({"name": "x", "state": "bm90IGEgWWpzIHVwZGF0ZQ=="}))).status, 400);
     assert_eq!(ben.call("POST", "/v1/sr/projects", Some(json!({"name": " "}))).status, 400);
-    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "1");
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "2");
 }
 
 #[test]
@@ -489,4 +494,316 @@ fn each_mode_serves_only_its_own_routes() {
         assert_eq!(request("GET", &format!("{}{path}", sr.url()), None, &[], vec![]).status, 404, "{path}");
     }
     assert_eq!(request("POST", &format!("{}/v1/auth/challenge", sr.url()), None, &[("Content-Type", "application/json".into())], json!({"org": sr.env.org()}).to_string().into_bytes()).status, 404);
+}
+
+/// One struct holding one `Any` item of the root map `t`, then an empty delete set.
+fn any_item(value: &[u8]) -> Vec<u8> {
+    let mut update = vec![1, 1, 1, 0, 8, 1, 1, b't', 1];
+    update.extend_from_slice(value);
+    update.push(0);
+    update
+}
+fn var(mut n: u64) -> Vec<u8> {
+    let mut out = Vec::new();
+    while n >= 0x80 {
+        out.push((n as u8 & 0x7f) | 0x80);
+        n >>= 7;
+    }
+    out.push(n as u8);
+    out
+}
+
+#[test]
+fn hostile_yjs_updates_are_refused_and_the_service_survives() {
+    // Review C1: `yrs` 0.25 pre-allocates from untrusted lengths (an abort), recurses without a
+    // limit (a stack overflow) and trusts strings to be UTF-8. Each of these killed the process
+    // through POST …/log or POST /v1/sr/projects {state}.
+    let sr = start(Blobs::Fs);
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Target");
+    let mut deep = Vec::new();
+    for _ in 0..1_000_000 {
+        deep.extend_from_slice(&[117, 1]);
+    }
+    deep.push(126);
+    let mut string = vec![1, 1, 1, 0, 4, 1, 1, b't', 2, 0xff, 0xfe, 0];
+    let hostile = [
+        ("array of 2^36", any_item(&[[117].as_slice(), &var(1 << 36)].concat())),
+        ("array of 2^50", any_item(&[[117].as_slice(), &var(1 << 50)].concat())),
+        ("map of 2^40", any_item(&[[118].as_slice(), &var(1 << 40)].concat())),
+        ("a million nested arrays", any_item(&deep)),
+        ("invalid UTF-8", string.clone()),
+        ("trailing bytes", [Project::new().add_text("f1", "a.tex", None, "x"), vec![0]].concat()),
+    ];
+    for (n, (what, update)) in hostile.iter().enumerate() {
+        assert_eq!(ana.append(&p, "evil", n as i64 + 1, update).status, 400, "{what}");
+        let state = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, update);
+        assert_eq!(ana.call("POST", "/v1/sr/projects", Some(json!({"name": "Evil", "state": state}))).status, 400, "{what}");
+    }
+    // The same string bytes, valid, are accepted: only the encoding was wrong.
+    string.splice(9..11, *b"ok");
+    assert_eq!(ana.append(&p, "good", 1, &string).status, 201);
+    assert_eq!(ana.append(&p, "good", 2, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "1");
+}
+
+#[test]
+fn invitations_count_an_email_only_at_a_provider_that_vouches_for_it() {
+    // Review H2: with several providers, any one asserting a verified email used to get that
+    // email's shares at once and accept its pending invitations. Now a plain email counts only
+    // at a provider whose `email_domains` include its domain, unless the inviter names the
+    // provider (`provider:email`).
+    let mut users = users();
+    for (name, email) in [("imposter", "victim@example.org"), ("early", "early@example.org"), ("victim", "victim@example.org")] {
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name}));
+    }
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": {"email_domains": ["example.org"]}, "more_providers": [{"id": "partner", "label": "Partner account", "email_domains": []}]}));
+    let partner = Client { base: sr.url(), provider: "partner".into(), idp: &sr.env.idp };
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Vouched");
+    // A pending invitation is not accepted by another provider's account with that email ...
+    assert_eq!(ana.invite(&p, "victim@example.org", "editor").json()["status"], "pending");
+    let imposter = sr.api(partner.login("imposter")["token"].as_str().unwrap());
+    assert_eq!(imposter.call("GET", "/v1/sr/projects", None).json()["projects"], json!([]));
+    assert_eq!(imposter.log(&p, 0).status, 404);
+    // ... but by the vouching provider's.
+    let victim = sr.api(&sr.login("victim"));
+    assert_eq!(victim.details(&p).json()["role"], "editor");
+    // An existing account at a provider that does not vouch is not shared at once either.
+    let early = sr.api(partner.login("early")["token"].as_str().unwrap());
+    assert_eq!(ana.invite(&p, "early@example.org", "viewer").json()["status"], "pending");
+    assert_eq!(early.log(&p, 0).status, 404);
+    // Naming the provider shares with that provider's account.
+    let named = ana.invite(&p, "partner:early@example.org", "viewer");
+    assert_eq!((named.status, named.json()["status"].as_str()), (201, Some("shared")));
+    assert_eq!(early.details(&p).json()["role"], "viewer");
+    // Members and invitations show the provider; a domain nobody vouches for must name one.
+    let details = ana.details(&p).json();
+    let providers: Vec<(&str, &str)> = details["members"].as_array().unwrap().iter().map(|m| (m["email"].as_str().unwrap(), m["provider"].as_str().unwrap())).collect();
+    assert_eq!(providers, vec![("alice@example.org", "test"), ("victim@example.org", "test"), ("early@example.org", "partner")]);
+    assert_eq!(ana.invite(&p, "gus@partner.org", "viewer").status, 400);
+    let pending = ana.invite(&p, "partner:gus@partner.org", "viewer").json();
+    assert_eq!((pending["status"].as_str(), pending["invitation"]["provider"].as_str()), (Some("pending"), Some("partner")));
+    assert_eq!(ana.invite(&p, "nowhere:gus@partner.org", "viewer").status, 400);
+}
+
+#[test]
+fn an_account_keeps_at_most_four_heads_polls_waiting() {
+    // Review M4: polls were unbounded per account and every notice woke every poll on every
+    // replica. A fifth poll now ends the account's oldest at once.
+    let sr = start(Blobs::Fs);
+    let ana = sr.api(&sr.login("alice"));
+    ana.create("Polled");
+    let version = ana.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let poll = |api: &Api| {
+        let (api, version) = (api.clone(), version.clone());
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            (api.heads(Some(&version), 20).json(), t.elapsed())
+        })
+    };
+    let first = poll(&ana);
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let others: Vec<_> = (0..3).map(|_| poll(&ana)).collect();
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // Another account's polls do not count against Ana's.
+    let ben = sr.api(&sr.login("ben"));
+    let ben_version = ben.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let ben_poll = {
+        let ben = ben.clone();
+        std::thread::spawn(move || ben.heads(Some(&ben_version), 3).json())
+    };
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let fifth = poll(&ana);
+    let (answer, took) = first.join().unwrap();
+    assert!(took < std::time::Duration::from_secs(5), "the oldest poll kept waiting: {took:?}");
+    assert_eq!((answer["version"].as_str(), answer["superseded"].as_bool()), (Some(version.as_str()), Some(true)));
+    assert_eq!(ben_poll.join().unwrap()["superseded"], Value::Null);
+    // The others are still waiting, and an append wakes them with the new head.
+    let p = ana.call("GET", "/v1/sr/projects", None).json()["projects"][0]["id"].as_str().unwrap().to_owned();
+    assert_eq!(ana.append(&p, "a", 1, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
+    for waiter in others.into_iter().chain([fifth]) {
+        let (answer, took) = waiter.join().unwrap();
+        assert!(took < std::time::Duration::from_secs(15), "{took:?}");
+        assert_eq!((answer["projects"][&p]["head"].as_i64(), answer["superseded"].as_bool()), (Some(1), None));
+    }
+}
+
+#[test]
+fn a_client_id_belongs_to_the_account_that_uses_it() {
+    // Review L1: client IDs were unique per project, so an editor who appended with another
+    // member's `Scribyra-Client` at a future sequence number made that member's own append
+    // there fail with 409. Slots are now per (project, account, client, client sequence).
+    let sr = start(Blobs::Fs);
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    let p = ana.create("Squatted");
+    assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+    let doc = Project::new();
+    let first = doc.add_text("f1", "main.tex", None, "x");
+    assert_eq!(ana.append(&p, "browser-a", 1, &first).status, 201);
+    // Ben takes Ana's client ID at her next sequence numbers, with his own bytes and with hers.
+    let (squat, next) = (doc.type_text("f1", " squat"), doc.type_text("f1", " mine"));
+    assert_eq!(ben.append(&p, "browser-a", 2, &squat).json()["seq"], 2);
+    assert_eq!(ben.append(&p, "browser-a", 1, &first).json()["seq"], 3);
+    // Ana's own appends at those slots still go through, and her retries get her own entries.
+    assert_eq!((ana.append(&p, "browser-a", 2, &next).status, ana.append(&p, "browser-a", 2, &next).json()["seq"].as_i64()), (201, Some(4)));
+    assert_eq!(ana.append(&p, "browser-a", 1, &first).json()["seq"], 1);
+    assert_eq!(ben.append(&p, "browser-a", 2, &squat).json()["seq"], 2);
+    // Within one account a slot still holds one update.
+    assert_eq!(ana.append(&p, "browser-a", 2, &squat).status, 409);
+}
+
+#[test]
+fn emails_are_normalised_once_and_compared_as_stored() {
+    // Review L2: invitations lowercased emails in Rust (Unicode) but matched accounts with
+    // PostgreSQL's lower() (by the database's locale: ASCII only under C), so a person whose
+    // provider sends `Émile@…` was never matched by an invitation to `émile@…`. Emails are now
+    // normalised once (trimmed, Unicode lowercase) when stored and compared as stored.
+    let mut users = users();
+    for (name, email) in [("emile", "Émile@Example.org"), ("odon", "ÖDÖN@example.org")] {
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name}));
+    }
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Accents");
+    // An account that exists is shared at once, whatever case the inviter types.
+    let emile = sr.api(&sr.login("emile"));
+    assert_eq!(postgres().psql(&sr.db(), "SELECT email FROM accounts WHERE subject = 'sub-emile'"), "émile@example.org");
+    assert_eq!(ana.invite(&p, " ÉMILE@example.ORG ", "viewer").json()["status"], "shared");
+    assert_eq!(emile.details(&p).json()["role"], "viewer");
+    // A pending invitation is accepted at the first sign-in.
+    assert_eq!(ana.invite(&p, "ödön@EXAMPLE.org", "editor").json()["invitation"]["email"], "ödön@example.org");
+    let odon = sr.api(&sr.login("odon"));
+    assert_eq!(odon.details(&p).json()["role"], "editor");
+    assert_eq!(sr.env.client().me(&odon.token).json()["email"], "ödön@example.org");
+}
+
+#[test]
+fn a_cancelled_or_failed_compaction_does_not_leave_the_project_claimed() {
+    // Review L3: the in-process "compacting" mark was cleared only when compaction returned, so
+    // a panic (or a cancelled future) left the project marked and never compacted again here.
+    let mut sr = start(Blobs::Fs);
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Claimed");
+    assert_eq!(ana.append(&p, "a", 1, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
+    let config = sr.env.service.config.clone();
+    sr.env.service.stop();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let config: scribyra_sync::config::Config = serde_json::from_value(config).unwrap();
+        let store = std::sync::Arc::new(scribyra_sync::store::Store::open(config).await.unwrap());
+        let projects = scribyra_sync::server_projects::Projects::new(store).unwrap().unwrap();
+        // Dropped at its first wait, after it marked the project.
+        assert!(tokio::time::timeout(std::time::Duration::ZERO, projects.compact(&p)).await.is_err());
+        assert_eq!(projects.compact(&p).await.unwrap(), Some(1));
+    });
+}
+
+#[test]
+fn a_floor_that_moves_during_a_read_answers_410_not_500() {
+    // Review L4: a log page whose entry bodies were collected (the floor moved and garbage
+    // removal ran) between reading the rows and reading the blobs answered 500. The read is
+    // paused there by locking `sr_entries` while the floor moves and the blobs go.
+    let sr = Sr::start(Blobs::Fs, users(), json!({"entry_inline_bytes": 64}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Racing");
+    let doc = Project::new();
+    assert_eq!(ana.append(&p, "a", 1, &doc.add_text("f1", "a.tex", None, &"x".repeat(200))).status, 201);
+    assert_eq!(ana.append(&p, "a", 2, &doc.type_text("f1", &"y".repeat(200))).status, 201);
+    let keys = blob_keys(&sr);
+    assert_eq!(keys.len(), 2);
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let mut lock = runtime.block_on(async {
+        use sqlx::Connection;
+        let mut c = sqlx::PgConnection::connect(&sr.db()).await.unwrap();
+        sqlx::query("BEGIN").execute(&mut c).await.unwrap();
+        sqlx::query("LOCK TABLE sr_entries IN ACCESS EXCLUSIVE MODE").execute(&mut c).await.unwrap();
+        c
+    });
+    let reader = {
+        let ana = ana.clone();
+        let p = p.clone();
+        std::thread::spawn(move || ana.log(&p, 0))
+    };
+    std::thread::sleep(std::time::Duration::from_millis(1000));
+    postgres().psql(&sr.db(), &format!("UPDATE sr_projects SET floor_seq = 2 WHERE project = '{p}'"));
+    let store = blob_store(&sr);
+    runtime.block_on(async {
+        for key in &keys {
+            store.delete(&scribyra_sync::blobs::BlobKey::new(key.clone()).unwrap()).await.unwrap();
+        }
+        sqlx::query("ROLLBACK").execute(&mut lock).await.unwrap();
+    });
+    let reply = reader.join().unwrap();
+    assert_eq!((reply.status, reply.json()["error"].as_str(), reply.json()["floor"].as_i64()), (410, Some("compacted"), Some(2)));
+    // A body that is gone without the floor having moved is still a server error.
+    postgres().psql(&sr.db(), &format!("UPDATE sr_projects SET floor_seq = 0 WHERE project = '{p}'"));
+    assert_eq!(ana.log(&p, 0).status, 500);
+}
+
+#[test]
+fn signing_out_ends_the_sessions_heads_polls() {
+    // Review L6: a revoked session kept its heads poll (and its view of the projects' heads) for
+    // up to 25 seconds. A revocation now notifies the account's polls, which check the session.
+    let sr = start(Blobs::Fs);
+    let (ana, other) = (sr.api(&sr.login("alice")), sr.api(&sr.login("alice")));
+    ana.create("Watched");
+    let version = ana.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let poll = |api: &Api| {
+        let (api, version) = (api.clone(), version.clone());
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            (api.heads(Some(&version), 20).status, t.elapsed())
+        })
+    };
+    let (mine, theirs) = (poll(&ana), poll(&other));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(sr.env.client().logout(&ana.token).status, 200);
+    let (status, took) = mine.join().unwrap();
+    assert_eq!(status, 401);
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+    // The same person's other session keeps waiting.
+    let (status, took) = theirs.join().unwrap();
+    assert_eq!(status, 200);
+    assert!(took >= std::time::Duration::from_secs(19), "{took:?}");
+}
+
+#[test]
+fn a_member_removed_during_an_append_does_not_get_it_stored() {
+    // Review L7: access was checked before the append's transaction, so an editor removed in
+    // between still had the append committed. The append now checks again under the project's
+    // lock. The append is paused at that lock while the owner removes the editor.
+    let sr = start(Blobs::Fs);
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    let p = ana.create("Removal");
+    assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+    let doc = Project::new();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let hold = |p: &str| {
+        runtime.block_on(async {
+            use sqlx::Connection;
+            let mut c = sqlx::PgConnection::connect(&sr.db()).await.unwrap();
+            sqlx::query("BEGIN").execute(&mut c).await.unwrap();
+            sqlx::query("SELECT 1 FROM sr_projects WHERE project = $1 FOR UPDATE").bind(p).execute(&mut c).await.unwrap();
+            c
+        })
+    };
+    for (what, change, expected) in [("removed", None, 404), ("made a viewer", Some("viewer"), 403)] {
+        if what == "made a viewer" {
+            assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+        }
+        let mut lock = hold(&p);
+        let append = {
+            let (ben, p, update) = (ben.clone(), p.clone(), doc.add_text(what, "x.tex", None, what));
+            std::thread::spawn(move || ben.append(&p, "b", if what == "removed" { 1 } else { 2 }, &update).status)
+        };
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let status = match change {
+            None => ana.call("DELETE", &format!("/v1/sr/projects/{p}/members/{}", account(&sr, "ben")), None).status,
+            Some(role) => ana.call("PUT", &format!("/v1/sr/projects/{p}/members/{}", account(&sr, "ben")), Some(json!({"role": role}))).status,
+        };
+        assert!(status == 204 || status == 200, "{what}: {status}");
+        runtime.block_on(async { sqlx::query("ROLLBACK").execute(&mut lock).await.unwrap() });
+        assert_eq!(append.join().unwrap(), expected, "{what}");
+    }
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_entries"), "0");
 }

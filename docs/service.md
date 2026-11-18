@@ -139,6 +139,7 @@ Added with organisation sync; the organisation routes document their use.
 | `sessions` | 10000 | Maximum live organisation sessions |
 | `sso_recheck_tick_seconds` | 60 | How often the single sign-on recheck runs (1–3600) |
 | `sso_jwks_refetch_seconds` | 60 | Minimum interval between key-set refetches caused by an unknown key ID (0–3600) |
+| `sso_starts_per_minute` | 60 | 1–100000: sign-ins one source (an IPv4 address or an IPv6 /64) may start per minute on one replica (`429` beyond) |
 
 ### Deployment
 
@@ -216,13 +217,29 @@ With `deployment.encryption: "server"` the service is the authority for organisa
 sequences, checks with `yrs`, seals and stores; browsers keep a local copy and reconcile through
 the log. Everything durable is in PostgreSQL and the blob store, so several replicas can serve one
 deployment (with S3 blobs: a filesystem blob directory belongs to one process); changes reach
-every replica's heads polls through `NOTIFY scribyra_sr`.
+every replica's heads polls through `NOTIFY scribyra_sr` (the payload names the project, or
+`a:<account>` when the projects an account can see or its sessions change; it only routes
+wake-ups, and a woken poll reads its answer from the database).
+
+**Updates are checked before `yrs` reads them.** `yrs` 0.25 trusts its input (it reserves memory
+from untrusted lengths, recurses without a limit and assumes valid UTF-8), so every update a
+client sends (`POST …/log`, and `state` at creation) first passes a strict lib0 v1 validator
+(`update_check.rs`) that walks the whole update grammar as `yrs` reads it and refuses (`400`):
+any length or count larger than the bytes left, varints longer than their type, `Any` nesting
+deeper than 64, more than 2^20 structs or deleted ranges, an estimated decoded size over 256 MiB,
+invalid UTF-8, clock or range overflow, unknown or reserved info bits and content kinds (weak
+links included), and trailing bytes. An accepted update is then decoded and applied to an empty
+document (inside `catch_unwind`, on a blocking thread). Replays check stored entries again and
+turn a `yrs` panic into an error; a panic in any request handler answers `500` for that request.
 
 **Sessions.** Every route needs `Authorization: ScribyraSSO <token>` from
 [sign-in](#single-sign-on-oidc) (`401 {"error":"sign in required"}` without a valid one; a login
 from before accounts existed gets `401 {"error":"sign in again"}`). Errors are JSON
 `{"error": "<short text>"}`; every response is `Cache-Control: no-store`. IDs (projects,
 accounts, invitations) are 64 lowercase hex characters; times are milliseconds since the epoch.
+Emails are stored and compared in one normal form (surrounding space trimmed, Unicode lowercase
+as Rust defines it, independent of the database's locale; no Unicode normalisation): sign-ins
+store it in accounts and logins, invitations store it, and SQL compares stored values with `=`.
 CORS allows `GET, HEAD, PUT, POST, PATCH, DELETE`, the request headers `Authorization`,
 `Content-Type`, `Scribyra-Client`, `Scribyra-Client-Seq`, and exposes `Scribyra-Log-Head`,
 `Scribyra-Log-Floor` and `Scribyra-Snapshot-Seq`.
@@ -242,22 +259,22 @@ owner may leave a project (remove their own share).
 
 | Route | Body → answer |
 | --- | --- |
-| `GET /v1/sr/projects` | → `200 {account, role, projects: [{id, name, role, head, size, created, updated, owner: {account, name, email}}]}` (owned and shared, newest change first; `role` at the top is the deployment role) |
-| `POST /v1/sr/projects` | `{name, id?, state?, client?, clientSeq?}` → `201 {project, seq}` (members and admins only). `name` 1–200 characters. `id` lets a retry find the project it created: the same owner gets `200` and the same body, anyone else `409`. `state` is base64 of a Yjs update (the project's initial state, at most `sr_entry_bytes`), appended as the first entry under `client`/`clientSeq` (default `initial`/1); `seq` is its sequence number or `null`. `400` for a bad name or a state that is not a Yjs update, `413` too large, `507` over quota (the new project is then not kept) |
-| `GET /v1/sr/projects/{p}` | → `200` project details: `{id, name, role, owner: {account, name, email, role:"owner"}, head, floor, snapshot, size, created, updated, members: [{account, name, email, role}] (owner first), invitations: [{id, email, role, created, expires}]}`. Invitations are listed for the owner and editors only. Emails are verified ones or `null` |
+| `GET /v1/sr/projects` | → `200 {account, role, projects: [{id, name, role, head, size, created, updated, owner: {account, name, email, provider}}]}` (owned and shared, newest change first; `role` at the top is the deployment role) |
+| `POST /v1/sr/projects` | `{name, id?, state?, client?, clientSeq?}` → `201 {project, seq}` (members and admins only). `name` 1–200 characters. `id` (64 hex) lets a retry find the project it created: the project's ID is then SHA-256 of `scribyra-sr-project/1\n<account>\n<id>` (hex), so the app can compute it beforehand, a repeat by the same account gets `200` and the same body, and the same `id` from another account makes that account's own project (nothing tells anyone whether another account used it). Without `id` the ID is random. `state` is base64 of a Yjs update (the project's initial state, at most `sr_entry_bytes`), appended as the first entry under `client`/`clientSeq` (default `initial`/1); `seq` is its sequence number or `null`. `400` for a bad name or a state that is not a Yjs update, `413` too large, `507` over quota (the new project is then not kept) |
+| `GET /v1/sr/projects/{p}` | → `200` project details: `{id, name, role, owner: {account, name, email, provider, role:"owner"}, head, floor, snapshot, size, created, updated, members: [{account, name, email, provider, role}] (owner first), invitations: [{id, email, provider, role, created, expires}]}`. Invitations are listed for the owner and editors only. Emails are verified ones or `null` |
 | `PATCH /v1/sr/projects/{p}` | `{name}` → `200` details (owner, editors) |
 | `DELETE /v1/sr/projects/{p}` | → `204` (owner). Crypto-erase: the wrapped key is removed in the same transaction that marks the project deleted; everything sealed under it is unreadable from then on, and maintenance removes rows and blobs. Members' later requests get `404` |
-| `POST /v1/sr/projects/{p}/log` | Body: one Yjs update (`application/octet-stream`, at most `sr_entry_bytes`, else `413`), headers `Scribyra-Client` (1–64 of `A-Z a-z 0-9 - _`, one per browser) and `Scribyra-Client-Seq` (1 to 2^53). → `201 {seq}` after commit (the durable acknowledgement); `200 {seq}` with the original number when the same `(client, clientSeq)` comes again with the same bytes; `409` with other bytes; `400` without both headers or when the body does not decode as a Yjs update (v1 encoding); `403` reviewer/viewer; `507 {"error":"quota"}` |
-| `GET /v1/sr/projects/{p}/log?after=n&limit=k` | → `200`, `application/octet-stream`: entries with `seq > n` in order, each framed as `seq` (u64 big-endian), length (u32 big-endian), the update. `limit` 1–1000 (default 256); a page stops at 16 MiB (at least one entry). Headers `Scribyra-Log-Head` (read again until you reach it), `Scribyra-Log-Floor`, `Scribyra-Snapshot-Seq`. With `n` below the floor: `410 {"error":"compacted", floor, snapshot}` (same headers): fetch the snapshot, then the log after it |
-| `GET /v1/sr/projects/{p}/snapshot` | → `200`, the whole Yjs state (one update, v1) covering `Scribyra-Snapshot-Seq`, with the log headers; `404 {"error":"no snapshot"}` before the first one (read the log from 0) |
-| `PUT /v1/sr/projects/{p}/objects/{sha256}` | Body: an asset or history object's plaintext (at most `sr_object_bytes`). → `201` stored, `204` already stored, `400` when the body's SHA-256 is not the path's, `403` reviewer/viewer, `413`, `507`, `503` when `uploads` are all busy. Upload objects before the update that references them |
+| `POST /v1/sr/projects/{p}/log` | Body: one Yjs update (`application/octet-stream`, at most `sr_entry_bytes`, else `413`), headers `Scribyra-Client` (1–64 of `A-Z a-z 0-9 - _`, one per browser) and `Scribyra-Client-Seq` (1 to 2^53). → `201 {seq}` after commit (the durable acknowledgement); `200 {seq}` with the original number when the same account sends the same `(client, clientSeq)` again with the same bytes; `409` with other bytes. Slots belong to the account: another member using the same client ID has slots of their own and cannot block these. `400` without both headers or when the body is not a valid Yjs update (v1 encoding, checked as above); `403` reviewer/viewer; `507 {"error":"quota"}`. Write access is checked again under the project's lock inside the append's transaction, so a member removed (`404`) or made a reviewer or viewer (`403`) while their append waits does not get it stored |
+| `GET /v1/sr/projects/{p}/log?after=n&limit=k` | → `200`, `application/octet-stream`: entries with `seq > n` in order, each framed as `seq` (u64 big-endian), length (u32 big-endian), the update. `limit` 1–1000 (default 256); a page stops at 16 MiB (at least one entry). Headers `Scribyra-Log-Head` (read again until you reach it), `Scribyra-Log-Floor`, `Scribyra-Snapshot-Seq`. With `n` below the floor: `410 {"error":"compacted", floor, snapshot}` (same headers): fetch the snapshot, then the log after it. The same `410` answers a page whose bodies the floor passed while it was being read |
+| `GET /v1/sr/projects/{p}/snapshot` | → `200`, the whole Yjs state (one update, v1) covering `Scribyra-Snapshot-Seq`, with the log headers; `404 {"error":"no snapshot"}` before the first one (read the log from 0); `410 {"error":"compacted", floor, snapshot}` when a newer snapshot replaced it while it was read (ask again) |
+| `PUT /v1/sr/projects/{p}/objects/{sha256}` | Body: an asset or history object's plaintext (at most `sr_object_bytes`). → `201` stored, `204` already stored, `400` when the body's SHA-256 is not the path's, `403` reviewer/viewer (checked again inside the upload's transaction, as for appends), `413`, `507`, `503` when `uploads` are all busy. Upload objects before the update that references them |
 | `GET /v1/sr/projects/{p}/objects/{sha256}` | → `200` the plaintext (checked against its hash), `404 {"error":"unknown object"}` |
-| `POST /v1/sr/projects/{p}/invitations` | `{email, role}` (owner, editors; lowercased). If active accounts with that **verified** email exist, they are shared at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Otherwise `201 {status:"pending", invitation: {id, email, role, expires}, project}`: the first sign-in with that verified email (any provider) turns it into a share. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
+| `POST /v1/sr/projects/{p}/invitations` | `{email, role}` (owner, editors). `email` is a plain email or `provider:email`. An email counts only at a provider that vouches for it (the same rule as `admins`): a plain email names accounts at providers whose `email_domains` include its domain, or at the deployment's only provider; `provider:email` names that provider's accounts. With several providers and none vouching, a plain email is `400` (name the provider); an unknown provider is `400`. If active accounts with that **verified** email exist at those providers, they are shared at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Otherwise `201 {status:"pending", invitation: {id, email, provider, role, expires}, project}` (`provider` is `null` for "any vouching provider"): the first sign-in with that verified email at such a provider turns it into a share. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
 | `DELETE /v1/sr/projects/{p}/invitations/{id}` | → `204` withdrawn, `404` unknown or no longer pending |
 | `PUT /v1/sr/projects/{p}/members/{account}` | `{role}` → `200` details (owner, editors), `404` if not a member |
 | `DELETE /v1/sr/projects/{p}/members/{account}` | → `204`. Owner and editors remove others; anyone removes themselves (leave), except the owner (`409`) |
 | `POST /v1/sr/projects/{p}/owner` | `{account}` (owner) → `200` details: that member (not a guest, `409`) becomes the owner and the old owner an editor |
-| `GET /v1/sr/heads?since=v&wait=s` | → `200 {version, projects: {"<id>": {head, role, name}}}` for every project the caller can open. With `since` equal to the current `version` it waits up to `wait` seconds (at most 25) until something the caller sees changes (an entry, a rename, a share or invitation acceptance, a removal or deletion), on any replica; then or at the deadline it answers. A notice only: read the logs afterwards. Shutdown ends waiting polls at once |
+| `GET /v1/sr/heads?since=v&wait=s` | → `200 {version, projects: {"<id>": {head, role, name}}}` for every project the caller can open. With `since` equal to the current `version` it waits up to `wait` seconds (at most 25) until something the caller sees changes (an entry, a rename, a share or invitation acceptance, a removal or deletion), on any replica; then or at the deadline it answers. A notice only: read the logs afterwards. Only notices about the caller's projects or account wake a poll. An account keeps at most 4 polls waiting per replica: a fifth ends the oldest at once with its current state and `superseded: true` (keep one poll per account and do not re-poll a superseded answer at once). A sign-out, revocation or block ends the session's polls at once with `401`. Shutdown ends waiting polls at once |
 
 **Sealing at rest.** Each project has a random 32-byte data key, stored only as
 `nonce ‖ XChaCha20-Poly1305(master key, nonce, "scribyra-sr-key/1\n<deployment>\n<project>", key)`
@@ -506,9 +523,13 @@ sent, for the person's own display only); `GET /v1/sso/me` (same body without `t
 `POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`. Sign-ins in progress, one-time
 grants and used back-channel logout tokens are in PostgreSQL (`sso_flows`, `sso_grants`,
 `sso_logout_jtis`; only hashes of states and grant codes), so any replica can finish a sign-in
-another one started. Each client address holds at most eight sign-ins in progress (a ninth
-replaces its oldest) and at most eight end-to-end session challenges, and a full table drops its
-oldest rather than refusing, so one client cannot lock others out.
+another one started. A source (an IPv4 address, or an IPv6 /64: what one host or subscriber
+holds) holds at most eight sign-ins in progress (a ninth replaces its oldest) and may start
+`sso_starts_per_minute` a minute per replica (`429` beyond); a network (IPv4 /24, IPv6 /48) holds
+at most 64 (its oldest replaced); and a full table (4096) or provider (256) drops the oldest
+sign-in of the network that holds the most, rather than refusing or dropping the oldest
+overall, so a network with few sign-ins keeps them while any other network holds more. A
+source holds at most eight end-to-end session challenges.
 
 **Removed with slice 8** (no replacement command): `scribyra-sync org create` and setup codes,
 `scribyra-sync org sso` and its table `org_sso`, invitation links, link-code device linking
@@ -534,7 +555,10 @@ minutes ahead, and `nonce` must match the sign-in. Keep the service's clock sync
 
 **Recheck and blocking.** Every `sso_recheck_tick_seconds`, logins that hold a refresh
 token and were last checked more than their provider's `recheck_minutes` ago are refreshed at
-the provider (rotated refresh tokens are stored). A refreshed ID token, when the provider sends
+the provider (rotated refresh tokens are stored). Every replica runs the recheck; a due login
+is claimed first (`FOR UPDATE SKIP LOCKED`, its `checked` time moved in the same statement), so
+only one replica ever uses a given refresh token: two using it would look like token theft to a
+provider with reuse detection. A refreshed ID token, when the provider sends
 one, is verified like a sign-in's (without the nonce) and updates the login's groups and guest
 mark; an account that no longer passes the group or guest rules has its logins revoked. If the
 provider answers `invalid_grant` (account disabled or deleted, consent or session revoked),
@@ -543,7 +567,7 @@ provider again, but stay blocked until an administrator unlinks them. Their acco
 `blocked` too; a later sign-in that the provider admits makes it `active` again. Any other
 client error (except 408 and 429) revokes only that login without blocking, so a
 wrong client secret does not block everyone. Network and server errors keep the login
-and retry on the next pass; the service logs only counters
+and retry on the next pass (the claim is undone); the service logs only counters
 (`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
 simply expire after `session_hours`: **group changes, guest marks and provider disablement
 reach such logins only when they expire**, so set `offline_access: true` (or use a provider that
@@ -675,7 +699,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `trusted_proxies` | `[]` | Peers allowed to name the client in `X-Forwarded-For` (exactly one address) |
 | `database_url_file` / `database_url` | none | PostgreSQL URL (file preferred); exactly one |
 | `database_connections` | 10 | Pool size (plus the ownership connection and, server-readable, the `LISTEN` connection) |
-| `migrate_on_start` | `true` | Apply pending migrations at start. With `false` the service refuses to start (`{"event":"schema_mismatch","schema":"behind"\|"ahead"}`) unless the schema is exactly its own: run `scribyra-sync migrate` first |
+| `migrate_on_start` | `true` | Apply pending migrations at start. With `false` the service refuses to start (`{"event":"schema_mismatch","schema":"behind"}`) unless every migration of its own is applied: run `scribyra-sync migrate` first. A schema a newer build extended (all of this build's migrations applied, with matching checksums, and more) is served either way (`{"event":"schema_ahead"}`): migrations are additive within a minor series |
 | `shutdown_grace_seconds` | 25 | 1–3600: after SIGTERM, how long in-flight requests may finish before the process exits 0 |
 | `blob_store`, `data`, `s3_endpoint`, `s3_region`, `s3_bucket`, `s3_access_key_id`, `s3_secret_access_key_file`, `s3_path_style` | filesystem, `service-data` | Blob store ([Storage fields](#storage-fields)). Several replicas need S3: a filesystem blob directory is locked by one process |
 | `service_key_file` | none | 32-byte master key; required for `encryption: "server"`; back it up apart from the database |
@@ -687,7 +711,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `sr_invitation_days` | 30 | 1–365: pending invitations expire |
 | `sr_maintenance_seconds` | 30 | 1–3600: background erasure, floor and blob clean-up pass |
 | `entry_inline_bytes` | 65536 | Entries (sealed) up to this size stay in PostgreSQL |
-| `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds` | 60, 60 | [Single sign-on](#single-sign-on-oidc) |
+| `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds`, `sso_starts_per_minute` | 60, 60, 60 | [Single sign-on](#single-sign-on-oidc) |
 | `org_bytes`, `sessions` | 1 GiB, 10000 | End-to-end organisation quota and device sessions |
 | `principals`, `object_bytes`, `namespace_bytes`, `total_bytes`, `namespace_objects`, `total_objects` | see [Access and limits](#access-and-limits) | Capability object store |
 | `tcp_connections`, `http_concurrency`, `requests_per_second`, `source_requests_per_second`, `rate_sources`, `uploads`, `principal_uploads`, `namespace_uploads`, `namespace_downloads`, `response_bytes`, `send_seconds` | see [Access and limits](#access-and-limits) | Admission and transfer limits (`uploads` also bounds server-readable object uploads) |
@@ -698,7 +722,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | Command | Does | Exit |
 | --- | --- | --- |
 | `scribyra-sync` or `scribyra-sync serve` | Serve (applies migrations first unless `migrate_on_start: false`) | 0 after SIGTERM/SIGINT, 1 on a startup or runtime failure |
-| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary | 0, or 1 |
+| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary (a downgrade) | 0, or 1 |
 | `scribyra-sync verify` | Check every capability object's blob and the usage rows | 0 when consistent |
 | `scribyra-sync migrate-sqlite <dir>` | One-time import of a milestone-S data directory | 0 |
 
@@ -707,7 +731,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | | Path | Answers |
 | --- | --- | --- |
 | Liveness | `/healthz` (also `/health`) | `200 {"live":true}` while the process serves; separate rate table, no transfer slot |
-| Readiness | `/readyz` (also `/ready`) | `200` when the database answers, the schema is exactly this build's, the ownership connection is alive and the blob store answers; otherwise `503`. Every request, probes included, gets `503` once shutdown began |
+| Readiness | `/readyz` (also `/ready`) | `200` when the database answers, every migration of this build is applied (a newer build's additional migrations do not matter, so its migration Job does not make the running replicas unready during a rollout), the ownership connection is alive and the blob store answers; otherwise `503`. Every request, probes included, gets `503` once shutdown began |
 | SIGTERM | | Stop accepting connections, answer new requests on open connections `503`, end heads long polls at once (they answer with the current state, so clients poll another replica), let in-flight requests finish for up to `shutdown_grace_seconds`, then exit 0 (`{"event":"shutdown"}`, then `{"event":"stopped"}` or `{"event":"drain_timeout"}`) |
 
 **Replicas.** A server-readable deployment keeps nothing a second replica would need in memory:
@@ -942,9 +966,10 @@ have their data re-upload it.
 install the new binary, start it (or run `scribyra-sync migrate` first and start replicas with
 `migrate_on_start: false`). Pending migrations (`crates/sync/migrations`,
 embedded in the binary and recorded in the `_sqlx_migrations` table with
-checksums) run automatically at startup. A database with a migration the binary
-does not know (a newer schema) or an applied migration whose checksum differs
-is refused; startup exits 1. Migrations are append-only. `scribyra-sync migrate` applies pending migrations and exits
+checksums) run automatically at startup. An applied migration whose checksum differs is
+refused (startup exits 1). A database with migrations the binary does not know, on top of all of
+its own (a newer build migrated it), is served, since migrations are additive within a minor
+series, but `scribyra-sync migrate` from the older binary refuses it. Migrations are append-only. `scribyra-sync migrate` applies pending migrations and exits
 (`{"event":"migrated","applied":n,"schema":N}`) without opening the blob store or serving; it
 takes no ownership lock (the migrator serialises itself), so it can run as a Job while replicas
 of the previous version serve, as long as each release's migrations are additive. The Kubernetes

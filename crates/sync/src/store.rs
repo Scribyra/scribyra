@@ -171,7 +171,8 @@ pub enum Schema {
     Current,
     /// Migrations this build has are not applied (run `scribyra-sync migrate`).
     Behind,
-    /// The database has migrations this build does not know (a newer version migrated it).
+    /// Every migration of this build is applied, and some a newer build added. Within a minor
+    /// series migrations are additive (design section 10), so this build still serves.
     Ahead,
 }
 impl Schema {
@@ -182,6 +183,12 @@ impl Schema {
             Self::Ahead => "ahead",
         }
     }
+    /// Whether this build can serve on the schema: all of its migrations applied (review L8: a
+    /// newer build's migration Job used to make every replica of the running build unready in
+    /// the middle of a rolling upgrade).
+    pub fn serves(self) -> bool {
+        matches!(self, Self::Current | Self::Ahead)
+    }
 }
 /// Compares the applied migrations with [`MIGRATOR`] (version and checksum).
 pub async fn schema(pool: &PgPool) -> Result<Schema, Error> {
@@ -190,15 +197,15 @@ pub async fn schema(pool: &PgPool) -> Result<Schema, Error> {
         return Ok(Schema::Behind);
     }
     let applied: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations WHERE success").fetch_all(pool).await?;
-    if applied.iter().any(|(v, _)| !MIGRATOR.iter().any(|m| m.version == *v)) {
-        return Ok(Schema::Ahead);
-    }
     for m in MIGRATOR.iter() {
         match applied.iter().find(|(v, _)| *v == m.version) {
             None => return Ok(Schema::Behind),
             Some((_, checksum)) if checksum.as_slice() != &*m.checksum => return Err("an applied migration differs from this build's".into()),
             Some(_) => {}
         }
+    }
+    if applied.iter().any(|(v, _)| !MIGRATOR.iter().any(|m| m.version == *v)) {
+        return Ok(Schema::Ahead);
     }
     Ok(Schema::Current)
 }
@@ -240,14 +247,15 @@ impl Store {
             .acquire_timeout(Duration::from_secs(10))
             .connect_with(options)
             .await?;
-        if config.migrate_on_start {
+        let found = schema(&pool).await?;
+        if found == Schema::Ahead {
+            // A newer build migrated (additively): serve, and leave its migrations alone.
+            println!("{}", serde_json::json!({"event": "schema_ahead"}));
+        } else if config.migrate_on_start {
             MIGRATOR.run(&pool).await?;
-        } else {
-            let found = schema(&pool).await?;
-            if found != Schema::Current {
-                println!("{}", serde_json::json!({"event": "schema_mismatch", "schema": found.as_str()}));
-                return Err("the database schema does not match this build".into());
-            }
+        } else if found != Schema::Current {
+            println!("{}", serde_json::json!({"event": "schema_mismatch", "schema": found.as_str()}));
+            return Err("the database schema does not match this build".into());
         }
         let (blobs, directory): (Arc<dyn BlobStore>, _) = match config.blob_store {
             BlobBackend::Filesystem => {
@@ -296,10 +304,10 @@ impl Store {
         Ok(store)
     }
 
-    /// Readiness: a pooled round trip, the schema this build expects, the ownership connection,
+    /// Readiness: a pooled round trip, every migration of this build applied, the ownership connection,
     /// and a blob store probe.
     pub async fn ready(&self) -> Result<(), Error> {
-        if schema(&self.pool).await? != Schema::Current {
+        if !schema(&self.pool).await?.serves() {
             return Err("schema mismatch".into());
         }
         self.owner_alive().await?;

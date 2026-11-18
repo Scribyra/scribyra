@@ -245,6 +245,19 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
     );
     response
 }
+/// A panic in a handler answers `500` and ends that request only. (Tokio would contain it to the
+/// connection's task anyway; an abort, such as a failed allocation, cannot be caught at all,
+/// which is why untrusted Yjs updates are checked before `yrs` decodes them.)
+async fn catch_panic(request: Request<Body>, next: Next) -> Response {
+    use futures_util::FutureExt;
+    match std::panic::AssertUnwindSafe(next.run(request)).catch_unwind().await {
+        Ok(response) => response,
+        Err(_) => {
+            println!("{{\"event\":\"handler_panicked\"}}");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
 async fn ready(State(s): State<Shared>) -> StatusCode {
     let Ok(permit) = s.disk.clone().try_acquire_owned() else {
         return StatusCode::SERVICE_UNAVAILABLE;
@@ -582,6 +595,7 @@ pub fn router(s: Shared) -> Router {
         .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone(), s.sso.clone())))
         .merge(crate::sso::routes(s.sso.clone()))
         .merge(crate::server_projects::routes(s.server_projects.clone()))
+        .layer(middleware::from_fn(catch_panic))
         .layer(middleware::from_fn_with_state(s, guard))
         // Outermost, so the guard's refusals (429, 503, 403) reach the page as statuses rather
         // than as opaque network errors, and preflights are answered without spending the

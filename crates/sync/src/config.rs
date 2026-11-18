@@ -85,6 +85,8 @@ pub struct Config {
     pub sso_recheck_tick_seconds: u64,
     /// Minimum interval between JWKS refetches triggered by an unknown key ID.
     pub sso_jwks_refetch_seconds: u64,
+    /// Sign-ins one source (an IPv4 address or an IPv6 /64) may start per minute, per replica.
+    pub sso_starts_per_minute: u32,
     /// The organisation this deployment serves: its policy and sign-in providers. Optional only
     /// so a plain object store and relay can run without one; every organisation route needs it.
     pub deployment: Option<Deployment>,
@@ -161,6 +163,7 @@ impl Default for Config {
             entry_inline_bytes: 64 * 1024,
             sessions: 10000,
             sso_recheck_tick_seconds: 60,
+            sso_starts_per_minute: 60,
             sso_jwks_refetch_seconds: 60,
             deployment: None,
             migrate_on_start: true,
@@ -313,7 +316,7 @@ impl Config {
         if self.sr_snapshot_entries == 0 || self.sr_snapshot_bytes == 0 || self.sr_retention_seconds > 366 * 24 * 3600 || !(1..=365).contains(&self.sr_invitation_days) || !(1..=3600).contains(&self.sr_maintenance_seconds) {
             return Err("invalid server-readable limits (sr_snapshot_entries, sr_snapshot_bytes, sr_retention_seconds, sr_invitation_days, sr_maintenance_seconds)");
         }
-        if !(1..=3600).contains(&self.sso_recheck_tick_seconds) || self.sso_jwks_refetch_seconds > 3600 {
+        if !(1..=3600).contains(&self.sso_recheck_tick_seconds) || self.sso_jwks_refetch_seconds > 3600 || !(1..=100_000).contains(&self.sso_starts_per_minute) {
             return Err("invalid single sign-on limits");
         }
         if let Some(url) = &self.public_url {

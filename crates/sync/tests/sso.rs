@@ -477,7 +477,7 @@ fn one_client_cannot_fill_the_sign_ins_in_progress() {
     // Review M2: one source starting sign-ins without end used to fill the provider's 256 slots
     // for ten minutes, so everyone else got 503. Now each source holds a few, replacing its own
     // oldest, and nobody is refused for room.
-    let env = Env::start("RS256", default_users(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000}), json!({}));
+    let env = Env::start("RS256", default_users(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000, "sso_starts_per_minute": 100000}), json!({}));
     let start = |ip: &str| {
         let verifier = random_bytes(32);
         let (status, reply) = post_from(ip, &format!("{}/v1/sso/start", env.service.url), &json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}));
@@ -520,4 +520,105 @@ fn each_provider_has_its_own_redirect_uri_and_a_response_counts_only_there() {
     assert_eq!(c.callback(&callback).0, 400);
     // The path without a provider is gone.
     assert_eq!(fetch(&c.url("/v1/sso/callback?code=x&state=y"), None).status, 404);
+}
+
+/// Review H3: every replica ran the recheck over the same due logins. Two of them refreshing the
+/// same (rotating) refresh token meant one got `invalid_grant` for the other's use, and that
+/// revoked every login of the person and blocked them. Due logins are now claimed (`FOR UPDATE
+/// SKIP LOCKED`, `checked` moved in the same statement) before the provider is called.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_replicas_never_refresh_the_same_token() {
+    use scribyra_sync::{config::Config, listener, service, sso::Sso, store::Store};
+    use std::sync::Arc;
+    let port = free_port();
+    let public = format!("http://127.0.0.1:{port}");
+    let dir = temp_dir("scribyra-sso-claim-");
+    let public2 = public.clone();
+    let idp = Arc::new(tokio::task::spawn_blocking(move || Idp::start("RS256", &public2, default_users())).await.unwrap());
+    let config = Config {
+        bind: format!("127.0.0.1:{port}").parse().unwrap(),
+        data: dir.join("data"),
+        database_url: Some(tokio::task::spawn_blocking(|| postgres().database()).await.unwrap()),
+        origins: vec![APP.into()],
+        public_url: Some(public.clone()),
+        deployment: Some(serde_json::from_value(deployment(&idp, json!({"provider": {"offline_access": true}}))).unwrap()),
+        ..Config::default()
+    };
+    let store = Store::open(config.clone()).await.unwrap();
+    let s = service::state(store).unwrap();
+    let tcp = tokio::net::TcpListener::bind(config.bind).await.unwrap();
+    tokio::spawn(axum::serve(listener::Listener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(64)) }, service::router(s.clone()).into_make_service_with_connect_info::<listener::Connection>()).into_future());
+    // A second replica's sign-in module on the same database.
+    let other = Sso::new(s.store.clone());
+    let (i, base) = (idp.clone(), public.clone());
+    let token = tokio::task::spawn_blocking(move || Client { base, provider: "test".into(), idp: &i }.login("alice")["token"].as_str().unwrap().to_owned()).await.unwrap();
+    let refresh = || sqlx::query_scalar::<_, String>("SELECT refresh_token FROM sso_logins WHERE token_hash = $1").bind(sha256(token.as_bytes())).fetch_one(&s.store.pool);
+    let before = refresh().await.unwrap();
+    // The provider answers refresh grants slowly, so both passes are in flight at once.
+    let i = idp.clone();
+    assert_eq!(tokio::task::spawn_blocking(move || i.control("delay?ms=1500").status).await.unwrap(), 200);
+    for round in 0..2 {
+        sqlx::query("UPDATE sso_logins SET checked = now() - interval '1 day'").execute(&s.store.pool).await.unwrap();
+        tokio::join!(s.sso.recheck(), other.recheck());
+        assert!(s.sso.login(&token).await.unwrap().is_some(), "round {round}: the login was revoked");
+        assert_eq!(sqlx::query_scalar::<_, String>("SELECT state FROM accounts WHERE subject = 'sub-alice'").fetch_one(&s.store.pool).await.unwrap(), "active");
+    }
+    assert_ne!(refresh().await.unwrap(), before, "no refresh happened");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review M5: sign-ins in progress were bounded per full client address, so one IPv6 host (which
+/// holds a whole /64) or one network could still fill the table, and a full table dropped the
+/// oldest sign-in whoever it belonged to. Now a source is an IPv4 address or an IPv6 /64, a
+/// network (IPv4 /24, IPv6 /48) holds at most 64, a full table drops the oldest of the network
+/// that holds the most, and each source may start only so many sign-ins a minute.
+#[test]
+fn sign_ins_in_progress_are_bounded_per_network_and_rated_per_source() {
+    let env = Env::start("RS256", default_users(), json!({"trusted_proxies": ["127.0.0.1"], "requests_per_second": 100000, "source_requests_per_second": 100000, "sso_starts_per_minute": 100000}), json!({}));
+    let db = env.service.database_url().to_owned();
+    let start = |source: &str| {
+        let verifier = random_bytes(32);
+        let reply = agent()
+            .post(&format!("{}/v1/sso/start", env.service.url))
+            .header("X-Forwarded-For", source)
+            .header("Content-Type", "application/json")
+            .send(json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}).to_string().as_bytes())
+            .unwrap();
+        reply.status().as_u16()
+    };
+    let count = || postgres().psql(&db, "SELECT count(*) FROM sso_flows").parse::<i64>().unwrap();
+    // One IPv6 host walking through its /64 holds eight sign-ins, as one IPv4 address does.
+    for n in 1..=40 {
+        assert_eq!(start(&format!("2001:db8:0:1::{n:x}")), 200);
+    }
+    assert_eq!(count(), 8);
+    // A /48 walking through its /64s holds 64 in all; the eight above are its own.
+    for n in 2..=100 {
+        assert_eq!(start(&format!("2001:db8:0:{n:x}::1")), 200);
+    }
+    assert_eq!(count(), 64);
+    assert_eq!(postgres().psql(&db, "SELECT DISTINCT network FROM sso_flows"), "2001:db8::/48");
+    // A full table drops the oldest sign-in of the network holding the most, not the oldest one.
+    postgres().psql(&db, "DELETE FROM sso_flows");
+    let flows = |rows: &str| format!("INSERT INTO sso_flows (state_hash, provider, return_to, challenge, nonce, verifier, expires, source, network) {rows}");
+    postgres().psql(&db, &flows(&format!("VALUES (repeat('0', 64), 'test', '{APP}', repeat('c', 64), 'n', 'v', now() + interval '10 minutes' - interval '500 seconds', 'victim', 'victim')")));
+    postgres().psql(&db, &flows(&format!(
+        "SELECT lpad(to_hex(i), 64, '0'), 'other', '{APP}', repeat('c', 64), 'n', 'v', now() + interval '10 minutes' - make_interval(secs => i % 60), 'net' || (i % 70), 'net' || (i % 70) FROM generate_series(1, 4095) i"
+    )));
+    assert_eq!(start("192.0.2.1"), 200);
+    assert_eq!(count(), 4096);
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM sso_flows WHERE network = 'victim'"), "1");
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM sso_flows WHERE network = '192.0.2.0/24'"), "1");
+    // Starts are rated per source.
+    let limited = Env::start("RS256", default_users(), json!({"trusted_proxies": ["127.0.0.1"], "sso_starts_per_minute": 5}), json!({}));
+    let statuses: Vec<u16> = (0..8).map(|_| {
+        let verifier = random_bytes(32);
+        agent().post(&format!("{}/v1/sso/start", limited.service.url)).header("X-Forwarded-For", "2001:db8:5::1").header("Content-Type", "application/json")
+            .send(json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}).to_string().as_bytes()).unwrap().status().as_u16()
+    }).collect();
+    assert_eq!(statuses, [200, 200, 200, 200, 200, 429, 429, 429]);
+    let verifier = random_bytes(32);
+    assert_eq!(agent().post(&format!("{}/v1/sso/start", limited.service.url)).header("X-Forwarded-For", "2001:db8:5:1::1").header("Content-Type", "application/json")
+        .send(json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}).to_string().as_bytes()).unwrap().status().as_u16(), 200);
 }

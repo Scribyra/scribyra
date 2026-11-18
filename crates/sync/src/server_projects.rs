@@ -4,8 +4,10 @@
 //! files, and lets owners and editors share by email invitation.
 //!
 //! Everything durable is in PostgreSQL and the blob store; replicas share nothing in memory.
-//! A change (entry, rename, share, deletion) is announced with `NOTIFY scribyra_sr`; every
-//! replica `LISTEN`s and wakes its waiting heads polls.
+//! A change (entry, rename, share, deletion) is announced with `NOTIFY scribyra_sr`, naming the
+//! project, and a change to the projects an account can see (or to its sessions) with
+//! `a:<account>`; every replica `LISTEN`s and wakes only the heads polls those notices concern.
+//! Payloads only route wake-ups: a woken poll reads everything it answers from the database.
 //!
 //! **Sealing.** Each project has a random 32-byte data key, stored only wrapped by the master
 //! key (`service_key_file`) with XChaCha20-Poly1305 and associated data naming the deployment
@@ -36,17 +38,19 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashMap, HashSet},
     sync::{Arc, Mutex},
     time::Duration,
 };
 use tokio::sync::{Notify, Semaphore, watch};
 use yrs::{Any, GetString, Map, Options, Out, ReadTxn, StateVector, Transact, Update, updates::decoder::Decode};
 
-/// The PostgreSQL notification channel; the payload is the project ID.
+/// The PostgreSQL notification channel; the payload is a project ID or `a:<account>`.
 pub const CHANNEL: &str = "scribyra_sr";
 /// The longest a heads poll waits.
 pub const MAX_HEADS_WAIT_SECS: u64 = 25;
+/// Heads polls one account may keep waiting on one replica; a further one ends the oldest.
+pub const MAX_POLLS_PER_ACCOUNT: usize = 4;
 const MAX_LOG_PAGE: i64 = 1000;
 const DEFAULT_LOG_PAGE: i64 = 256;
 const MAX_LOG_PAGE_BYTES: usize = 16 * 1024 * 1024;
@@ -70,6 +74,11 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 }
 fn random_hex() -> String {
     orgsync::hex(&random_bytes::<32>())
+}
+/// The ID of the project an account creates with the request ID `key`:
+/// SHA-256 of `scribyra-sr-project/1\n<account>\n<key>`, in hex.
+pub fn project_id(account: &str, key: &str) -> String {
+    blob::hash(format!("scribyra-sr-project/1\n{account}\n{key}").as_bytes())
 }
 fn is_id(text: &str) -> bool {
     blob::valid_hash(text)
@@ -181,6 +190,8 @@ pub enum Appended {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppendError {
     NotFound,
+    /// The account may read but no longer write (403).
+    Forbidden,
     /// The same client sequence number with other bytes (409).
     Conflict,
     /// A quota would be exceeded (507).
@@ -192,6 +203,21 @@ impl From<sqlx::Error> for AppendError {
     fn from(_: sqlx::Error) -> Self {
         Self::Internal
     }
+}
+/// Whether `account` may still write to the project whose row this transaction has locked: the
+/// owner, or an editor whose share is locked here until commit, so a removal or role change
+/// either waits for the write or is seen by it (review L7: access checked before the
+/// transaction let a removed editor's in-flight append commit).
+async fn may_write(tx: &mut sqlx::PgConnection, project: &str, owner: &str, account: &str) -> Result<Result<(), AppendError>, sqlx::Error> {
+    if owner == account {
+        return Ok(Ok(()));
+    }
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM sr_shares WHERE project = $1 AND account = $2 FOR SHARE").bind(project).bind(account).fetch_optional(&mut *tx).await?;
+    Ok(match role.as_deref().and_then(Access::share) {
+        Some(access) if access.writes() => Ok(()),
+        Some(_) => Err(AppendError::Forbidden),
+        None => Err(AppendError::NotFound),
+    })
 }
 
 impl Projects {
@@ -239,8 +265,9 @@ impl Projects {
         }
     }
 
-    /// Creates an empty project owned by `owner`. With `id`, a repeat by the same owner is
-    /// `Ok(false)` (the project exists); someone else's ID is `Err(Conflict)`.
+    /// Creates an empty project owned by `owner`. A repeat by the same owner is `Ok(false)` (the
+    /// project exists); an ID someone else holds is `Err(Conflict)` (with IDs derived from the
+    /// owner, only by a SHA-256 collision).
     pub async fn create(&self, id: &str, owner: &str, name: &str) -> Result<bool, AppendError> {
         let key = random_bytes::<32>();
         let mut tx = self.pool().begin().await?;
@@ -259,11 +286,12 @@ impl Projects {
             };
         }
         notify(&mut tx, id).await?;
+        notify_account(&mut tx, owner).await?;
         tx.commit().await?;
         Ok(true)
     }
 
-    /// Appends one update (already checked to decode). Idempotent per (client, client_seq):
+    /// Appends one update (already checked to decode). Idempotent per (account, client, client_seq):
     /// identical bytes get the original sequence number, other bytes `Conflict`. The answer is
     /// given only after commit, with the body durable (inline, or in the blob store first).
     pub async fn append(&self, project: &str, account: &str, client: &str, client_seq: i64, body: &[u8]) -> Result<Appended, AppendError> {
@@ -276,16 +304,19 @@ impl Projects {
             .await?
             .ok_or(AppendError::NotFound)?;
         let (head, wrapped, owner, project_bytes): (i64, Option<Vec<u8>>, String, i64) = (row.get(0), row.get(1), row.get(2), row.get(3));
-        let existing: Option<(i64, String, Option<String>)> = sqlx::query_as("SELECT seq, body_hash, account FROM sr_entries WHERE project = $1 AND client = $2 AND client_seq = $3")
+        may_write(&mut tx, project, &owner, account).await??;
+        // A slot is (account, client, client sequence): another member reusing this client ID
+        // has slots of their own and cannot block these (review L1).
+        let existing: Option<(i64, String)> = sqlx::query_as("SELECT seq, body_hash FROM sr_entries WHERE project = $1 AND account = $2 AND client = $3 AND client_seq = $4")
             .bind(project)
+            .bind(account)
             .bind(client)
             .bind(client_seq)
             .fetch_optional(&mut *tx)
             .await?;
-        if let Some((seq, hash, by)) = existing {
+        if let Some((seq, hash)) = existing {
             let _ = tx.rollback().await;
-            // Only the account that sent it gets the acknowledgement of a repeat.
-            return if hash == body_hash && by.as_deref() == Some(account) { Ok(Appended::Repeated(seq)) } else { Err(AppendError::Conflict) };
+            return if hash == body_hash { Ok(Appended::Repeated(seq)) } else { Err(AppendError::Conflict) };
         }
         let key = self.data_key(project, wrapped.as_deref()).ok_or(AppendError::Internal)?;
         let seq = head + 1;
@@ -366,14 +397,21 @@ impl Projects {
         for r in rows {
             let seq: i64 = r.get(0);
             let sealed = self.read_body(r.get(2), r.get(3), r.get(1)).await?;
-            updates.push(open(&key, &item_ad(project, "update", &seq.to_string()), &sealed).ok_or("an entry does not open")?);
+            let update = open(&key, &item_ad(project, "update", &seq.to_string()), &sealed).ok_or("an entry does not open")?;
+            // Entries are checked again (stored before the check existed, or by another build);
+            // snapshots are the server's own `yrs` output.
+            crate::update_check::check(&update)?;
+            updates.push(update);
         }
-        {
+        // A panic inside `yrs` fails this replay, not the process or the replica's task.
+        let applied = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> Result<(), Error> {
             let mut txn = doc.transact_mut();
             for update in updates {
                 txn.apply_update(Update::decode_v1(&update)?)?;
             }
-        }
+            Ok(())
+        }));
+        applied.map_err(|_| "yrs panicked while replaying the log")??;
         Ok((doc, head))
     }
 
@@ -383,8 +421,16 @@ impl Projects {
         if !self.compacting.lock().unwrap().insert(project.to_owned()) {
             return Ok(None);
         }
+        // Cleared however this ends: returned, failed, panicked or dropped (review L3).
+        struct Claim<'a>(&'a Mutex<HashSet<String>>, &'a str);
+        impl Drop for Claim<'_> {
+            fn drop(&mut self) {
+                self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(self.1);
+            }
+        }
+        let claim = Claim(&self.compacting, project);
         let result = self.compact_now(project).await;
-        self.compacting.lock().unwrap().remove(project);
+        drop(claim);
         if result.as_ref().is_ok_and(Option::is_some) && self.store.config.sr_retention_seconds == 0 {
             self.move_floor(project).await?;
         }
@@ -540,7 +586,7 @@ impl Projects {
         Ok(Some(plain))
     }
     /// Stores an object (its hash already checked): `Ok(true)` if new, `Ok(false)` if it was there.
-    pub async fn put_object(&self, project: &str, hash: &str, bytes: &[u8]) -> Result<bool, AppendError> {
+    pub async fn put_object(&self, project: &str, account: &str, hash: &str, bytes: &[u8]) -> Result<bool, AppendError> {
         let present: Option<i32> = sqlx::query_scalar("SELECT 1 FROM sr_objects WHERE project = $1 AND hash = $2").bind(project).bind(hash).fetch_optional(self.pool()).await?;
         if present.is_some() {
             return Ok(false);
@@ -555,6 +601,9 @@ impl Projects {
             let Some((owner, project_bytes)): Option<(String, i64)> = sqlx::query_as("SELECT owner, bytes FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await? else {
                 return Ok(Err(AppendError::NotFound));
             };
+            if let Err(e) = may_write(&mut tx, project, &owner, account).await? {
+                return Ok(Err(e));
+            }
             let present: Option<i32> = sqlx::query_scalar("SELECT 1 FROM sr_objects WHERE project = $1 AND hash = $2").bind(project).bind(hash).fetch_optional(&mut *tx).await?;
             if present.is_some() {
                 return Ok(Ok(false));
@@ -657,20 +706,32 @@ async fn notify(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str) -
     sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(project).execute(&mut **tx).await?;
     Ok(())
 }
+/// Tells the account's heads polls that the projects it can see (or its sessions) changed.
+pub async fn notify_account(tx: &mut sqlx::PgConnection, account: &str) -> Result<(), sqlx::Error> {
+    sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(format!("a:{account}")).execute(&mut *tx).await?;
+    Ok(())
+}
 
 /// Turns pending, unexpired invitations to the account's verified email into shares (called at
-/// every sign-in of a server-readable deployment). An unverified email matches nothing.
-pub async fn accept_invitations(pool: &PgPool, account: &str) -> Result<(), sqlx::Error> {
+/// every sign-in of a server-readable deployment). An unverified email matches nothing, and an
+/// invitation counts only for the provider it names or, naming none, for a provider whose
+/// `email_domains` vouch for the email (review H2).
+pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate::config::Deployment) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let email: Option<String> = sqlx::query_scalar("SELECT lower(email) FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
-    let Some(email) = email else { return Ok(()) };
+    let row: Option<(String, String)> = sqlx::query_as("SELECT email, provider FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
+    let Some((email, provider)) = row else { return Ok(()) };
+    let email = crate::sso::normalise_email(&email);
+    let vouched = deployment.provider(&provider).is_some_and(|p| crate::sso::vouches(p, &email));
     let accepted: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p
          WHERE i.project = p.project AND p.deleted IS NULL AND p.owner <> $2 AND i.state = 'pending' AND i.email = $1 AND i.expires > now()
+           AND (i.provider = $3 OR (i.provider IS NULL AND $4))
          RETURNING i.project, i.role, i.created_by",
     )
     .bind(&email)
     .bind(account)
+    .bind(&provider)
+    .bind(vouched)
     .fetch_all(&mut *tx)
     .await?;
     for (project, role, by) in &accepted {
@@ -683,17 +744,126 @@ pub async fn accept_invitations(pool: &PgPool, account: &str) -> Result<(), sqlx
             .await?;
         notify(&mut tx, project).await?;
     }
+    if !accepted.is_empty() {
+        notify_account(&mut tx, account).await?;
+    }
     tx.commit().await
+}
+
+/// The heads polls waiting on this replica, indexed by account and by the projects each one's
+/// account could see when it last looked (review M4: every notice used to wake every poll).
+#[derive(Default)]
+pub struct Polls {
+    next: u64,
+    polls: HashMap<u64, Poll>,
+    by_project: HashMap<String, HashSet<u64>>,
+    by_account: HashMap<String, BTreeSet<u64>>,
+}
+struct Poll {
+    account: String,
+    projects: HashSet<String>,
+    wake: Arc<Notify>,
+    superseded: bool,
+}
+impl Polls {
+    /// Registers a poll; past [`MAX_POLLS_PER_ACCOUNT`] the account's oldest is superseded
+    /// (woken to answer at once). Returns the poll's ID and its wake-up.
+    pub fn register(&mut self, account: &str) -> (u64, Arc<Notify>) {
+        let id = self.next;
+        self.next += 1;
+        let mine = self.by_account.entry(account.to_owned()).or_default();
+        let live: Vec<u64> = mine.iter().copied().filter(|p| !self.polls[p].superseded).collect();
+        if live.len() >= MAX_POLLS_PER_ACCOUNT {
+            let oldest = self.polls.get_mut(&live[0]).expect("indexed poll");
+            oldest.superseded = true;
+            oldest.wake.notify_one();
+        }
+        mine.insert(id);
+        let wake = Arc::new(Notify::new());
+        self.polls.insert(id, Poll { account: account.to_owned(), projects: HashSet::new(), wake: wake.clone(), superseded: false });
+        (id, wake)
+    }
+    /// Records the projects the poll's account can see; returns whether any is new to it.
+    pub fn watch<'a>(&mut self, id: u64, projects: impl IntoIterator<Item = &'a String>) -> bool {
+        let Some(poll) = self.polls.get_mut(&id) else { return false };
+        let now: HashSet<String> = projects.into_iter().cloned().collect();
+        let added = now.difference(&poll.projects).cloned().collect::<Vec<_>>();
+        for gone in poll.projects.difference(&now) {
+            if let Some(set) = self.by_project.get_mut(gone) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.by_project.remove(gone);
+                }
+            }
+        }
+        for project in &added {
+            self.by_project.entry(project.clone()).or_default().insert(id);
+        }
+        poll.projects = now;
+        !added.is_empty()
+    }
+    pub fn superseded(&self, id: u64) -> bool {
+        self.polls.get(&id).is_some_and(|p| p.superseded)
+    }
+    pub fn remove(&mut self, id: u64) {
+        let Some(poll) = self.polls.remove(&id) else { return };
+        self.watch_none(&poll.projects, id);
+        if let Some(set) = self.by_account.get_mut(&poll.account) {
+            set.remove(&id);
+            if set.is_empty() {
+                self.by_account.remove(&poll.account);
+            }
+        }
+    }
+    fn watch_none(&mut self, projects: &HashSet<String>, id: u64) {
+        for project in projects {
+            if let Some(set) = self.by_project.get_mut(project) {
+                set.remove(&id);
+                if set.is_empty() {
+                    self.by_project.remove(project);
+                }
+            }
+        }
+    }
+    /// Wakes the polls a notice concerns (a project ID, or `a:<account>`); returns how many.
+    pub fn route(&self, payload: &str) -> usize {
+        let ids: Vec<u64> = match payload.strip_prefix("a:") {
+            Some(account) => self.by_account.get(account).map(|s| s.iter().copied().collect()).unwrap_or_default(),
+            None => self.by_project.get(payload).map(|s| s.iter().copied().collect()).unwrap_or_default(),
+        };
+        for id in &ids {
+            self.polls[id].wake.notify_one();
+        }
+        ids.len()
+    }
+    /// Wakes every poll (the listener reconnected, so notices may have been lost).
+    pub fn wake_all(&self) {
+        for poll in self.polls.values() {
+            poll.wake.notify_one();
+        }
+    }
+    pub fn len(&self) -> usize {
+        self.polls.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.polls.is_empty()
+    }
 }
 
 /// The HTTP side: routes, the heads long poll and the background tasks.
 pub struct Sr {
     projects: Option<Arc<Projects>>,
     sso: Arc<Sso>,
-    /// Bumped on every `NOTIFY` (and on listener reconnects, when notices may have been lost).
-    changes: watch::Sender<u64>,
+    polls: Mutex<Polls>,
     shutdown: watch::Receiver<bool>,
     uploads: Arc<Semaphore>,
+}
+/// Unregisters a heads poll however its request ends.
+struct PollGuard<'a>(&'a Sr, u64);
+impl Drop for PollGuard<'_> {
+    fn drop(&mut self) {
+        self.0.polls.lock().unwrap().remove(self.1);
+    }
 }
 type Shared = Arc<Sr>;
 
@@ -707,7 +877,7 @@ impl Sr {
     pub fn new(store: Arc<Store>, sso: Arc<Sso>, shutdown: watch::Receiver<bool>) -> Result<Shared, Error> {
         let uploads = Arc::new(Semaphore::new(store.config.uploads));
         let projects = Projects::new(store.clone())?;
-        let sr = Arc::new(Self { projects, sso, changes: watch::channel(0).0, shutdown, uploads });
+        let sr = Arc::new(Self { projects, sso, polls: Mutex::default(), shutdown, uploads });
         if sr.projects.is_some()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
@@ -755,7 +925,7 @@ impl Sr {
         let pool = &projects.store.pool;
         let row = sqlx::query(
             "SELECT p.name, p.head_seq, p.floor_seq, p.snapshot_seq, p.bytes, (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint,
-                    o.account, o.name, CASE WHEN o.email_verified THEN o.email END
+                    o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider
              FROM sr_projects p JOIN accounts o ON o.account = p.owner WHERE p.project = $1 AND p.deleted IS NULL",
         )
         .bind(project)
@@ -763,25 +933,25 @@ impl Sr {
         .await
         .map_err(internal)?
         .ok_or_else(not_found)?;
-        let owner = json!({"account": row.get::<String, _>(7), "name": row.get::<Option<String>, _>(8), "email": row.get::<Option<String>, _>(9), "role": "owner"});
+        let owner = json!({"account": row.get::<String, _>(7), "name": row.get::<Option<String>, _>(8), "email": row.get::<Option<String>, _>(9), "provider": row.get::<String, _>(10), "role": "owner"});
         let mut members = vec![owner.clone()];
-        let shares = sqlx::query("SELECT a.account, a.name, CASE WHEN a.email_verified THEN a.email END, s.role FROM sr_shares s JOIN accounts a USING (account) WHERE s.project = $1 ORDER BY s.created, a.account")
+        let shares = sqlx::query("SELECT a.account, a.name, CASE WHEN a.email_verified THEN a.email END, s.role, a.provider FROM sr_shares s JOIN accounts a USING (account) WHERE s.project = $1 ORDER BY s.created, a.account")
             .bind(project)
             .fetch_all(pool)
             .await
             .map_err(internal)?;
         for s in shares {
-            members.push(json!({"account": s.get::<String, _>(0), "name": s.get::<Option<String>, _>(1), "email": s.get::<Option<String>, _>(2), "role": s.get::<String, _>(3)}));
+            members.push(json!({"account": s.get::<String, _>(0), "name": s.get::<Option<String>, _>(1), "email": s.get::<Option<String>, _>(2), "provider": s.get::<String, _>(4), "role": s.get::<String, _>(3)}));
         }
         let mut invitations = Vec::new();
         if access.writes() && caller.role != Role::Guest {
-            let rows = sqlx::query("SELECT invitation, email, role, (extract(epoch FROM created) * 1000)::bigint, (extract(epoch FROM expires) * 1000)::bigint FROM sr_invitations WHERE project = $1 AND state = 'pending' AND expires > now() ORDER BY created")
+            let rows = sqlx::query("SELECT invitation, email, role, (extract(epoch FROM created) * 1000)::bigint, (extract(epoch FROM expires) * 1000)::bigint, provider FROM sr_invitations WHERE project = $1 AND state = 'pending' AND expires > now() ORDER BY created")
                 .bind(project)
                 .fetch_all(pool)
                 .await
                 .map_err(internal)?;
             for r in rows {
-                invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
+                invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "provider": r.get::<Option<String>, _>(5), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
             }
         }
         Ok(json!({
@@ -810,26 +980,31 @@ impl Sr {
     }
 }
 
-/// Follows `NOTIFY scribyra_sr` on a dedicated connection, reconnecting after failures.
+/// Follows `NOTIFY scribyra_sr` on a dedicated connection, reconnecting after failures. A
+/// notice wakes the polls it concerns; (re)connecting wakes every poll, since notices may have
+/// been lost meanwhile.
 async fn listen(sr: std::sync::Weak<Sr>, pool: PgPool) {
     loop {
         if let Ok(mut listener) = sqlx::postgres::PgListener::connect_with(&pool).await
             && listener.listen(CHANNEL).await.is_ok()
         {
+            let Some(s) = sr.upgrade() else { return };
+            s.polls.lock().unwrap().wake_all();
+            drop(s);
             loop {
-                let Some(sr) = sr.upgrade() else { return };
-                // A notice wakes the polls; a lost connection may have dropped some, so it does too.
-                sr.changes.send_modify(|n| *n += 1);
-                drop(sr);
-                match listener.try_recv().await {
-                    Ok(Some(_)) => continue,
+                let notice = listener.try_recv().await;
+                let Some(s) = sr.upgrade() else { return };
+                match notice {
+                    Ok(Some(n)) => {
+                        s.polls.lock().unwrap().route(n.payload());
+                    }
                     Ok(None) | Err(_) => break,
                 }
             }
         }
-        let Some(sr) = sr.upgrade() else { return };
-        sr.changes.send_modify(|n| *n += 1);
-        drop(sr);
+        let Some(s) = sr.upgrade() else { return };
+        s.polls.lock().unwrap().wake_all();
+        drop(s);
         tokio::time::sleep(Duration::from_secs(1)).await;
     }
 }
@@ -851,7 +1026,7 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
     };
     let rows = sqlx::query(
         "SELECT p.project, p.name, CASE WHEN p.owner = $1 THEN 'owner' ELSE s.role END, p.head_seq, p.bytes,
-                (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END
+                (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider
          FROM sr_projects p JOIN accounts o ON o.account = p.owner LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
          WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL) ORDER BY p.updated DESC, p.project",
     )
@@ -866,7 +1041,7 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
         .iter()
         .map(|r| {
             json!({"id": r.get::<String, _>(0), "name": r.get::<String, _>(1), "role": r.get::<String, _>(2), "head": r.get::<i64, _>(3), "size": r.get::<i64, _>(4),
-                   "created": r.get::<i64, _>(5), "updated": r.get::<i64, _>(6), "owner": {"account": r.get::<String, _>(7), "name": r.get::<Option<String>, _>(8), "email": r.get::<Option<String>, _>(9)}})
+                   "created": r.get::<i64, _>(5), "updated": r.get::<i64, _>(6), "owner": {"account": r.get::<String, _>(7), "name": r.get::<Option<String>, _>(8), "email": r.get::<Option<String>, _>(9), "provider": r.get::<String, _>(10)}})
         })
         .collect();
     ok_json(StatusCode::OK, json!({"account": caller.account, "role": caller.role.as_str(), "projects": list}))
@@ -879,14 +1054,17 @@ fn client_id(text: &str) -> bool {
     !text.is_empty() && text.len() <= 64 && text.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
 }
 const MAX_CLIENT_SEQ: i64 = 1 << 53;
-fn decodes(update: &[u8]) -> bool {
-    Update::decode_v1(update).is_ok()
+/// Untrusted bytes reach `yrs` only through [`crate::update_check`] (review C1), on a blocking
+/// thread (a large update takes a while to walk and apply).
+async fn decodes(update: bytes::Bytes) -> bool {
+    tokio::task::spawn_blocking(move || crate::update_check::decodes(&update)).await.unwrap_or(false)
 }
 fn append_response(outcome: Result<Appended, AppendError>) -> Response {
     match outcome {
         Ok(Appended::Created(seq)) => ok_json(StatusCode::CREATED, json!({"seq": seq})),
         Ok(Appended::Repeated(seq)) => ok_json(StatusCode::OK, json!({"seq": seq})),
         Err(AppendError::NotFound) => not_found(),
+        Err(AppendError::Forbidden) => error(StatusCode::FORBIDDEN, "only the owner and editors can change this project"),
         Err(AppendError::Conflict) => error(StatusCode::CONFLICT, "different update at this client sequence"),
         Err(AppendError::Quota) => error(StatusCode::INSUFFICIENT_STORAGE, "quota"),
         Err(AppendError::Internal) => internal(()),
@@ -932,16 +1110,21 @@ async fn create(State(sr): State<Shared>, headers: HeaderMap, body: Body) -> Res
     }
     let state = match &request.state {
         Some(text) => match base64::Engine::decode(&base64::engine::general_purpose::STANDARD, text) {
-            Ok(state) if state.len() <= projects.store.config.sr_entry_bytes && decodes(&state) => Some(state),
             Ok(state) if state.len() > projects.store.config.sr_entry_bytes => return error(StatusCode::PAYLOAD_TOO_LARGE, "initial state too large"),
+            Ok(state) if decodes(bytes::Bytes::from(state.clone())).await => Some(state),
             _ => return error(StatusCode::BAD_REQUEST, "the initial state is not a Yjs update"),
         },
         None => None,
     };
-    let id = request.id.clone().unwrap_or_else(random_hex);
+    // With `id`, the project's ID is derived from the caller's account and it, so a retry finds
+    // the project it created and nobody can learn, by trying an ID, that someone else's project
+    // has it (review L5). The app can compute it before the request.
+    let id = match &request.id {
+        Some(key) => project_id(&caller.account, key),
+        None => random_hex(),
+    };
     let created = match projects.create(&id, &caller.account, request.name.trim()).await {
         Ok(created) => created,
-        Err(AppendError::Conflict) => return error(StatusCode::CONFLICT, "this project ID is taken"),
         Err(e) => return internal(e),
     };
     let mut seq = None;
@@ -1050,7 +1233,7 @@ async fn append(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
         return error(StatusCode::BAD_REQUEST, "Scribyra-Client and Scribyra-Client-Seq are required");
     };
     let Ok(bytes) = to_bytes(body, projects.store.config.sr_entry_bytes).await else { return error(StatusCode::PAYLOAD_TOO_LARGE, "update too large") };
-    if !decodes(&bytes) {
+    if !decodes(bytes.clone()).await {
         return error(StatusCode::BAD_REQUEST, "the body is not a Yjs update");
     }
     let outcome = projects.append(&p, &caller.account, client, client_seq, &bytes).await;
@@ -1096,10 +1279,22 @@ async fn read_log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Que
         Err(e) => return internal(e),
     };
     let (head, floor, snapshot, wrapped): (i64, i64, i64, Option<Vec<u8>>) = (row.get(0), row.get(1), row.get(2), row.get(3));
-    let compacted = || (StatusCode::GONE, log_headers(head, floor, snapshot), Json(json!({"error": "compacted", "floor": floor, "snapshot": snapshot}))).into_response();
+    let compacted = |floor: i64, snapshot: i64| (StatusCode::GONE, log_headers(head, floor, snapshot), Json(json!({"error": "compacted", "floor": floor, "snapshot": snapshot}))).into_response();
     if q.after < floor {
-        return compacted();
+        return compacted(floor, snapshot);
     }
+    // A body that cannot be read because the floor has passed it since (garbage removal ran
+    // meanwhile) is `410` like any compacted read, not `500` (review L4).
+    let lost = |seq: i64| {
+        let p = p.clone();
+        async move {
+            match sqlx::query_as::<_, (i64, i64)>("SELECT floor_seq, snapshot_seq FROM sr_projects WHERE project = $1 AND deleted IS NULL").bind(&p).fetch_optional(pool).await {
+                Ok(Some((floor, snapshot))) if floor >= seq => compacted(floor, snapshot),
+                Ok(None) => not_found(),
+                _ => internal(()),
+            }
+        }
+    };
     let Some(key) = projects.data_key(&p, wrapped.as_deref()) else { return internal(()) };
     let limit = q.limit.unwrap_or(DEFAULT_LOG_PAGE).clamp(1, MAX_LOG_PAGE);
     let rows = match sqlx::query("SELECT seq, size, inline_sealed, blob FROM sr_entries WHERE project = $1 AND seq > $2 AND seq <= $3 ORDER BY seq LIMIT $4").bind(&p).bind(q.after).bind(head).bind(limit).fetch_all(pool).await {
@@ -1112,9 +1307,9 @@ async fn read_log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Que
         let (inline, blob_key): (Option<Vec<u8>>, Option<String>) = (r.get(2), r.get(3));
         if inline.is_none() && blob_key.is_none() {
             // The floor moved while this page was read.
-            return compacted();
+            return lost(seq).await;
         }
-        let Ok(sealed) = projects.read_body(inline, blob_key, r.get(1)).await else { return internal(()) };
+        let Ok(sealed) = projects.read_body(inline, blob_key, r.get(1)).await else { return lost(seq).await };
         let Some(body) = open(&key, &item_ad(&p, "update", &seq.to_string()), &sealed) else { return internal(()) };
         if !out.is_empty() && out.len() + body.len() > MAX_LOG_PAGE_BYTES {
             break;
@@ -1151,7 +1346,18 @@ async fn snapshot(State(sr): State<Shared>, Path(p): Path<String>, headers: Head
     };
     let (head, floor, seq): (i64, i64, i64) = (row.get(0), row.get(1), row.get(3));
     let Some(key) = projects.data_key(&p, row.get::<Option<Vec<u8>>, _>(2).as_deref()) else { return internal(()) };
-    let Ok(sealed) = projects.read_body(row.get(5), row.get(6), row.get(4)).await else { return internal(()) };
+    let Ok(sealed) = projects.read_body(row.get(5), row.get(6), row.get(4)).await else {
+        // A newer snapshot replaced this one (and its blob went) while it was read: `410`, so
+        // the reader asks again (review L4).
+        let newer: Result<Option<(i64, i64)>, _> = sqlx::query_as("SELECT p.floor_seq, max(s.seq) FROM sr_projects p JOIN sr_snapshots s USING (project) WHERE p.project = $1 AND p.deleted IS NULL GROUP BY p.floor_seq")
+            .bind(&p)
+            .fetch_optional(pool)
+            .await;
+        return match newer {
+            Ok(Some((floor, latest))) if latest > seq => (StatusCode::GONE, log_headers(head, floor, latest), Json(json!({"error": "compacted", "floor": floor, "snapshot": latest}))).into_response(),
+            _ => internal(()),
+        };
+    };
     let Some(state) = open(&key, &item_ad(&p, "snapshot", &seq.to_string()), &sealed) else { return internal(()) };
     let mut response = (StatusCode::OK, log_headers(head, floor, seq), state).into_response();
     response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
@@ -1177,7 +1383,7 @@ async fn put_object(State(sr): State<Shared>, Path((p, hash)): Path<(String, Str
     if !blob::verify(&hash, &bytes) {
         return error(StatusCode::BAD_REQUEST, "the body does not match its SHA-256");
     }
-    match projects.put_object(&p, &hash, &bytes).await {
+    match projects.put_object(&p, &caller.account, &hash, &bytes).await {
         Ok(true) => StatusCode::CREATED.into_response(),
         Ok(false) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => append_response(Err(e)),
@@ -1210,9 +1416,12 @@ struct Invite {
     email: String,
     role: String,
 }
-/// Shares at once with every active account whose verified email this is (`200` when the
-/// share existed, `201` when new), or records a pending invitation that the first sign-in with
-/// that verified email accepts (`201`, `status: "pending"`).
+/// Shares at once with every active account whose verified email this is at a provider that
+/// counts for it (`200` when the share existed, `201` when new), or records a pending invitation
+/// that the first such sign-in accepts (`201`, `status: "pending"`). `email` is `provider:email`
+/// (that provider's accounts only) or a plain email: then any provider whose `email_domains`
+/// vouch for its domain, or the deployment's only provider; with several providers and none
+/// vouching, the inviter must name one (`400`). Review H2.
 async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Invite>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
@@ -1225,15 +1434,39 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
     if let Err(r) = Sr::may_share(&caller, access) {
         return r;
     }
-    let email = request.email.trim().to_lowercase();
+    let Some(deployment) = projects.store.config.deployment.as_ref() else { return internal(()) };
+    let text = request.email.trim();
+    let (named, email) = match text.split_once(':') {
+        Some((id, email)) => match deployment.provider(id) {
+            Some(provider) => (Some(provider), crate::sso::normalise_email(email)),
+            None => return error(StatusCode::BAD_REQUEST, "unknown provider"),
+        },
+        None => (None, crate::sso::normalise_email(text)),
+    };
     if !valid_email(&email) || Access::share(&request.role).is_none() {
         return error(StatusCode::BAD_REQUEST, "invalid email or role");
     }
+    // The providers whose accounts this email names, and the one the invitation records.
+    let (providers, recorded): (Vec<String>, Option<String>) = match named {
+        Some(provider) => (vec![provider.id.clone()], Some(provider.id.clone())),
+        None => {
+            let vouching: Vec<String> = deployment.providers.iter().filter(|d| crate::sso::vouches(d, &email)).map(|d| d.id.clone()).collect();
+            match (vouching.is_empty(), deployment.providers.as_slice()) {
+                (false, _) => (vouching, None),
+                (true, [only]) => (vec![only.id.clone()], Some(only.id.clone())),
+                (true, _) => return error(StatusCode::BAD_REQUEST, "no provider vouches for this email's domain: name one as provider:email"),
+            }
+        }
+    };
     let days = projects.store.config.sr_invitation_days as f64;
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
         let owner: String = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(&p).fetch_one(&mut *tx).await?;
-        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE lower(email) = $1 AND email_verified AND state = 'active' ORDER BY account").bind(&email).fetch_all(&mut *tx).await?;
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE email = $1 AND email_verified AND state = 'active' AND provider = ANY($2) ORDER BY account")
+            .bind(&email)
+            .bind(&providers)
+            .fetch_all(&mut *tx)
+            .await?;
         let others: Vec<&String> = accounts.iter().filter(|a| **a != owner).collect();
         let outcome = if !accounts.is_empty() {
             let mut fresh = false;
@@ -1249,13 +1482,14 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
                 .fetch_one(&mut *tx)
                 .await?;
                 fresh |= inserted;
+                notify_account(&mut tx, account).await?;
             }
             sqlx::query("UPDATE sr_invitations SET state = 'accepted' WHERE project = $1 AND email = $2 AND state = 'pending'").bind(&p).bind(&email).execute(&mut *tx).await?;
             (if fresh { StatusCode::CREATED } else { StatusCode::OK }, json!({"status": if others.is_empty() { "owner" } else { "shared" }}))
         } else {
             let (id, expires): (String, i64) = sqlx::query_as(
-                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int))
-                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires
+                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires, provider) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int), $7)
+                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires, provider = EXCLUDED.provider
                  RETURNING invitation, (extract(epoch FROM expires) * 1000)::bigint",
             )
             .bind(random_hex())
@@ -1264,9 +1498,10 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
             .bind(&request.role)
             .bind(&caller.account)
             .bind(days as i32)
+            .bind(&recorded)
             .fetch_one(&mut *tx)
             .await?;
-            (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "role": request.role, "expires": expires}}))
+            (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "provider": recorded, "role": request.role, "expires": expires}}))
         };
         notify(&mut tx, &p).await?;
         tx.commit().await?;
@@ -1430,25 +1665,54 @@ struct HeadsQuery {
 /// A notice, not a delivery: the caller's projects with head, role and name, and a `version`.
 /// With `since` equal to the current version it waits (up to `wait` seconds, at most 25) until
 /// something the caller can see changes, on any replica. Ends at once when the service stops.
+/// Only notices for the caller's projects or account wake it; an account keeps at most
+/// [`MAX_POLLS_PER_ACCOUNT`] waiting per replica, and a further one ends the oldest at once
+/// (`superseded: true`).
 async fn heads(State(sr): State<Shared>, Query(q): Query<HeadsQuery>, headers: HeaderMap) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
         Err(r) => return r,
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(q.wait.min(MAX_HEADS_WAIT_SECS));
-    let mut changes = sr.changes.subscribe();
+    let (id, wake) = sr.polls.lock().unwrap().register(&caller.account);
+    let _registered = PollGuard(&sr, id);
     let mut shutdown = sr.shutdown.clone();
+    let mut woken = false;
     loop {
-        changes.borrow_and_update();
+        // A revocation notifies the account's polls: each checks that its session still holds
+        // (review L6).
+        if std::mem::take(&mut woken) {
+            match crate::sso::bearer(&headers).map(|t| sr.sso.login(t)) {
+                Some(login) => match login.await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => return error(StatusCode::UNAUTHORIZED, "sign in required"),
+                    Err(e) => return internal(e),
+                },
+                None => return error(StatusCode::UNAUTHORIZED, "sign in required"),
+            }
+        }
         let (version, heads) = match sr.heads_now(projects, &caller).await {
             Ok(v) => v,
             Err(r) => return r,
         };
-        if q.since.as_deref() != Some(version.as_str()) || *shutdown.borrow() || tokio::time::Instant::now() >= deadline {
-            return ok_json(StatusCode::OK, json!({"version": version, "projects": heads}));
+        let (added, superseded) = {
+            let mut polls = sr.polls.lock().unwrap();
+            (polls.watch(id, heads.as_object().map(|m| m.keys()).into_iter().flatten()), polls.superseded(id))
+        };
+        if q.since.as_deref() != Some(version.as_str()) || *shutdown.borrow() || tokio::time::Instant::now() >= deadline || superseded {
+            let mut body = json!({"version": version, "projects": heads});
+            if superseded {
+                body["superseded"] = json!(true);
+            }
+            return ok_json(StatusCode::OK, body);
+        }
+        // A project just added to the watch could have changed between the query and the
+        // watch: look once more before waiting.
+        if added {
+            continue;
         }
         tokio::select! {
-            _ = changes.changed() => {}
+            _ = wake.notified() => woken = true,
             _ = shutdown.changed() => {}
             _ = tokio::time::sleep_until(deadline) => {}
         }
@@ -1469,4 +1733,49 @@ pub fn routes(sr: Shared) -> Router {
         .route("/v1/sr/projects/{project}/owner", post(transfer))
         .route("/v1/sr/heads", get(heads))
         .with_state(sr)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polls_wake_only_for_their_projects_and_accounts() {
+        let mut polls = Polls::default();
+        let (a, wake_a) = polls.register("ana");
+        let (b, _) = polls.register("ben");
+        let (p, q) = ("p".repeat(64), "q".repeat(64));
+        assert!(polls.watch(a, [&p, &q]));
+        assert!(!polls.watch(a, [&p, &q]));
+        assert!(polls.watch(b, [&q]));
+        // A notice for a project wakes only the polls that can see it; another account's notice
+        // wakes nobody else.
+        assert_eq!(polls.route(&p), 1);
+        assert_eq!(polls.route(&q), 2);
+        assert_eq!(polls.route(&"r".repeat(64)), 0);
+        assert_eq!(polls.route("a:ben"), 1);
+        assert_eq!(polls.route("a:cat"), 0);
+        // The stored permit means a wake-up between looking and waiting is not lost.
+        assert!(futures_util::FutureExt::now_or_never(wake_a.notified()).is_some());
+        // Watching fewer projects stops their wake-ups; removing a poll unindexes it.
+        polls.watch(a, [&q]);
+        assert_eq!(polls.route(&p), 0);
+        polls.remove(b);
+        assert_eq!((polls.route(&q), polls.route("a:ben"), polls.len()), (1, 0, 1));
+        polls.remove(a);
+        assert!(polls.is_empty() && polls.by_project.is_empty() && polls.by_account.is_empty());
+    }
+
+    #[test]
+    fn an_account_keeps_at_most_four_polls_and_the_oldest_gives_way() {
+        let mut polls = Polls::default();
+        let ids: Vec<u64> = (0..MAX_POLLS_PER_ACCOUNT).map(|_| polls.register("ana").0).collect();
+        assert!(ids.iter().all(|id| !polls.superseded(*id)));
+        let (other, _) = polls.register("ben");
+        let (fifth, _) = polls.register("ana");
+        assert!(polls.superseded(ids[0]) && !polls.superseded(ids[1]) && !polls.superseded(fifth) && !polls.superseded(other));
+        // The superseded one stays until its request ends; a sixth then ends the next oldest.
+        polls.register("ana");
+        assert!(polls.superseded(ids[1]) && !polls.superseded(ids[2]));
+    }
 }

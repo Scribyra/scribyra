@@ -54,8 +54,13 @@ const FLOW_SECONDS: u64 = 600;
 const GRANT_SECONDS: u64 = 120;
 const MAX_FLOWS: usize = 4096;
 const MAX_FLOWS_PER_PROVIDER: usize = 256;
-/// Sign-ins in progress per client address; a further one replaces that address's oldest.
+/// Sign-ins in progress per source (an IPv4 address or an IPv6 /64); a further one replaces that
+/// source's oldest.
 const MAX_FLOWS_PER_SOURCE: usize = 8;
+/// Sign-ins in progress per network (IPv4 /24, IPv6 /48); a further one replaces its oldest.
+const MAX_FLOWS_PER_NETWORK: usize = 64;
+/// Sources whose start rate one replica remembers (more are let through unrated).
+const MAX_RATED_SOURCES: usize = 65536;
 const MAX_GRANTS: usize = 4096;
 const MAX_LOGOUT_JTIS: usize = 4096;
 const DISCOVERY_SECONDS: u64 = 3600;
@@ -122,8 +127,21 @@ fn admin_email_matches(entry: &str, provider: &Configured, email: &str) -> bool 
     }
     match entry.split_once(':') {
         Some((id, listed)) => id == provider.id && listed == email,
-        None => entry == email && email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain)),
+        None => entry == email && vouches(provider, email),
     }
+}
+/// The one form an email is stored and compared in (review L2): surrounding space trimmed and
+/// Unicode lowercase (Rust's, which does not depend on a locale). Accounts, logins and
+/// invitations store it; SQL compares stored values with `=` and never calls `lower()`, whose
+/// result depends on the database's locale. No Unicode normalisation (NFC) is applied: an
+/// address is matched in the form its provider sends.
+pub fn normalise_email(text: &str) -> String {
+    text.trim().to_lowercase()
+}
+/// Whether this provider's `email_domains` include the (normalised) email's domain: only then
+/// does a plain email name its accounts there (admins, invitations).
+pub fn vouches(provider: &Configured, email: &str) -> bool {
+    email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain))
 }
 /// The deployment role of an identity, or the code of the rule that refuses it: guests when the
 /// deployment admits none, and people outside `member_groups` when the provider names some.
@@ -138,7 +156,7 @@ pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, emai
         };
     }
     let pair = format!("{}#{subject}", provider.issuer);
-    let email = email.filter(|_| email_verified).map(str::to_lowercase);
+    let email = email.filter(|_| email_verified).map(normalise_email);
     let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)));
     let admin = listed || groups.iter().any(|g| provider.admin_groups.contains(g));
     if !admin && !provider.member_groups.is_empty() && !groups.iter().any(|g| provider.member_groups.contains(g)) {
@@ -206,8 +224,24 @@ pub struct Sso {
     discovery: Mutex<HashMap<String, (Endpoints, Instant)>>,
     jwks: Mutex<HashMap<String, Keys>>,
     revoked: broadcast::Sender<(String, String)>,
+    /// Sign-ins started per source in the current minute (this replica's view).
+    starts: Mutex<HashMap<String, (Instant, u32)>>,
+    starts_per_minute: u32,
 }
 type Shared = Arc<Sso>;
+
+/// The source (an IPv4 address or an IPv6 /64, what one host or subscriber holds) and network
+/// (IPv4 /24, IPv6 /48) that bound a client's sign-ins in progress.
+pub fn source_keys(ip: std::net::IpAddr) -> (String, String) {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    match ip.to_canonical() {
+        IpAddr::V4(a) => (a.to_string(), format!("{}/24", Ipv4Addr::from(u32::from(a) & 0xffff_ff00))),
+        IpAddr::V6(a) => {
+            let s = a.segments();
+            (format!("{}/64", Ipv6Addr::new(s[0], s[1], s[2], s[3], 0, 0, 0, 0)), format!("{}/48", Ipv6Addr::new(s[0], s[1], s[2], 0, 0, 0, 0, 0)))
+        }
+    }
+}
 
 fn now_seconds() -> i64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0)
@@ -283,6 +317,7 @@ struct Unreachable;
 impl Sso {
     pub fn new(store: Arc<Store>) -> Shared {
         let config: &Config = &store.config;
+        let starts_per_minute = config.sso_starts_per_minute;
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .max_redirects(0)
@@ -303,10 +338,30 @@ impl Sso {
             discovery: Mutex::default(),
             jwks: Mutex::default(),
             revoked: broadcast::channel(1024).0,
+            starts: Mutex::default(),
+            starts_per_minute,
         })
     }
 
     /// The deployment and the provider with this ID, if both are configured.
+    /// Counts a sign-in start from `source`; `false` past `sso_starts_per_minute`.
+    fn allow_start(&self, source: &str) -> bool {
+        let mut starts = self.starts.lock().unwrap();
+        if starts.len() >= MAX_RATED_SOURCES && !starts.contains_key(source) {
+            starts.retain(|_, (since, _)| since.elapsed() < Duration::from_secs(60));
+            if starts.len() >= MAX_RATED_SOURCES {
+                // Many sources at once: the per-source and per-network bounds on stored sign-ins
+                // still hold, so let it through rather than refuse everyone.
+                return true;
+            }
+        }
+        let (since, count) = starts.entry(source.to_owned()).or_insert((Instant::now(), 0));
+        if since.elapsed() >= Duration::from_secs(60) {
+            (*since, *count) = (Instant::now(), 0);
+        }
+        *count += 1;
+        *count <= self.starts_per_minute
+    }
     fn configured(&self, provider: &str) -> Option<(&Deployment, &Configured)> {
         let deployment = self.deployment.as_ref()?;
         Some((deployment, deployment.provider(provider)?))
@@ -542,6 +597,11 @@ impl Sso {
             if block {
                 sqlx::query("UPDATE accounts SET state = 'blocked' WHERE issuer = $1 AND subject = $2 AND state = 'active'").bind(&issuer).bind(&subject).execute(&mut *tx).await?;
             }
+            // The account's heads polls check their sessions at once (review L6).
+            let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE issuer = $1 AND subject = $2").bind(&issuer).bind(&subject).fetch_all(&mut *tx).await?;
+            for account in accounts {
+                crate::server_projects::notify_account(&mut tx, &account).await?;
+            }
             if let Some(person) = person {
                 fired.push((org, person));
             }
@@ -570,6 +630,11 @@ impl Sso {
     /// and server errors keep the login and retry on the next pass. A refreshed ID token updates
     /// the login's groups and guest mark, and an account that no longer passes the group and
     /// guest rules has its logins revoked (not blocked: the provider still vouches for it).
+    ///
+    /// Every replica runs this pass; a due login is claimed before its provider is called (`FOR
+    /// UPDATE SKIP LOCKED`, and `checked` moved in the same statement), so only one replica ever
+    /// uses a given refresh token (review H3: two using it looked like token theft to providers
+    /// with reuse detection, and the `invalid_grant` that followed revoked and blocked the person).
     pub async fn recheck(&self) {
         // Expired or revoked logins are kept a week for operators, then deleted.
         let _ = sqlx::query("DELETE FROM sso_logins WHERE expires < now() - interval '7 days' OR (revoked AND created < now() - interval '7 days')")
@@ -579,10 +644,13 @@ impl Sso {
         let (mut checked, mut refreshed, mut revoked, mut failed) = (0usize, 0u32, 0u32, 0u32);
         for configured in &deployment.providers {
             let rows = sqlx::query(
-                "SELECT token_hash, issuer, subject, refresh_token FROM sso_logins
-                 WHERE org = $1 AND provider = $2 AND NOT revoked AND refresh_token IS NOT NULL AND expires > now()
-                   AND checked <= now() - make_interval(secs => $3)
-                 ORDER BY checked LIMIT $4",
+                "UPDATE sso_logins l SET checked = now() FROM (
+                   SELECT token_hash, checked FROM sso_logins
+                   WHERE org = $1 AND provider = $2 AND NOT revoked AND refresh_token IS NOT NULL AND expires > now()
+                     AND checked <= now() - make_interval(secs => $3)
+                   ORDER BY checked LIMIT $4 FOR UPDATE SKIP LOCKED) due
+                 WHERE l.token_hash = due.token_hash
+                 RETURNING l.token_hash, l.issuer, l.subject, l.refresh_token, extract(epoch FROM due.checked)::float8",
             )
             .bind(org)
             .bind(&configured.id)
@@ -597,14 +665,15 @@ impl Sso {
             checked += rows.len();
             for row in &rows {
                 let (token_hash, issuer, subject, refresh): (String, String, String, String) = (row.get(0), row.get(1), row.get(2), row.get(3));
-                if issuer != configured.issuer {
-                    failed += 1;
-                    continue;
-                }
-                match self.recheck_one(deployment, configured, org, &token_hash, &subject, refresh).await {
+                let outcome = if issuer != configured.issuer { Ok(Recheck::Retry) } else { self.recheck_one(deployment, configured, org, &token_hash, &subject, refresh).await };
+                match outcome {
                     Ok(Recheck::Kept) => refreshed += 1,
                     Ok(Recheck::Revoked) => revoked += 1,
-                    Ok(Recheck::Retry) | Err(_) => failed += 1,
+                    Ok(Recheck::Retry) | Err(_) => {
+                        failed += 1;
+                        // Not checked after all: due again on the next pass (on any replica).
+                        let _ = sqlx::query("UPDATE sso_logins SET checked = to_timestamp($2) WHERE token_hash = $1").bind(&token_hash).bind(row.get::<f64, _>(4)).execute(&self.store.pool).await;
+                    }
                 }
             }
         }
@@ -646,7 +715,8 @@ impl Sso {
                     .bind(rotated)
                     .execute(&self.store.pool)
                     .await?;
-                let Some(id) = identity else { return Ok(Recheck::Kept) };
+                let Some(mut id) = identity else { return Ok(Recheck::Kept) };
+                id.email = id.email.as_deref().map(normalise_email);
                 sqlx::query("UPDATE sso_logins SET email = $4, email_verified = $5, name = $6, groups = $7::jsonb, guest = $8 WHERE org = $1 AND issuer = $2 AND subject = $3 AND NOT revoked")
                     .bind(org)
                     .bind(&configured.issuer)
@@ -755,10 +825,14 @@ struct StartRequest {
     challenge: String,
 }
 async fn start(State(s): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, Json(request): Json<StartRequest>) -> Response {
-    let source = source.map(|axum::Extension(crate::service::Source(ip))| ip.to_string()).unwrap_or_default();
+    let (source, network) = source.map(|axum::Extension(crate::service::Source(ip))| source_keys(ip)).unwrap_or_default();
     let Some(public_url) = s.public_url.clone() else {
         return error(StatusCode::NOT_FOUND, "sign-in needs public_url on this service");
     };
+    if !s.allow_start(&source) {
+        log("sso_refused", "start_rate");
+        return error(StatusCode::TOO_MANY_REQUESTS, "too many sign-ins started; try again in a minute");
+    }
     if !is_hex64(&request.challenge) || request.provider.len() > 32 {
         return error(StatusCode::BAD_REQUEST, "invalid request");
     }
@@ -788,31 +862,36 @@ async fn start(State(s): State<Shared>, source: Option<axum::Extension<crate::se
         .append_pair("code_challenge", &idp_challenge)
         .append_pair("code_challenge_method", "S256");
     // In PostgreSQL, so the provider's redirect may reach any replica. Nobody is refused for
-    // room: a source past its own few sign-ins replaces its oldest, and a full table (or
-    // provider) drops its oldest, so one client cannot lock others out (review M2).
+    // room: a source past its own few sign-ins replaces its oldest, a network past its share
+    // replaces its oldest, and a full table (or provider) drops the oldest sign-in of the network
+    // that holds the most, so one source or network cannot push others out (reviews M2, M5).
     let stored = async {
         let mut tx = s.store.pool.begin().await?;
         sqlx::query("DELETE FROM sso_flows WHERE expires <= now()").execute(&mut *tx).await?;
         sqlx::query("LOCK TABLE sso_flows IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
-        let (all, provider, mine): (i64, i64, i64) = sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE provider = $1), count(*) FILTER (WHERE source = $2) FROM sso_flows")
-            .bind(&request.provider)
-            .bind(&source)
-            .fetch_one(&mut *tx)
-            .await?;
-        let oldest = |filter: &'static str, value: String, over: i64| {
-            let sql = format!("DELETE FROM sso_flows WHERE state_hash IN (SELECT state_hash FROM sso_flows WHERE {filter} ORDER BY expires LIMIT $2)");
-            (sql, value, over)
-        };
-        for (sql, value, over) in [
-            oldest("source = $1", source.clone(), mine - MAX_FLOWS_PER_SOURCE as i64 + 1),
-            oldest("provider = $1", request.provider.clone(), provider - MAX_FLOWS_PER_PROVIDER as i64 + 1),
-            oldest("$1 = $1", String::new(), all - MAX_FLOWS as i64 + 1),
-        ] {
+        let (all, provider, mine, near): (i64, i64, i64, i64) =
+            sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE provider = $1), count(*) FILTER (WHERE source = $2), count(*) FILTER (WHERE network = $3) FROM sso_flows")
+                .bind(&request.provider)
+                .bind(&source)
+                .bind(&network)
+                .fetch_one(&mut *tx)
+                .await?;
+        for (filter, value, over) in [("source = $1", &source, mine - MAX_FLOWS_PER_SOURCE as i64 + 1), ("network = $1", &network, near - MAX_FLOWS_PER_NETWORK as i64 + 1)] {
             if over > 0 {
+                let sql = format!("DELETE FROM sso_flows WHERE state_hash IN (SELECT state_hash FROM sso_flows WHERE {filter} ORDER BY expires LIMIT $2)");
                 sqlx::query(&sql).bind(value).bind(over).execute(&mut *tx).await?;
             }
         }
-        sqlx::query("INSERT INTO sso_flows (state_hash, provider, return_to, challenge, nonce, verifier, expires, source) VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8)")
+        for (filter, value, over) in [("provider = $1", &request.provider, provider - MAX_FLOWS_PER_PROVIDER as i64 + 1), ("$1 = $1", &String::new(), all - MAX_FLOWS as i64 + 1)] {
+            for _ in 0..over.max(0) {
+                let sql = format!(
+                    "DELETE FROM sso_flows WHERE state_hash = (SELECT state_hash FROM sso_flows WHERE {filter} AND network = (
+                       SELECT network FROM sso_flows WHERE {filter} GROUP BY network ORDER BY count(*) DESC, min(expires) LIMIT 1) ORDER BY expires LIMIT 1)"
+                );
+                sqlx::query(&sql).bind(value).execute(&mut *tx).await?;
+            }
+        }
+        sqlx::query("INSERT INTO sso_flows (state_hash, provider, return_to, challenge, nonce, verifier, expires, source, network) VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8, $9)")
             .bind(sha256_hex(state.as_bytes()))
             .bind(&request.provider)
             .bind(&request.return_to)
@@ -821,6 +900,7 @@ async fn start(State(s): State<Shared>, source: Option<axum::Extension<crate::se
             .bind(&verifier)
             .bind(FLOW_SECONDS as f64)
             .bind(&source)
+            .bind(&network)
             .execute(&mut *tx)
             .await?;
         tx.commit().await
@@ -975,7 +1055,7 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     .bind(sha256_hex(request.code.as_bytes()))
     .fetch_optional(&s.store.pool)
     .await;
-    let grant = match grant {
+    let mut grant = match grant {
         Ok(Some((provider, challenge, identity, refresh_token, session_seconds))) => match identity_from_json(&identity) {
             Some(identity) => Grant { provider, challenge, identity, refresh_token, session_seconds },
             None => return internal(()),
@@ -992,6 +1072,7 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     }
     let (Some((deployment, configured)), Some(org)) = (s.configured(&grant.provider), s.org.clone()) else { return error(StatusCode::UNAUTHORIZED, "unknown or expired grant") };
     let token = random_hex();
+    grant.identity.email = grant.identity.email.as_deref().map(normalise_email);
     let id = &grant.identity;
     let Ok(role) = admit(deployment, configured, &id.subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest) else {
         return error(StatusCode::FORBIDDEN, "this account cannot sign in here");
@@ -1049,7 +1130,7 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     }
     // Server-readable deployments: pending invitations to this verified email become shares.
     if deployment.encryption == crate::config::Encryption::Server
-        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account).await
+        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account, deployment).await
     {
         return internal(e);
     }

@@ -156,20 +156,32 @@ pub fn people() -> Value {
 }
 /// The `deployment` object for a service that signs in with `idp` (provider `test`): end to end
 /// encrypted, alice@example.org an administrator. `extra` replaces top-level fields; its
-/// `provider` object is merged into the provider.
+/// `provider` object is merged into the provider, and each object of `more_providers` into a
+/// copy of it (another provider at the same issuer, such as `partner`).
 pub fn deployment(idp: &Idp, extra: Value) -> Value {
     let mut provider = json!({"id": "test", "label": "Test account", "issuer": idp.issuer, "client_id": CLIENT_ID, "client_secret_file": idp.secret_file()});
     let mut deployment = json!({"name": "Test Lab", "encryption": "e2ee", "admins": ["test:alice@example.org"]});
+    let mut more = Vec::new();
     for (k, v) in extra.as_object().unwrap() {
         if k == "provider" {
             for (pk, pv) in v.as_object().unwrap() {
                 provider[pk] = pv.clone();
             }
+        } else if k == "more_providers" {
+            more = v.as_array().unwrap().clone();
         } else {
             deployment[k] = v.clone();
         }
     }
-    deployment["providers"] = json!([provider]);
+    let mut providers = vec![provider.clone()];
+    for m in more {
+        let mut p = provider.clone();
+        for (pk, pv) in m.as_object().unwrap() {
+            p[pk] = pv.clone();
+        }
+        providers.push(p);
+    }
+    deployment["providers"] = json!(providers);
     deployment
 }
 /// A running service with a deployment that signs in with its own test provider.
