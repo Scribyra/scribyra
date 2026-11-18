@@ -13,7 +13,7 @@ const ROLE_LABEL={owner:'Owner',admin:'Admin',member:'Member',editor:'Editor',re
 const POLL_MS=3000;
 
 export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestored=()=>{},onChanged=()=>{}}){
- let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,drawing=null,redraw=false,offered=null,about=null,providers=null;
+ const codes=new Map();let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,drawing=null,redraw=false,offered=null,about=null,providers=null;
  const close=()=>session?.close('now');
  function button(label,fn,cls='secondary'){
   const b=element('button',label,'button compact '+cls);b.type='button';
@@ -178,7 +178,9 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
   const deviceParts=[own,element('p','To add another browser, sign in there and choose “Ask one of my devices”; it then appears here.','org-help')];
   for(const r of requests){
    // The service only says who signed in; the code typed here proves which browser it is.
-   const row=element('div',null,'org-request'),typed=field('Code shown on the new browser','');
+   // A redraw (the long poll, a membership change) rebuilds this row: what was typed stays.
+   const row=element('div',null,'org-request'),typed=field('Code shown on the new browser',codes.get(r.link)||'');
+   typed.input.oninput=()=>codes.set(r.link,typed.input.value);
    row.append(element('p',`A browser that signed in with your organisation (the service says: ${r.email||'you'}) asks to be added.`,'org-help'),typed.row,actions(button('Add this device',()=>engine.approveDevice(r,{code:typed.input.value}),'primary')));
    deviceParts.push(row);
   }
