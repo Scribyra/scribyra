@@ -108,7 +108,7 @@ Configuration reload is a restart.
 | --- | --- | --- |
 | `database_url` | none | PostgreSQL URL. Contains a password for remote servers, so prefer `database_url_file`. Exactly one of the two is required |
 | `database_url_file` | none | File holding the URL on its first line (a trailing newline is ignored) |
-| `database_connections` | 10 | Connection pool size, 1–1000. One more connection holds the ownership lock |
+| `database_connections` | 10 | Connection pool size, 1–1000. One more connection holds the ownership lock, and a server-readable deployment one more for `LISTEN` |
 | `blob_store` | `"filesystem"` | `"filesystem"` or `"s3"` |
 | `data` | `service-data` | Filesystem blob directory (`objects/<namespace>/<sha256>`), created if missing |
 | `s3_endpoint` | none | Service URL, for example `https://s3.eu-west-1.amazonaws.com` or `https://<account>.r2.cloudflarestorage.com`. `http://` is accepted only for `127.0.0.1`, `::1` or `localhost` |
@@ -164,12 +164,12 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `name` | required | 1–64 characters, shown in the app before and after sign-in |
-| `encryption` | `"server"` | `"server"` (server-readable; needs `service_key_file`) or `"e2ee"` (end to end). Recorded in the database at first start: a later start with the other mode refuses (`{"event":"deployment_encryption_changed"}`). Only `"e2ee"` serves the organisation routes below in this release |
+| `encryption` | `"server"` | `"server"` (server-readable; needs `service_key_file`) or `"e2ee"` (end to end). Recorded in the database at first start: a later start with the other mode refuses (`{"event":"deployment_encryption_changed"}`). `"e2ee"` serves the [organisation routes](#organisation-routes-end-to-end-deployments) and answers `404` on `/v1/sr/`; `"server"` serves the [server-readable routes](#server-readable-projects) and answers `404` on the end-to-end ones |
 | `offline` | `true` | `false` makes the deployment online-only (used by server-readable mode) |
 | `compile` | `"browser"` | `"browser"`, `"server"` or `"both"`; the last two need `encryption: "server"` and `texlive` |
 | `link_sharing` | `false` | Whether editors may create share links (later slice) |
 | `guests` | `"off"` | `"off"` refuses provider guest accounts at sign-in; `"shared"` admits them as guests |
-| `admins` | `[]` | Lowercase verified emails, or `issuer#subject`, that are administrators whatever groups say. In an end-to-end deployment, only an administrator's sign-in may create the organisation (once) |
+| `admins` | `[]` | Administrators whatever groups say, each one of: `provider:email` (a verified email at that configured provider, for example `acme:it-admin@acme.org`); a plain lowercase email, which matches only through a provider whose `email_domains` include its domain (an entry no provider vouches for refuses start); or `issuer#subject`. In an end-to-end deployment, only an administrator's sign-in may create the organisation (once) |
 | `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
@@ -194,7 +194,7 @@ sign-in (`ScribyraSSO` login token) of the person the key belongs to.
 | `POST /v1/auth/challenge`, `POST /v1/auth/session` | An active device or recovery key, with its person's login | Device session. The key signs `scribyra-auth/2`, this service's `public_url`, the org, the key, the SHA-256 of the login token and the challenge; the request carries the login token (`sso`, required). A login that is missing, expired, someone else's or blocked at the provider is refused, and the session ends with the login |
 | `GET /v1/orgs/{org}/info` | Anyone | Whether the org has a genesis, its log head and length, its sealed name |
 | `GET`/`POST /v1/orgs/{org}/events` | Members; the genesis and join requests with a login instead of a session | The signed membership log (paged, with its length). The genesis is accepted once, only with a configured administrator's login, and links that login to the owner; a `person.request` needs a login nobody is linked to yet and links it |
-| `GET /v1/orgs/{org}/people` | Member devices | The email each person signed in with (`{person: {email}}`), for approving join requests and sharing |
+| `GET /v1/orgs/{org}/people` | Member devices | Each person's verified sign-in email (`null` if the provider did not verify one) and provider (`{person: {email, provider, providerLabel}}`), for approving join requests and sharing |
 | `GET`/`PUT /v1/orgs/{org}/keys`, `POST /v1/orgs/{org}/keys/report` | Member devices | Key wraps (one per sender), and reporting a wrap that does not open |
 | `GET /v1/orgs/{org}/pending` | Member devices | Entitled keys that still lack a wrap, for the caller's projects (every epoch, so members keep earlier keys to read history) and the directory |
 | `GET /v1/orgs/{org}/heads?since=&wait=` | Member devices | Long-poll notice of membership and project head changes (at most 25 s) |
@@ -207,6 +207,86 @@ editor) is appended only if `after` does not reach
 past the project's log head; the service records the head at that moment in
 `projects.epoch_cutover`. Nothing old is deleted: earlier entries, objects and wraps stay so
 members can read the history.
+
+### Server-readable projects
+
+With `deployment.encryption: "server"` the service is the authority for organisation projects
+(design sections 1, 4 and 7). A project is an append-only log of **Yjs updates** that the service
+sequences, checks with `yrs`, seals and stores; browsers keep a local copy and reconcile through
+the log. Everything durable is in PostgreSQL and the blob store, so several replicas can serve one
+deployment (with S3 blobs: a filesystem blob directory belongs to one process); changes reach
+every replica's heads polls through `NOTIFY scribyra_sr`.
+
+**Sessions.** Every route needs `Authorization: ScribyraSSO <token>` from
+[sign-in](#single-sign-on-oidc) (`401 {"error":"sign in required"}` without a valid one; a login
+from before accounts existed gets `401 {"error":"sign in again"}`). Errors are JSON
+`{"error": "<short text>"}`; every response is `Cache-Control: no-store`. IDs (projects,
+accounts, invitations) are 64 lowercase hex characters; times are milliseconds since the epoch.
+CORS allows `GET, HEAD, PUT, POST, PATCH, DELETE`, the request headers `Authorization`,
+`Content-Type`, `Scribyra-Client`, `Scribyra-Client-Seq`, and exposes `Scribyra-Log-Head`,
+`Scribyra-Log-Floor` and `Scribyra-Snapshot-Seq`.
+
+**Roles.** A project has one owner and shares with role `editor`, `reviewer` or `viewer`.
+
+| Who | Read (details, log, snapshot, objects) | Write (log, objects), rename | Share (invite, withdraw, change, remove others) | Delete, transfer |
+| --- | --- | --- | --- | --- |
+| Owner | yes | yes | yes | yes |
+| Editor | yes | yes | yes (not a guest) | no (`403`) |
+| Reviewer, viewer | yes | no (`403`; their writes follow in slice 12) | no (`403`) | no (`403`) |
+| Anyone else | `404 {"error":"unknown project"}` on every project route, as if it did not exist | | | |
+
+Guests (`guests: "shared"`) see only projects shared with them and cannot create projects
+(`403`). Administrators have no extra project rights in this release (slice 10). Anyone but the
+owner may leave a project (remove their own share).
+
+| Route | Body → answer |
+| --- | --- |
+| `GET /v1/sr/projects` | → `200 {account, role, projects: [{id, name, role, head, size, created, updated, owner: {account, name, email}}]}` (owned and shared, newest change first; `role` at the top is the deployment role) |
+| `POST /v1/sr/projects` | `{name, id?, state?, client?, clientSeq?}` → `201 {project, seq}` (members and admins only). `name` 1–200 characters. `id` lets a retry find the project it created: the same owner gets `200` and the same body, anyone else `409`. `state` is base64 of a Yjs update (the project's initial state, at most `sr_entry_bytes`), appended as the first entry under `client`/`clientSeq` (default `initial`/1); `seq` is its sequence number or `null`. `400` for a bad name or a state that is not a Yjs update, `413` too large, `507` over quota (the new project is then not kept) |
+| `GET /v1/sr/projects/{p}` | → `200` project details: `{id, name, role, owner: {account, name, email, role:"owner"}, head, floor, snapshot, size, created, updated, members: [{account, name, email, role}] (owner first), invitations: [{id, email, role, created, expires}]}`. Invitations are listed for the owner and editors only. Emails are verified ones or `null` |
+| `PATCH /v1/sr/projects/{p}` | `{name}` → `200` details (owner, editors) |
+| `DELETE /v1/sr/projects/{p}` | → `204` (owner). Crypto-erase: the wrapped key is removed in the same transaction that marks the project deleted; everything sealed under it is unreadable from then on, and maintenance removes rows and blobs. Members' later requests get `404` |
+| `POST /v1/sr/projects/{p}/log` | Body: one Yjs update (`application/octet-stream`, at most `sr_entry_bytes`, else `413`), headers `Scribyra-Client` (1–64 of `A-Z a-z 0-9 - _`, one per browser) and `Scribyra-Client-Seq` (1 to 2^53). → `201 {seq}` after commit (the durable acknowledgement); `200 {seq}` with the original number when the same `(client, clientSeq)` comes again with the same bytes; `409` with other bytes; `400` without both headers or when the body does not decode as a Yjs update (v1 encoding); `403` reviewer/viewer; `507 {"error":"quota"}` |
+| `GET /v1/sr/projects/{p}/log?after=n&limit=k` | → `200`, `application/octet-stream`: entries with `seq > n` in order, each framed as `seq` (u64 big-endian), length (u32 big-endian), the update. `limit` 1–1000 (default 256); a page stops at 16 MiB (at least one entry). Headers `Scribyra-Log-Head` (read again until you reach it), `Scribyra-Log-Floor`, `Scribyra-Snapshot-Seq`. With `n` below the floor: `410 {"error":"compacted", floor, snapshot}` (same headers): fetch the snapshot, then the log after it |
+| `GET /v1/sr/projects/{p}/snapshot` | → `200`, the whole Yjs state (one update, v1) covering `Scribyra-Snapshot-Seq`, with the log headers; `404 {"error":"no snapshot"}` before the first one (read the log from 0) |
+| `PUT /v1/sr/projects/{p}/objects/{sha256}` | Body: an asset or history object's plaintext (at most `sr_object_bytes`). → `201` stored, `204` already stored, `400` when the body's SHA-256 is not the path's, `403` reviewer/viewer, `413`, `507`, `503` when `uploads` are all busy. Upload objects before the update that references them |
+| `GET /v1/sr/projects/{p}/objects/{sha256}` | → `200` the plaintext (checked against its hash), `404 {"error":"unknown object"}` |
+| `POST /v1/sr/projects/{p}/invitations` | `{email, role}` (owner, editors; lowercased). If active accounts with that **verified** email exist, they are shared at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Otherwise `201 {status:"pending", invitation: {id, email, role, expires}, project}`: the first sign-in with that verified email (any provider) turns it into a share. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
+| `DELETE /v1/sr/projects/{p}/invitations/{id}` | → `204` withdrawn, `404` unknown or no longer pending |
+| `PUT /v1/sr/projects/{p}/members/{account}` | `{role}` → `200` details (owner, editors), `404` if not a member |
+| `DELETE /v1/sr/projects/{p}/members/{account}` | → `204`. Owner and editors remove others; anyone removes themselves (leave), except the owner (`409`) |
+| `POST /v1/sr/projects/{p}/owner` | `{account}` (owner) → `200` details: that member (not a guest, `409`) becomes the owner and the old owner an editor |
+| `GET /v1/sr/heads?since=v&wait=s` | → `200 {version, projects: {"<id>": {head, role, name}}}` for every project the caller can open. With `since` equal to the current `version` it waits up to `wait` seconds (at most 25) until something the caller sees changes (an entry, a rename, a share or invitation acceptance, a removal or deletion), on any replica; then or at the deadline it answers. A notice only: read the logs afterwards. Shutdown ends waiting polls at once |
+
+**Sealing at rest.** Each project has a random 32-byte data key, stored only as
+`nonce ‖ XChaCha20-Poly1305(master key, nonce, "scribyra-sr-key/1\n<deployment>\n<project>", key)`
+in `sr_projects.data_key_wrapped`; the master key is `service_key_file`, never in the database.
+Entry bodies, snapshots and objects are sealed under the data key with associated data
+`scribyra-sr/1\n<project>\n<update|snapshot|object>\n<seq|hash>`, so sealed bytes cannot be moved
+between projects or slots. Entries up to `entry_inline_bytes` (sealed) are stored inline in
+PostgreSQL, larger ones and all objects in the blob store under `sr/<project>/…`. A database dump
+or a bucket copy without the key file shows metadata only (names, emails, sizes, shares, times).
+Back up the key file separately: without it no project opens.
+
+**Snapshots, floor and maintenance.** After `sr_snapshot_entries` entries or `sr_snapshot_bytes`
+stored bytes since the last snapshot, the service replays the snapshot and entries with `yrs`
+(keeping every tombstone) and writes a new snapshot covering the head. Once a snapshot is older
+than `sr_retention_seconds` (7 days), the floor moves to it: entry bodies at or below it and
+older snapshots are dropped (entry rows stay, so a late retry still gets its sequence number).
+Every `sr_maintenance_seconds` (and right after a deletion) a pass on any replica erases deleted
+projects' rows, moves floors and removes queued blobs (`sr_garbage`); rows are claimed with
+`SKIP LOCKED`, so replicas do not collide. A crash between a commit and a blob deletion leaves
+at most an orphaned sealed blob, never a dangling row.
+
+**Quotas.** `deployment.quotas` count sealed bytes: the deployment (`usage` row
+`sr:deployment`, locked by every charging write), each project (`project_bytes`) and each
+owner's projects together (`member_bytes`). A write over any of them is `507` and stores
+nothing; the server's own snapshots are charged but never refused. Transfers do not check the
+new owner's quota.
+
+**Materialisation** (for export and compile): `server_projects::Projects::materialise` replays a
+project and returns its files with paths (from the `files` tree, the same rules as the app),
+texts, asset objects (with their bytes when stored), the main file and the name.
 
 ### Access and limits
 
@@ -363,7 +443,8 @@ because the service only ever redirects back to a configured origin.
 
 **Register the service at each provider** as a confidential web client with:
 
-- redirect URI `<public_url>/v1/sso/callback` (exactly, the same for every provider),
+- redirect URI `<public_url>/v1/sso/callback/<id>` (exactly; `<id>` is the provider's `id` below,
+  so each provider has its own and a response is only accepted at the provider it belongs to),
 - grant types authorization code and refresh token,
 - optionally the back-channel logout URI `<public_url>/v1/sso/backchannel`.
 
@@ -388,13 +469,23 @@ because the service only ever redirects back to a configured origin.
 Group, guest and member rules apply at sign-in (refused sign-ins return to the app with
 `#scribyra-sso-error=guest` or `not_member`), again whenever a login is used (so a configuration
 change takes effect at once), and at each recheck from a refreshed ID token's claims. A person's
-account is the pair (issuer, subject): the same email at two providers is two accounts.
+account is the pair (provider, subject): the same email at two providers is two accounts. Every
+sign-in creates or refreshes the account (table `accounts`: provider, issuer, subject, email and
+whether it is verified, name, role, guest mark, state `active`, `blocked` or `disabled`, last
+seen); a disabled account cannot sign in.
 
 `POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
-`/v1/sso/callback`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>`;
+`/v1/sso/callback/<provider>`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>`;
 `POST /v1/sso/redeem {code, verifier}` → `{token, expires, org, provider, role, subject, person,
-state}` (`state` is `unlinked`, `linked` or `blocked`); `GET /v1/sso/me` and
-`POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`.
+state, account, email, name}` (`state` is `unlinked`, `linked` or `blocked`; `account` is the
+account ID; `email` is the **verified** email or `null`; `subject.email` is whatever the provider
+sent, for the person's own display only); `GET /v1/sso/me` (same body without `token`) and
+`POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`. Sign-ins in progress, one-time
+grants and used back-channel logout tokens are in PostgreSQL (`sso_flows`, `sso_grants`,
+`sso_logout_jtis`; only hashes of states and grant codes), so any replica can finish a sign-in
+another one started. Each client address holds at most eight sign-ins in progress (a ninth
+replaces its oldest) and at most eight end-to-end session challenges, and a full table drops its
+oldest rather than refusing, so one client cannot lock others out.
 
 **Removed with slice 8** (no replacement command): `scribyra-sync org create` and setup codes,
 `scribyra-sync org sso` and its table `org_sso`, invitation links, link-code device linking
@@ -406,7 +497,7 @@ revoked).
 **What is stored.** In PostgreSQL: each login's provider, subject, email, name, groups, guest
 mark and provider session ID, the SHA-256 of the login token (never the token), and the
 provider's **refresh token in plain text** (table `sso_logins`), plus the links between
-provider subjects and members (`sso_links`). Client secrets stay in their files. Protect database access and backups
+provider subjects and members (`sso_links`, with the email only when verified). Client secrets stay in their files. Protect database access and backups
 accordingly. Expired and revoked logins are deleted after a week. Discovery documents
 and key sets are cached in memory for an hour; an unknown key ID refetches the key set
 at most once per `sso_jwks_refetch_seconds`, so key rotation needs no restart.
@@ -425,12 +516,15 @@ one, is verified like a sign-in's (without the nonce) and updates the login's gr
 mark; an account that no longer passes the group or guest rules has its logins revoked. If the
 provider answers `invalid_grant` (account disabled or deleted, consent or session revoked),
 every login of that person is revoked and their link is **blocked**: they can sign in at the
-provider again, but stay blocked until an administrator unlinks them. Any other
+provider again, but stay blocked until an administrator unlinks them. Their account is marked
+`blocked` too; a later sign-in that the provider admits makes it `active` again. Any other
 client error (except 408 and 429) revokes only that login without blocking, so a
 wrong client secret does not block everyone. Network and server errors keep the login
 and retry on the next pass; the service logs only counters
 (`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
-simply expire after `session_hours`. Each revocation of a linked member's login (also a
+simply expire after `session_hours`: **group changes, guest marks and provider disablement
+reach such logins only when they expire**, so set `offline_access: true` (or use a provider that
+issues refresh tokens without it, like Keycloak) wherever that matters. Each revocation of a linked member's login (also a
 sign-out or a back-channel logout) closes their device sessions at once.
 
 **Back-channel logout** (OpenID Connect Back-Channel Logout 1.0) is accepted at
@@ -535,6 +629,69 @@ events take precedence, success needs a `%PDF` the runner received, and without 
 code cannot reopen the driver's descriptors. Paths are refused before anything is written:
 absolute, empty, `.` or `..` components, dot files, control characters, backslashes,
 duplicates and file/folder clashes. Test with `nix develop -c cargo test -p scribyra-compile`.
+
+## Configuration reference for operators
+
+One JSON file (`SCRIBYRA_SERVICE_CONFIG`, mounted read-only) holds every setting; each top-level
+field can be overridden by the environment variable `SCRIBYRA_SERVICE_<FIELD>` (the field name
+upper-cased: `shutdown_grace_seconds` → `SCRIBYRA_SERVICE_SHUTDOWN_GRACE_SECONDS`). Text, path and
+optional fields take plain text; numbers, booleans, arrays and objects take JSON. The `deployment`
+object comes whole from `SCRIBYRA_SERVICE_DEPLOYMENT` (JSON), and each of its fields from
+`SCRIBYRA_SERVICE_DEPLOYMENT_<FIELD>` (applied after it, so they refine it; `name`, `encryption`,
+`compile`, `guests` and `texlive` are plain text, the rest JSON). The environment wins over the
+file. **Secrets are only ever files**: `database_url_file`, `s3_secret_access_key_file`,
+`service_key_file`, each provider's `client_secret_file` (`database_url` exists for local use;
+prefer the file). The whole configuration is validated at start; a refusal prints
+`{"event":"invalid_configuration","reason":"…"}` naming the field, never a value, and exits 1.
+
+| Field (env `SCRIBYRA_SERVICE_…`) | Default | Meaning |
+| --- | --- | --- |
+| `bind` | `127.0.0.1:8787` | Listen address |
+| `public_url` | none | The exact origin clients use; required with `deployment` ([Organisation fields](#organisation-fields)) |
+| `origins` | `[]` | Browser origins allowed by CORS and as sign-in `return` |
+| `trusted_proxies` | `[]` | Peers allowed to name the client in `X-Forwarded-For` (exactly one address) |
+| `database_url_file` / `database_url` | none | PostgreSQL URL (file preferred); exactly one |
+| `database_connections` | 10 | Pool size (plus the ownership connection and, server-readable, the `LISTEN` connection) |
+| `migrate_on_start` | `true` | Apply pending migrations at start. With `false` the service refuses to start (`{"event":"schema_mismatch","schema":"behind"\|"ahead"}`) unless the schema is exactly its own: run `scribyra-sync migrate` first |
+| `shutdown_grace_seconds` | 25 | 1–3600: after SIGTERM, how long in-flight requests may finish before the process exits 0 |
+| `blob_store`, `data`, `s3_endpoint`, `s3_region`, `s3_bucket`, `s3_access_key_id`, `s3_secret_access_key_file`, `s3_path_style` | filesystem, `service-data` | Blob store ([Storage fields](#storage-fields)). Several replicas need S3: a filesystem blob directory is locked by one process |
+| `service_key_file` | none | 32-byte master key; required for `encryption: "server"`; back it up apart from the database |
+| `deployment` | none | The organisation's policy ([Deployment](#deployment)); its fields as `SCRIBYRA_SERVICE_DEPLOYMENT_NAME`, `…_ENCRYPTION`, `…_OFFLINE`, `…_COMPILE`, `…_LINK_SHARING`, `…_GUESTS`, `…_ADMINS`, `…_PROVIDERS`, `…_QUOTAS`, `…_AUDIT_RETENTION_DAYS`, `…_COMPILE_LIMITS`, `…_TEXLIVE` |
+| `sr_entry_bytes` | 16 MiB | Largest log entry or initial state (1 KiB to 64 MiB − 64 B) |
+| `sr_object_bytes` | 32 MiB | Largest asset or history object (same range) |
+| `sr_snapshot_entries`, `sr_snapshot_bytes` | 2000, 32 MiB | Snapshot after this many entries or stored bytes since the last |
+| `sr_retention_seconds` | 604800 (7 days) | Snapshot age before the floor moves to it (0–366 days) |
+| `sr_invitation_days` | 30 | 1–365: pending invitations expire |
+| `sr_maintenance_seconds` | 30 | 1–3600: background erasure, floor and blob clean-up pass |
+| `entry_inline_bytes` | 65536 | Entries (sealed) up to this size stay in PostgreSQL |
+| `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds` | 60, 60 | [Single sign-on](#single-sign-on-oidc) |
+| `org_bytes`, `sessions` | 1 GiB, 10000 | End-to-end organisation quota and device sessions |
+| `principals`, `object_bytes`, `namespace_bytes`, `total_bytes`, `namespace_objects`, `total_objects` | see [Access and limits](#access-and-limits) | Capability object store |
+| `tcp_connections`, `http_concurrency`, `requests_per_second`, `source_requests_per_second`, `rate_sources`, `uploads`, `principal_uploads`, `namespace_uploads`, `namespace_downloads`, `response_bytes`, `send_seconds` | see [Access and limits](#access-and-limits) | Admission and transfer limits (`uploads` also bounds server-readable object uploads) |
+| `connections`, `rooms`, `room_seconds`, `namespace_rooms`, `namespace_connections`, `room_attempts`, `namespace_room_attempts`, `frame_bytes`, `messages_per_second` | see [Access and limits](#access-and-limits) | Relay limits |
+
+**Commands** (all read the same configuration):
+
+| Command | Does | Exit |
+| --- | --- | --- |
+| `scribyra-sync` or `scribyra-sync serve` | Serve (applies migrations first unless `migrate_on_start: false`) | 0 after SIGTERM/SIGINT, 1 on a startup or runtime failure |
+| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary | 0, or 1 |
+| `scribyra-sync verify` | Check every capability object's blob and the usage rows | 0 when consistent |
+| `scribyra-sync migrate-sqlite <dir>` | One-time import of a milestone-S data directory | 0 |
+
+**Probes and signals:**
+
+| | Path | Answers |
+| --- | --- | --- |
+| Liveness | `/healthz` (also `/health`) | `200 {"live":true}` while the process serves; separate rate table, no transfer slot |
+| Readiness | `/readyz` (also `/ready`) | `200` when the database answers, the schema is exactly this build's, the ownership connection is alive and the blob store answers; otherwise `503`. Every request, probes included, gets `503` once shutdown began |
+| SIGTERM | | Stop accepting connections, answer new requests on open connections `503`, end heads long polls at once (they answer with the current state, so clients poll another replica), let in-flight requests finish for up to `shutdown_grace_seconds`, then exit 0 (`{"event":"shutdown"}`, then `{"event":"stopped"}` or `{"event":"drain_timeout"}`) |
+
+**Replicas.** A server-readable deployment keeps nothing a second replica would need in memory:
+sessions, sign-ins in progress, accounts, projects and the heads notices are in PostgreSQL
+(`LISTEN/NOTIFY`), so replicas share the database (they take the ownership lock in shared mode)
+and need S3 blobs. An end-to-end deployment still takes the lock exclusively: one replica (until
+slice 19).
 
 ## TLS, logging and supervision
 
@@ -759,7 +916,8 @@ clients. Restoring an older backup rolls stored state back; clients that still
 have their data re-upload it.
 
 **Upgrade**: stop the service, keep the previous binary or image and a backup,
-install the new binary, start it. Pending migrations (`crates/sync/migrations`,
+install the new binary, start it (or run `scribyra-sync migrate` first and start replicas with
+`migrate_on_start: false`). Pending migrations (`crates/sync/migrations`,
 embedded in the binary and recorded in the `_sqlx_migrations` table with
 checksums) run automatically at startup. A database with a migration the binary
 does not know (a newer schema) or an applied migration whose checksum differs
