@@ -397,8 +397,16 @@ impl Projects {
         if !self.compacting.lock().unwrap().insert(project.to_owned()) {
             return Ok(None);
         }
+        // Cleared however this ends: returned, failed, panicked or dropped (review L3).
+        struct Claim<'a>(&'a Mutex<HashSet<String>>, &'a str);
+        impl Drop for Claim<'_> {
+            fn drop(&mut self) {
+                self.0.lock().unwrap_or_else(|e| e.into_inner()).remove(self.1);
+            }
+        }
+        let claim = Claim(&self.compacting, project);
         let result = self.compact_now(project).await;
-        self.compacting.lock().unwrap().remove(project);
+        drop(claim);
         if result.as_ref().is_ok_and(Option::is_some) && self.store.config.sr_retention_seconds == 0 {
             self.move_floor(project).await?;
         }

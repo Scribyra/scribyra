@@ -666,3 +666,23 @@ fn emails_are_normalised_once_and_compared_as_stored() {
     assert_eq!(odon.details(&p).json()["role"], "editor");
     assert_eq!(sr.env.client().me(&odon.token).json()["email"], "ödön@example.org");
 }
+
+#[test]
+fn a_cancelled_or_failed_compaction_does_not_leave_the_project_claimed() {
+    // Review L3: the in-process "compacting" mark was cleared only when compaction returned, so
+    // a panic (or a cancelled future) left the project marked and never compacted again here.
+    let mut sr = start(Blobs::Fs);
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Claimed");
+    assert_eq!(ana.append(&p, "a", 1, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
+    let config = sr.env.service.config.clone();
+    sr.env.service.stop();
+    tokio::runtime::Runtime::new().unwrap().block_on(async {
+        let config: scribyra_sync::config::Config = serde_json::from_value(config).unwrap();
+        let store = std::sync::Arc::new(scribyra_sync::store::Store::open(config).await.unwrap());
+        let projects = scribyra_sync::server_projects::Projects::new(store).unwrap().unwrap();
+        // Dropped at its first wait, after it marked the project.
+        assert!(tokio::time::timeout(std::time::Duration::ZERO, projects.compact(&p)).await.is_err());
+        assert_eq!(projects.compact(&p).await.unwrap(), Some(1));
+    });
+}
