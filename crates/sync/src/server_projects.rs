@@ -190,6 +190,8 @@ pub enum Appended {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AppendError {
     NotFound,
+    /// The account may read but no longer write (403).
+    Forbidden,
     /// The same client sequence number with other bytes (409).
     Conflict,
     /// A quota would be exceeded (507).
@@ -201,6 +203,21 @@ impl From<sqlx::Error> for AppendError {
     fn from(_: sqlx::Error) -> Self {
         Self::Internal
     }
+}
+/// Whether `account` may still write to the project whose row this transaction has locked: the
+/// owner, or an editor whose share is locked here until commit, so a removal or role change
+/// either waits for the write or is seen by it (review L7: access checked before the
+/// transaction let a removed editor's in-flight append commit).
+async fn may_write(tx: &mut sqlx::PgConnection, project: &str, owner: &str, account: &str) -> Result<Result<(), AppendError>, sqlx::Error> {
+    if owner == account {
+        return Ok(Ok(()));
+    }
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM sr_shares WHERE project = $1 AND account = $2 FOR SHARE").bind(project).bind(account).fetch_optional(&mut *tx).await?;
+    Ok(match role.as_deref().and_then(Access::share) {
+        Some(access) if access.writes() => Ok(()),
+        Some(_) => Err(AppendError::Forbidden),
+        None => Err(AppendError::NotFound),
+    })
 }
 
 impl Projects {
@@ -287,6 +304,7 @@ impl Projects {
             .await?
             .ok_or(AppendError::NotFound)?;
         let (head, wrapped, owner, project_bytes): (i64, Option<Vec<u8>>, String, i64) = (row.get(0), row.get(1), row.get(2), row.get(3));
+        may_write(&mut tx, project, &owner, account).await??;
         // A slot is (account, client, client sequence): another member reusing this client ID
         // has slots of their own and cannot block these (review L1).
         let existing: Option<(i64, String)> = sqlx::query_as("SELECT seq, body_hash FROM sr_entries WHERE project = $1 AND account = $2 AND client = $3 AND client_seq = $4")
@@ -568,7 +586,7 @@ impl Projects {
         Ok(Some(plain))
     }
     /// Stores an object (its hash already checked): `Ok(true)` if new, `Ok(false)` if it was there.
-    pub async fn put_object(&self, project: &str, hash: &str, bytes: &[u8]) -> Result<bool, AppendError> {
+    pub async fn put_object(&self, project: &str, account: &str, hash: &str, bytes: &[u8]) -> Result<bool, AppendError> {
         let present: Option<i32> = sqlx::query_scalar("SELECT 1 FROM sr_objects WHERE project = $1 AND hash = $2").bind(project).bind(hash).fetch_optional(self.pool()).await?;
         if present.is_some() {
             return Ok(false);
@@ -583,6 +601,9 @@ impl Projects {
             let Some((owner, project_bytes)): Option<(String, i64)> = sqlx::query_as("SELECT owner, bytes FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await? else {
                 return Ok(Err(AppendError::NotFound));
             };
+            if let Err(e) = may_write(&mut tx, project, &owner, account).await? {
+                return Ok(Err(e));
+            }
             let present: Option<i32> = sqlx::query_scalar("SELECT 1 FROM sr_objects WHERE project = $1 AND hash = $2").bind(project).bind(hash).fetch_optional(&mut *tx).await?;
             if present.is_some() {
                 return Ok(Ok(false));
@@ -1043,6 +1064,7 @@ fn append_response(outcome: Result<Appended, AppendError>) -> Response {
         Ok(Appended::Created(seq)) => ok_json(StatusCode::CREATED, json!({"seq": seq})),
         Ok(Appended::Repeated(seq)) => ok_json(StatusCode::OK, json!({"seq": seq})),
         Err(AppendError::NotFound) => not_found(),
+        Err(AppendError::Forbidden) => error(StatusCode::FORBIDDEN, "only the owner and editors can change this project"),
         Err(AppendError::Conflict) => error(StatusCode::CONFLICT, "different update at this client sequence"),
         Err(AppendError::Quota) => error(StatusCode::INSUFFICIENT_STORAGE, "quota"),
         Err(AppendError::Internal) => internal(()),
@@ -1361,7 +1383,7 @@ async fn put_object(State(sr): State<Shared>, Path((p, hash)): Path<(String, Str
     if !blob::verify(&hash, &bytes) {
         return error(StatusCode::BAD_REQUEST, "the body does not match its SHA-256");
     }
-    match projects.put_object(&p, &hash, &bytes).await {
+    match projects.put_object(&p, &caller.account, &hash, &bytes).await {
         Ok(true) => StatusCode::CREATED.into_response(),
         Ok(false) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => append_response(Err(e)),

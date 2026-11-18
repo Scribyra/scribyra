@@ -766,3 +766,44 @@ fn signing_out_ends_the_sessions_heads_polls() {
     assert_eq!(status, 200);
     assert!(took >= std::time::Duration::from_secs(19), "{took:?}");
 }
+
+#[test]
+fn a_member_removed_during_an_append_does_not_get_it_stored() {
+    // Review L7: access was checked before the append's transaction, so an editor removed in
+    // between still had the append committed. The append now checks again under the project's
+    // lock. The append is paused at that lock while the owner removes the editor.
+    let sr = start(Blobs::Fs);
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    let p = ana.create("Removal");
+    assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+    let doc = Project::new();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let hold = |p: &str| {
+        runtime.block_on(async {
+            use sqlx::Connection;
+            let mut c = sqlx::PgConnection::connect(&sr.db()).await.unwrap();
+            sqlx::query("BEGIN").execute(&mut c).await.unwrap();
+            sqlx::query("SELECT 1 FROM sr_projects WHERE project = $1 FOR UPDATE").bind(p).execute(&mut c).await.unwrap();
+            c
+        })
+    };
+    for (what, change, expected) in [("removed", None, 404), ("made a viewer", Some("viewer"), 403)] {
+        if what == "made a viewer" {
+            assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+        }
+        let mut lock = hold(&p);
+        let append = {
+            let (ben, p, update) = (ben.clone(), p.clone(), doc.add_text(what, "x.tex", None, what));
+            std::thread::spawn(move || ben.append(&p, "b", if what == "removed" { 1 } else { 2 }, &update).status)
+        };
+        std::thread::sleep(std::time::Duration::from_millis(1000));
+        let status = match change {
+            None => ana.call("DELETE", &format!("/v1/sr/projects/{p}/members/{}", account(&sr, "ben")), None).status,
+            Some(role) => ana.call("PUT", &format!("/v1/sr/projects/{p}/members/{}", account(&sr, "ben")), Some(json!({"role": role}))).status,
+        };
+        assert!(status == 204 || status == 200, "{what}: {status}");
+        runtime.block_on(async { sqlx::query("ROLLBACK").execute(&mut lock).await.unwrap() });
+        assert_eq!(append.join().unwrap(), expected, "{what}");
+    }
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_entries"), "0");
+}
