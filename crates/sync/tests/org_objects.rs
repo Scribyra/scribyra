@@ -5,7 +5,7 @@ mod support;
 use scribyra_core::orgsync as core;
 use scribyra_sync::blobs::{BlobKey, BlobStore, FsBlobStore, S3BlobStore, S3Settings};
 use serde_json::{Value, json};
-use support::{orgs::*, *};
+use support::{orgs::*, sso::*, *};
 
 fn put(org: &Org, token: &str, project: &str, id: &str, epoch: u32, body: &[u8]) -> Reply {
     send("PUT", &org.url(&format!("/v1/projects/{project}/objects/{id}?epoch={epoch}")), Some(token), "application/octet-stream", body)
@@ -27,18 +27,18 @@ fn objects(backend: Value, raw: Box<dyn BlobStore>) {
     for (k, v) in backend.as_object().unwrap() {
         overrides[k] = v.clone();
     }
-    let s = Service::new(org_overrides(overrides));
-    let mut org = Org::create(&s, &[], json!({}));
+    let env = Env::start("RS256", people(), overrides, json!({}));
+    let s = &env.service;
+    let client = env.client();
+    let mut org = Org::create(&env, "alice");
     let owner = org.owner.clone();
     let token = org.token(&owner.seed);
     let project = org.create_project(&token, &owner);
     // Ben views the project; Cat is a member of the org without access to it.
-    let (_, invite, seed) = org.invite(&token, &owner, json!({}));
     let ben = Device::new();
-    assert_eq!(org.join(&ben, &invite, &seed).status, 201);
-    let (_, invite, seed) = org.invite(&token, &owner, json!({}));
+    org.admit(&client, "ben", &ben);
     let cat = Device::new();
-    assert_eq!(org.join(&cat, &invite, &seed).status, 201);
+    org.admit(&client, "cat", &cat);
     assert_eq!(org.post(Some(&token), "project.grant", json!({"project":project,"person":org.person(&ben),"role":"viewer"}), &owner.seed).status, 201);
     let (ben_token, cat_token) = (org.token(&ben.seed), org.token(&cat.seed));
 
@@ -108,8 +108,9 @@ fn encrypted_objects_with_garage_blobs() {
 
 #[test]
 fn full_organisation_storage_refuses_objects_with_507_and_keeps_membership_working() {
-    let s = Service::new(org_overrides(json!({"org_bytes": 64 * 1024, "namespace_objects": 3})));
-    let mut org = Org::create(&s, &[], json!({}));
+    let env = Env::start("RS256", people(), json!({"org_bytes": 64 * 1024, "namespace_objects": 3}), json!({}));
+    let s = &env.service;
+    let mut org = Org::create(&env, "alice");
     let owner = org.owner.clone();
     let token = org.token(&owner.seed);
     let project = org.create_project(&token, &owner);

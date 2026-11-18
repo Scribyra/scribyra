@@ -1,7 +1,11 @@
-//! Organisation routes (org-sync slice 1): device-key sign-in, the signed membership
-//! log, key wraps and encrypted append-only project logs. The service checks every
-//! signature and membership rule with the same Rust code as the browser
-//! (`scribyra_core::orgsync`) but never holds a project key or decrypts anything.
+//! End-to-end organisation routes (Appendix A of the design): device sessions bound to an
+//! OpenID Connect login, the signed membership log, key wraps and encrypted append-only project
+//! logs. The service checks every signature and membership rule with the same Rust code as the
+//! browser (`scribyra_core::orgsync`) but never holds a project key or decrypts anything.
+//!
+//! The routes serve the deployment's one organisation, and only when the deployment is end to
+//! end encrypted. Nothing here signs anyone in by itself: a device session needs a live login of
+//! the person the device belongs to, and the genesis needs a configured administrator's login.
 use crate::store::{GLOBAL_SCOPE, PutOutcome, Quota, Store, StoreError, namespace_scope, object_key};
 use crate::blobs::{BlobKey, Bytes};
 use axum::{
@@ -37,6 +41,8 @@ pub struct Orgs {
     store: Arc<Store>,
     sso: Arc<crate::sso::Sso>,
     public_url: Option<String>,
+    /// The deployment's organisation, when the deployment is end to end encrypted.
+    org: Option<String>,
     challenges: Mutex<HashMap<String, (String, Instant)>>,
     sessions: Mutex<HashMap<String, Session>>,
     states: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<OrgState>>>>>,
@@ -51,6 +57,14 @@ struct Session {
     key: String,
     person: String,
     until: Instant,
+    /// When the session opened: a key's oldest session makes room for a new one. (`until` does
+    /// not order them, since it follows each login's expiry.)
+    opened: Instant,
+}
+/// What a device signs to open a session: this service, the organisation, its key, the login it
+/// presents (its token's SHA-256) and a single-use challenge.
+pub fn session_message(public_url: &str, org: &str, key: &str, login_hash: &str, challenge: &str) -> String {
+    format!("scribyra-auth/2\n{public_url}\n{org}\n{key}\n{login_hash}\n{challenge}")
 }
 type Shared = Arc<Orgs>;
 
@@ -71,20 +85,6 @@ fn random_hex() -> String {
     getrandom::fill(&mut bytes).expect("operating system randomness");
     core::hex(&bytes)
 }
-fn unix_now() -> u64 {
-    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)
-}
-/// Associated data that binds a sealed service key to its organisation.
-pub fn service_key_context(org: &str) -> String {
-    format!("scribyra-service-key/1\n{org}")
-}
-/// Opens an organisation's sealed service key (`nonce ‖ ciphertext`) with the master key.
-pub fn unseal_service_key(master: &[u8; 32], org: &str, sealed: &[u8]) -> Result<Vec<u8>, core::Error> {
-    if sealed.len() < 24 {
-        return Err(core::Error("sealed service key is too short"));
-    }
-    core::open(master, &sealed[..24], service_key_context(org).as_bytes(), &sealed[24..])
-}
 pub fn org_scope(org: &str) -> String {
     format!("org:{org}")
 }
@@ -100,9 +100,11 @@ pub fn entry_key(project: &str, hash: &str) -> Result<BlobKey, StoreError> {
 impl Orgs {
     pub fn new(store: Arc<Store>, sso: Arc<crate::sso::Sso>) -> Shared {
         let public_url = store.config.public_url.clone();
+        let e2ee = store.config.deployment.as_ref().is_some_and(|d| d.encryption == crate::config::Encryption::E2ee);
+        let org = store.org.clone().filter(|_| e2ee);
         let mut revocations = sso.revocations();
         let downloads = Arc::new(tokio::sync::Semaphore::new(store.config.response_bytes));
-        let orgs = Arc::new(Self { store, sso, public_url, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default(), downloads });
+        let orgs = Arc::new(Self { store, sso, public_url, org, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default(), downloads });
         // When the identity provider disables someone, or they sign out, their device sessions
         // close at once.
         let weak = Arc::downgrade(&orgs);
@@ -140,11 +142,14 @@ impl Orgs {
             tx.send_modify(|n| *n += 1);
         }
     }
-    /// The per-organisation state slot. Only existing organisations get one, and the cache
-    /// drops idle entries (no handler holds them) once it is full.
+    /// The per-organisation state slot. Only the deployment's organisation has one (and only in
+    /// an end-to-end deployment), and the cache drops idle entries once it is full.
     async fn slot(&self, org: &str) -> Result<Arc<tokio::sync::Mutex<Option<OrgState>>>, Response> {
         if !core::is_hex(org, 32) {
             return Err(error(StatusCode::BAD_REQUEST, "invalid organisation"));
+        }
+        if self.org.as_deref() != Some(org) {
+            return Err(error(StatusCode::NOT_FOUND, "unknown organisation"));
         }
         if let Some(slot) = self.states.lock().unwrap().get(org) {
             return Ok(slot.clone());
@@ -162,12 +167,6 @@ impl Orgs {
     /// Loads (once) and returns the replayed membership state of an existing org.
     async fn state<'a>(&self, guard: &'a mut tokio::sync::MutexGuard<'_, Option<OrgState>>, org: &str) -> Result<&'a mut OrgState, Response> {
         if guard.is_none() {
-            let enrol: Option<String> = sqlx::query_scalar("SELECT enrol FROM orgs WHERE org = $1")
-                .bind(org)
-                .fetch_optional(&self.store.pool)
-                .await
-                .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
-            let Some(enrol) = enrol else { return Err(error(StatusCode::NOT_FOUND, "unknown organisation")) };
             let mut state = OrgState::new(org).map_err(|_| StatusCode::BAD_REQUEST.into_response())?;
             let rows = sqlx::query("SELECT raw FROM org_events WHERE org = $1 ORDER BY seq")
                 .bind(org)
@@ -177,9 +176,8 @@ impl Orgs {
             for row in rows {
                 let raw: String = row.get(0);
                 // Stored events were validated on append; a failure here means tampering.
-                state.apply(&raw, Some(&enrol)).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
+                state.apply(&raw).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())?;
             }
-            state.enrol = Some(enrol);
             **guard = Some(state);
         }
         Ok(guard.as_mut().unwrap())
@@ -212,9 +210,9 @@ impl Orgs {
             Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
         }
     }
-    /// Joining through SSO (an SSO-bound invitation, or a join request): a live login for this
-    /// org whose identity is not yet anyone's, with the invited email if the invitation names one.
-    async fn sso_gate(&self, headers: &HeaderMap, org: &str, email_hash: Option<&str>, person: Option<&str>) -> Result<crate::sso::Login, Response> {
+    /// Joining (a join request, or the genesis): a live login for this org whose identity is not
+    /// yet anyone's.
+    async fn sso_gate(&self, headers: &HeaderMap, org: &str, person: Option<&str>) -> Result<crate::sso::Login, Response> {
         let Some(login) = self.sso_login(headers, org).await? else {
             return Err(error(StatusCode::FORBIDDEN, "single sign-on is required"));
         };
@@ -224,12 +222,6 @@ impl Orgs {
             Ok(Some((linked, false))) if Some(linked.as_str()) == person => {}
             Ok(Some(_)) => return Err(error(StatusCode::CONFLICT, "this single sign-on identity already belongs to a member")),
             Err(_) => return Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
-        }
-        if let Some(expected) = email_hash {
-            let matches = login.email_verified && login.email.as_deref().is_some_and(|e| core::hex(&core::sha256(e.to_lowercase().as_bytes())) == expected);
-            if !matches {
-                return Err(error(StatusCode::FORBIDDEN, "this invitation is for another email address"));
-            }
         }
         Ok(login)
     }
@@ -268,9 +260,9 @@ struct SessionRequest {
     key: String,
     challenge: String,
     sig: String,
-    /// An SSO login token: required in orgs that require SSO, and links the person on first use.
-    #[serde(default)]
-    sso: Option<String>,
+    /// The OpenID Connect login token of the person this key belongs to. Always required: a
+    /// device (or recovery) key alone never opens a session.
+    sso: String,
 }
 async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -> Response {
     let Some(public_url) = o.public_url.clone() else {
@@ -282,7 +274,8 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
     if org != request.org || until <= Instant::now() {
         return error(StatusCode::UNAUTHORIZED, "unknown challenge");
     }
-    let message = format!("scribyra-auth/1\n{public_url}\n{org}\n{}\n{}", request.key, request.challenge);
+    let login_hash = core::hex(&core::sha256(request.sso.as_bytes()));
+    let message = session_message(&public_url, &org, &request.key, &login_hash, &request.challenge);
     if !core::ed25519_verify(&request.key, message.as_bytes(), &request.sig) {
         return error(StatusCode::UNAUTHORIZED, "invalid signature");
     }
@@ -300,55 +293,34 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
         Some(KeyRole::Recovery { person }) => (person, "recovery"),
         None => return error(StatusCode::FORBIDDEN, "key is not active"),
     };
-    let joined = state.persons.get(&person).map(|p| p.joined).unwrap_or(u64::MAX);
     drop(guard);
-    let mut until = Instant::now() + Duration::from_secs(SESSION_SECONDS);
-    let (policy, link) = match (o.sso.policy(&org).await, o.sso.person_link(&org, &person).await) {
-        (Ok(policy), Ok(link)) => (policy, link),
-        _ => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+    let login = match o.sso.login(&request.sso).await {
+        Ok(Some(login)) if login.org == org => login,
+        Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "this single sign-on belongs to another organisation"),
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "single sign-on is required"),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
-    // Someone the identity provider disabled is refused whatever they present.
-    if link.as_ref().is_some_and(|(_, _, blocked)| *blocked) {
-        return error(StatusCode::FORBIDDEN, "disabled at your organisation's identity provider");
+    // The login must be the identity linked to this key's person (linked when they joined), and
+    // not blocked by the identity provider.
+    match o.sso.linked_person(&login).await {
+        Ok(Some((p, false))) if p == person => {}
+        Ok(Some((p, true))) if p == person => return error(StatusCode::FORBIDDEN, "disabled at your organisation's identity provider"),
+        Ok(_) => return error(StatusCode::FORBIDDEN, "this single sign-on identity is not linked to this member"),
+        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
-    let mut sso = false;
-    match &request.sso {
-        Some(token) => {
-            let login = match o.sso.login(token).await {
-                Ok(Some(login)) if login.org == org => login,
-                Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "this single sign-on belongs to another organisation"),
-                Ok(None) => return error(StatusCode::UNAUTHORIZED, "single sign-on expired"),
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            };
-            match o.sso.linked_person(&login).await {
-                Ok(Some((p, false))) if p == person => {}
-                Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "this single sign-on identity belongs to another member"),
-                // First sign-in with SSO for a person who joined before it was set up: link them.
-                // Everyone who joined later was linked when they joined.
-                Ok(None) if link.is_none() && policy.as_ref().is_some_and(|p| joined <= p.linked_before) => match o.sso.link(&login, &person).await {
-                    Ok(()) => {}
-                    Err(_) => return error(StatusCode::CONFLICT, "this single sign-on identity could not be linked"),
-                },
-                Ok(None) => return error(StatusCode::FORBIDDEN, "this single sign-on identity is not linked to this member"),
-                Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-            }
-            // A device session never outlives the SSO login behind it.
-            if let Ok(left) = login.expires.duration_since(std::time::SystemTime::now()) {
-                until = until.min(Instant::now() + left);
-            }
-            sso = true;
-        }
-        None if policy.as_ref().is_some_and(|p| p.required) => return error(StatusCode::UNAUTHORIZED, "single sign-on is required"),
-        None => {}
+    // A device session never outlives the login behind it.
+    let mut until = Instant::now() + Duration::from_secs(SESSION_SECONDS);
+    if let Ok(left) = login.expires.duration_since(std::time::SystemTime::now()) {
+        until = until.min(Instant::now() + left);
     }
     let token = random_hex();
     let mut sessions = o.sessions.lock().unwrap();
     let now = Instant::now();
     sessions.retain(|_, s| s.until > now);
     // One key holds a few sessions at most; its oldest makes room for a new one.
-    let mine: Vec<(String, Instant)> = sessions.iter().filter(|(_, s)| s.key == request.key && s.org == org).map(|(k, s)| (k.clone(), s.until)).collect();
+    let mine: Vec<(String, Instant)> = sessions.iter().filter(|(_, s)| s.key == request.key && s.org == org).map(|(k, s)| (k.clone(), s.opened)).collect();
     if mine.len() >= MAX_SESSIONS_PER_KEY {
-        if let Some((oldest, _)) = mine.iter().min_by_key(|(_, until)| *until) {
+        if let Some((oldest, _)) = mine.iter().min_by_key(|(_, opened)| *opened) {
             sessions.remove(oldest);
         }
     }
@@ -356,8 +328,8 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
         return error(StatusCode::SERVICE_UNAVAILABLE, "too many sessions");
     }
     let expires = until.saturating_duration_since(now).as_secs();
-    sessions.insert(core::hex(&core::sha256(token.as_bytes())), Session { org, key: request.key, person: person.clone(), until });
-    Json(serde_json::json!({"token": token, "expires": expires, "person": person, "role": role, "sso": sso})).into_response()
+    sessions.insert(core::hex(&core::sha256(token.as_bytes())), Session { org, key: request.key, person: person.clone(), until, opened: now });
+    Json(serde_json::json!({"token": token, "expires": expires, "person": person, "role": role})).into_response()
 }
 
 #[derive(Deserialize)]
@@ -423,53 +395,27 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         Ok(s) => s,
         Err(r) => return r,
     };
-    // An SSO login that a join brings along, linked to the new person once the join commits.
+    // The login a genesis or a join request brings along, linked to the new person before the
+    // event commits.
     let mut joining_login = None;
     if state.genesis.is_none() {
-        // The setup code's signature inside genesis authenticates the first event.
+        // The genesis is accepted once, from a sign-in of a configured administrator.
         if kind != "genesis" {
             return error(StatusCode::CONFLICT, "the organisation has no genesis yet");
         }
-        // Organisation-managed mode names this service's own key for the org, or nothing works.
-        let stored: Option<String> = match sqlx::query_scalar("SELECT service_key FROM orgs WHERE org = $1").bind(&org).fetch_one(&o.store.pool).await {
-            Ok(key) => key,
-            Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
+        let login = match o.sso_gate(&headers, &org, value["body"]["person"].as_str()).await {
+            Ok(login) => login,
+            Err(r) => return r,
         };
-        let requested = value["body"]["serviceKey"].as_str();
-        if value["body"]["mode"] == "managed" && (stored.is_none() || requested != stored.as_deref()) {
-            return error(StatusCode::BAD_REQUEST, "this service does not hold that organisation key (organisation-managed mode needs the service key)");
+        if login.role != crate::sso::Role::Admin {
+            return error(StatusCode::FORBIDDEN, "only a deployment administrator can create the organisation");
         }
+        joining_login = Some(login);
     } else {
         match kind.as_str() {
-            // A join is authenticated by its invitation; the service adds what only it can
-            // check: the invitation's expiry against its clock, and single sign-on if required.
-            "person.join" => {
-                let invite = value["body"]["invite"].as_str().and_then(|i| state.invites.get(i));
-                if let Some(invite) = invite {
-                    if invite.expires <= unix_now() {
-                        return error(StatusCode::GONE, "the invitation expired");
-                    }
-                    // In an org that requires SSO, every newcomer joins signed in.
-                    let required = match o.sso.policy(&org).await {
-                        Ok(policy) => policy.is_some_and(|p| p.required),
-                        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-                    };
-                    joining_login = if invite.sso || required {
-                        match o.sso_gate(&headers, &org, invite.email_hash.as_deref(), value["body"]["person"].as_str()).await {
-                            Ok(login) => Some(login),
-                            Err(r) => return r,
-                        }
-                    } else {
-                        // Optional: a joiner signed in with SSO is linked right away.
-                        match o.sso_login(&headers, &org).await {
-                            Ok(login) => login,
-                            Err(r) => return r,
-                        }
-                    };
-                }
-            }
-            // Asking to join without an invitation needs the org's single sign-on.
-            "person.request" => match o.sso_gate(&headers, &org, None, value["body"]["person"].as_str()).await {
+            "genesis" => return error(StatusCode::CONFLICT, "the organisation already has a genesis"),
+            // Asking to join needs a sign-in whose identity is nobody's yet.
+            "person.request" => match o.sso_gate(&headers, &org, value["body"]["person"].as_str()).await {
                 Ok(login) => joining_login = Some(login),
                 Err(r) => return r,
             },
@@ -489,14 +435,13 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         }
     }
     let mut next = state.clone();
-    let enrol = state.enrol.clone();
-    let hash = match next.apply(&raw, enrol.as_deref()) {
+    let hash = match next.apply(&raw) {
         Ok(hash) => hash,
         Err(e) if e.0 == "membership event does not follow the current head" || e.0 == "the organisation already has a genesis" => return error(StatusCode::CONFLICT, e.0),
         Err(e) => return error(StatusCode::BAD_REQUEST, e.0),
     };
-    // The SSO identity is linked before the join commits (a refused link refuses the join), so
-    // one identity can never end up behind two people.
+    // The identity is linked before the event commits (a refused link refuses it), so one
+    // identity can never end up behind two people.
     if let (Some(login), Some(person)) = (&joining_login, value["body"]["person"].as_str())
         && o.sso.link(login, person).await.is_err()
     {
@@ -1065,8 +1010,8 @@ async fn get_object(State(o): State<Shared>, Path((project, id)): Path<(String, 
     }
 }
 
-/// What a browser needs before it signs anything: whether the org exists and has a genesis,
-/// and the service's own key for organisation-managed mode (if the operator enabled it).
+/// What a browser needs before it signs anything: whether the org has a genesis, and the
+/// log's head and length (a join request is signed at the head).
 async fn info(State(o): State<Shared>, Path(org): Path<String>) -> Response {
     let slot = match o.slot(&org).await {
         Ok(slot) => slot,
@@ -1080,12 +1025,8 @@ async fn info(State(o): State<Shared>, Path(org): Path<String>) -> Response {
             Err(r) => return r,
         }
     };
-    let key: Option<String> = match sqlx::query_scalar("SELECT service_key FROM orgs WHERE org = $1").bind(&org).fetch_one(&o.store.pool).await {
-        Ok(key) => key,
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    // The org's name is sealed under the directory key: an invitation link can show it.
-    Json(serde_json::json!({"genesis": genesis, "head": head, "count": count, "name": name, "serviceKey": key})).into_response()
+    // The org's name is sealed under the directory key.
+    Json(serde_json::json!({"genesis": genesis, "head": head, "count": count, "name": name})).into_response()
 }
 /// Keys this device's person could hand out but has not yet: for every project the person can
 /// open (and the org directory), the entitled X25519 keys that have no wrap for the current
@@ -1190,97 +1131,6 @@ const LINK_SECONDS: i64 = 15 * 60;
 const MAX_LINKS_PER_PERSON: i64 = 4;
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NewLink {
-    link: String,
-    key: String,
-}
-/// An existing device opens a one-time link for a new device of the same person.
-async fn create_link(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap, Json(request): Json<NewLink>) -> Response {
-    let session = match o.session(&headers) {
-        Ok(s) => s,
-        Err(r) => return r,
-    };
-    if session.org != org || !core::is_hex(&request.link, 16) || !core::is_hex(&request.key, 32) {
-        return error(StatusCode::BAD_REQUEST, "invalid device link");
-    }
-    let person = {
-        let slot = match o.slot(&org).await {
-            Ok(slot) => slot,
-            Err(r) => return r,
-        };
-        let mut guard = slot.lock().await;
-        let state = match o.state(&mut guard, &org).await {
-            Ok(s) => s,
-            Err(r) => return r,
-        };
-        match Orgs::role(state, &session) {
-            Ok(KeyRole::Device { person }) if !state.links.contains(&request.link) => person,
-            Ok(_) => return error(StatusCode::FORBIDDEN, "only a device can link another"),
-            Err(r) => return r,
-        }
-    };
-    let result = async {
-        let mut tx = o.store.pool.begin().await?;
-        sqlx::query("DELETE FROM device_links WHERE org = $1 AND expires < now()").bind(&org).execute(&mut *tx).await?;
-        let open: i64 = sqlx::query_scalar("SELECT count(*) FROM device_links WHERE org = $1 AND person = $2").bind(&org).bind(&person).fetch_one(&mut *tx).await?;
-        if open >= MAX_LINKS_PER_PERSON {
-            return Ok(false);
-        }
-        sqlx::query("INSERT INTO device_links (org, link, person, link_key, expires) VALUES ($1, $2, $3, $4, now() + make_interval(secs => $5)) ON CONFLICT DO NOTHING")
-            .bind(&org)
-            .bind(&request.link)
-            .bind(&person)
-            .bind(&request.key)
-            .bind(LINK_SECONDS as f64)
-            .execute(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        Ok::<_, sqlx::Error>(true)
-    }
-    .await;
-    match result {
-        Ok(true) => (StatusCode::CREATED, Json(serde_json::json!({"person": person, "expires": LINK_SECONDS}))).into_response(),
-        Ok(false) => error(StatusCode::TOO_MANY_REQUESTS, "too many open device links"),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-struct LinkRequest {
-    device: String,
-    agreement: String,
-    proof: String,
-    sig: String,
-}
-/// The new device answers a link: its keys, its own possession proof (bound to the link) and
-/// the link key's signature over them. Only the first answer is kept.
-async fn request_link(State(o): State<Shared>, Path((org, link)): Path<(String, String)>, Json(request): Json<LinkRequest>) -> Response {
-    if !core::is_hex(&org, 32) || !core::is_hex(&link, 16) || !core::is_hex(&request.device, 32) || !core::valid_agreement_key(&request.agreement) {
-        return error(StatusCode::BAD_REQUEST, "invalid device link request");
-    }
-    let row = match sqlx::query("SELECT person, link_key FROM device_links WHERE org = $1 AND link = $2 AND expires > now() AND request IS NULL").bind(&org).bind(&link).fetch_optional(&o.store.pool).await {
-        Ok(Some(row)) => row,
-        Ok(None) => return error(StatusCode::NOT_FOUND, "unknown, used or expired device link"),
-        Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    };
-    let (person, key): (String, String) = (row.get(0), row.get(1));
-    let signed = core::device_request_message(&org, &link, &person, &request.device, &request.agreement);
-    let proof = core::device_proof_message(&org, &core::link_binding(&link), &person, &request.device, &request.agreement);
-    if !core::ed25519_verify(&key, &signed, &request.sig) || !core::ed25519_verify(&request.device, &proof, &request.proof) {
-        return error(StatusCode::FORBIDDEN, "the link request is not signed with this link");
-    }
-    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "sig": request.sig});
-    match sqlx::query("UPDATE device_links SET request = $3 WHERE org = $1 AND link = $2 AND request IS NULL").bind(&org).bind(&link).bind(&stored).execute(&o.store.pool).await {
-        Ok(done) if done.rows_affected() == 1 => {
-            o.changed(&org);
-            (StatusCode::ACCEPTED, Json(serde_json::json!({"person": person}))).into_response()
-        }
-        Ok(_) => error(StatusCode::CONFLICT, "this device link was already answered"),
-        Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
-    }
-}
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
 struct SsoLinkRequest {
     link: String,
     device: String,
@@ -1290,9 +1140,9 @@ struct SsoLinkRequest {
     /// device asks the person to type that code, so the service cannot swap the keys.
     mac: String,
 }
-/// A new browser signed in with the org's SSO as an existing member asks to become one of
-/// their devices. It waits, like a link answer, until one of that person's devices compares a
-/// code and signs device.add; the service alone cannot add it.
+/// A new browser signed in as an existing member asks to become one of their devices. It waits
+/// until one of that person's devices (or their recovery kit) compares a code and signs
+/// device.add; the service alone cannot add it.
 async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap, Json(request): Json<SsoLinkRequest>) -> Response {
     if !core::is_hex(&request.link, 16) || !core::is_hex(&request.device, 32) || !core::valid_agreement_key(&request.agreement) || !core::is_hex(&request.mac, 32) {
         return error(StatusCode::BAD_REQUEST, "invalid device request");
@@ -1342,7 +1192,7 @@ async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, head
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
-/// The open links of this device's person, with any answer waiting for approval.
+/// The open device requests of this device's person, waiting for approval.
 async fn list_links(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap) -> Response {
     let session = match o.session(&headers) {
         Ok(s) => s,
@@ -1363,7 +1213,7 @@ async fn list_links(State(o): State<Shared>, Path(org): Path<String>, headers: H
         };
         match Orgs::role(state, &session) {
             Ok(KeyRole::Device { person }) => person,
-            Ok(_) => return error(StatusCode::FORBIDDEN, "only a device can link another"),
+            Ok(_) => return error(StatusCode::FORBIDDEN, "only a device can add another"),
             Err(r) => return r,
         }
     };
@@ -1383,70 +1233,9 @@ pub fn routes(o: Shared) -> Router {
         .route("/v1/orgs/{org}/info", get(info))
         .route("/v1/orgs/{org}/pending", get(pending))
         .route("/v1/orgs/{org}/heads", get(heads))
-        .route("/v1/orgs/{org}/device-links", get(list_links).post(create_link))
+        .route("/v1/orgs/{org}/device-links", get(list_links))
         .route("/v1/orgs/{org}/device-links/sso", post(sso_link_request))
-        .route("/v1/orgs/{org}/device-links/{link}", post(request_link))
         .route("/v1/projects/{project}/log", get(read_log).post(append))
         .route("/v1/projects/{project}/objects/{id}", get(get_object).put(put_object))
         .with_state(o)
-}
-
-/// `scribyra-sync org create`: a new organisation and its single-use setup code. Runs beside
-/// a live service (it takes no ownership lock); the service must have migrated the database.
-pub async fn create_org(config: &crate::config::Config, label: &str) -> Result<(String, String), crate::store::Error> {
-    use sqlx::Connection;
-    let public_url = config.public_url.clone().ok_or("set public_url before creating organisations")?;
-    if label.is_empty() || label.len() > 64 || !label.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_. ".contains(&b)) {
-        return Err("labels use 1-64 letters, digits, spaces, dots, dashes or underscores".into());
-    }
-    let options: sqlx::postgres::PgConnectOptions = config.database_url().map_err(|e| e.to_string())?.parse()?;
-    let mut db = sqlx::PgConnection::connect_with(&options.application_name("scribyra-sync-admin")).await?;
-    let migrated: Option<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 3 AND success")
-        .fetch_optional(&mut db)
-        .await
-        .unwrap_or(None);
-    if migrated.is_none() {
-        return Err("start the service once so it can upgrade the database, then try again".into());
-    }
-    let org = random_hex();
-    let mut secret = [0u8; 32];
-    getrandom::fill(&mut secret)?;
-    let enrol = core::hex(&core::ed25519_public(&core::enrol_seed(&secret)?)?);
-    // With a master key, the org also gets a service key, used only if its owner chooses
-    // organisation-managed encryption.
-    let (service_key, sealed) = match config.master_key().map_err(|e| e.to_string())? {
-        Some(master) => {
-            let (mut key, mut nonce) = ([0u8; 32], [0u8; 24]);
-            getrandom::fill(&mut key)?;
-            getrandom::fill(&mut nonce)?;
-            let public = core::hex(&core::x25519_public(&key)?);
-            let mut sealed = nonce.to_vec();
-            sealed.extend(core::seal(&master, &nonce, service_key_context(&org).as_bytes(), &key)?);
-            key.fill(0);
-            (Some(public), Some(sealed))
-        }
-        None => (None, None),
-    };
-    sqlx::query("INSERT INTO orgs (org, label, enrol, service_key, service_key_sealed) VALUES ($1, $2, $3, $4, $5)")
-        .bind(&org)
-        .bind(label)
-        .bind(&enrol)
-        .bind(&service_key)
-        .bind(&sealed)
-        .execute(&mut db)
-        .await?;
-    let setup = format!("scribyra-setup:1:{}:{org}:{}", base64url(public_url.as_bytes()), base64url(&secret));
-    secret.fill(0);
-    Ok((org, setup))
-}
-fn base64url(bytes: &[u8]) -> String {
-    const A: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let mut out = String::new();
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, &b)| n | (b as u32) << (16 - 8 * i));
-        for i in 0..=chunk.len() {
-            out.push(A[((n >> (18 - 6 * i)) & 63) as usize] as char);
-        }
-    }
-    out
 }

@@ -4,6 +4,8 @@ use std::{
     path::PathBuf,
 };
 
+/// Prefix of configuration errors that are safe to print (they name fields, never values).
+pub const INVALID: &str = "invalid configuration: ";
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Principal {
@@ -67,8 +69,8 @@ pub struct Config {
     /// Exact origin clients use to reach this service (for example https://sync.example.org).
     /// Signed into every organisation sign-in; organisations are disabled without it.
     pub public_url: Option<String>,
-    /// A file holding 32 random bytes that seal each organisation's service key. Without it the
-    /// service offers only end-to-end encrypted organisations (no organisation-managed mode).
+    /// A file holding the deployment's 32-byte master key. Required for server-readable
+    /// deployments (`deployment.encryption = "server"`), which seal projects under it.
     pub service_key_file: Option<std::path::PathBuf>,
     /// Encrypted bytes one organisation may store.
     pub org_bytes: u64,
@@ -81,6 +83,9 @@ pub struct Config {
     pub sso_recheck_tick_seconds: u64,
     /// Minimum interval between JWKS refetches triggered by an unknown key ID.
     pub sso_jwks_refetch_seconds: u64,
+    /// The organisation this deployment serves: its policy and sign-in providers. Optional only
+    /// so a plain object store and relay can run without one; every organisation route needs it.
+    pub deployment: Option<Deployment>,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -132,11 +137,12 @@ impl Default for Config {
             sessions: 10000,
             sso_recheck_tick_seconds: 60,
             sso_jwks_refetch_seconds: 60,
+            deployment: None,
         }
     }
 }
 impl Config {
-    /// The operator's master key that seals organisation service keys, if configured.
+    /// The deployment's master key, if configured.
     pub fn master_key(&self) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error>> {
         let Some(path) = &self.service_key_file else { return Ok(None) };
         let bytes = std::fs::read(path).map_err(|e| format!("service_key_file: {e}"))?;
@@ -151,8 +157,11 @@ impl Config {
         }
         for (name, slot) in value.as_object_mut().unwrap() {
             if let Ok(raw) = std::env::var(format!("SCRIBYRA_SERVICE_{}", name.to_uppercase())) {
-                // Optional fields default to null and are all strings or paths.
-                *slot = if slot.is_string() || slot.is_null() {
+                // Optional fields default to null and are strings or paths, except the
+                // deployment object, which is JSON like every other structured field.
+                *slot = if name == "deployment" {
+                    serde_json::from_str(&raw)?
+                } else if slot.is_string() || slot.is_null() {
                     raw.into()
                 } else {
                     serde_json::from_str(&raw)?
@@ -160,7 +169,9 @@ impl Config {
             }
         }
         let config: Self = serde_json::from_value(value)?;
-        config.validate()?;
+        // Validation messages name the field and never contain values, so they can be printed.
+        config.validate().map_err(|e| format!("{INVALID}{e}"))?;
+        config.check_files().map_err(|e| format!("{INVALID}{e}"))?;
         Ok(config)
     }
     /// The database URL, read from `database_url_file` when configured (trailing newline removed).
@@ -191,6 +202,18 @@ impl Config {
             )?,
             path_style: self.s3_path_style,
         }))
+    }
+    /// Startup checks of the files the configuration names: the master key and each provider's
+    /// client secret must be readable now (they are read again where used, so a rotated secret
+    /// file takes effect without a restart).
+    pub fn check_files(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.master_key().map_err(|_| "service_key_file must be a readable file of exactly 32 bytes")?;
+        if let Some(d) = &self.deployment {
+            for p in &d.providers {
+                p.client_secret().map_err(|_| format!("deployment.providers[{}].client_secret_file cannot be read", p.id))?;
+            }
+        }
+        Ok(())
     }
     pub fn validate(&self) -> Result<(), &'static str> {
         use scribyra_core::blob::valid_hash;
@@ -302,7 +325,277 @@ impl Config {
                 return Err("invalid origin");
             }
         }
+        if let Some(d) = &self.deployment {
+            if self.public_url.is_none() {
+                return Err("deployment needs public_url");
+            }
+            d.validate()?;
+            if d.encryption == Encryption::Server && self.service_key_file.is_none() {
+                return Err("deployment.encryption \"server\" needs service_key_file");
+            }
+        }
         Ok(())
+    }
+}
+
+/// `deployment.encryption`: fixed when a deployment first starts.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Encryption {
+    /// Server-readable: the server seals projects under keys the master key wraps.
+    #[default]
+    Server,
+    /// End to end: clients encrypt; the server stores ciphertext only.
+    E2ee,
+}
+impl Encryption {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Server => "server",
+            Self::E2ee => "e2ee",
+        }
+    }
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Compile {
+    #[default]
+    Browser,
+    Server,
+    Both,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Guests {
+    /// Provider guest accounts are refused at sign-in.
+    #[default]
+    Off,
+    /// Guest accounts may open what is shared with them.
+    Shared,
+}
+/// The organisation's policy (design section 2). One deployment serves one organisation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Deployment {
+    pub name: String,
+    #[serde(default)]
+    pub encryption: Encryption,
+    #[serde(default = "yes")]
+    pub offline: bool,
+    #[serde(default)]
+    pub compile: Compile,
+    #[serde(default)]
+    pub link_sharing: bool,
+    #[serde(default)]
+    pub guests: Guests,
+    /// Verified emails, or `issuer#subject`, that are administrators whatever groups say.
+    #[serde(default)]
+    pub admins: Vec<String>,
+    pub providers: Vec<Provider>,
+    #[serde(default)]
+    pub quotas: Quotas,
+    #[serde(default = "audit_days")]
+    pub audit_retention_days: u32,
+    #[serde(default)]
+    pub compile_limits: CompileLimits,
+    /// A TeX Live tree (server compile).
+    #[serde(default)]
+    pub texlive: Option<PathBuf>,
+}
+fn yes() -> bool {
+    true
+}
+fn audit_days() -> u32 {
+    400
+}
+/// How a provider marks guest accounts: a claim and the value that means "guest".
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct GuestRule {
+    pub claim: String,
+    pub equals: String,
+}
+/// One OpenID Connect provider. The redirect URI is `<public_url>/v1/sso/callback` for all.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Provider {
+    pub id: String,
+    pub label: String,
+    pub issuer: String,
+    pub client_id: String,
+    pub client_secret_file: PathBuf,
+    #[serde(default)]
+    pub email_domains: Vec<String>,
+    #[serde(default)]
+    pub groups_claim: Option<String>,
+    #[serde(default)]
+    pub admin_groups: Vec<String>,
+    #[serde(default)]
+    pub member_groups: Vec<String>,
+    #[serde(default)]
+    pub guest: Option<GuestRule>,
+    #[serde(default)]
+    pub offline_access: bool,
+    #[serde(default = "session_hours")]
+    pub session_hours: u32,
+    #[serde(default = "recheck_minutes")]
+    pub recheck_minutes: u32,
+    /// Extra scopes beyond `openid email profile` (and `offline_access` when set).
+    #[serde(default)]
+    pub scopes: Vec<String>,
+}
+fn session_hours() -> u32 {
+    12
+}
+fn recheck_minutes() -> u32 {
+    10
+}
+impl Provider {
+    /// The confidential client's secret, read from its file (one line).
+    pub fn client_secret(&self) -> Result<String, Box<dyn std::error::Error>> {
+        let secret = read_secret(&self.client_secret_file)?;
+        if secret.len() > 1024 {
+            return Err("invalid secret file".into());
+        }
+        Ok(secret)
+    }
+    /// The scopes a sign-in asks for.
+    pub fn scope(&self) -> String {
+        let mut scope = String::from("openid email profile");
+        if self.offline_access {
+            scope.push_str(" offline_access");
+        }
+        for extra in &self.scopes {
+            if !scope.split(' ').any(|s| s == extra) {
+                scope.push(' ');
+                scope.push_str(extra);
+            }
+        }
+        scope
+    }
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Quotas {
+    pub deployment_bytes: u64,
+    pub project_bytes: u64,
+    pub member_bytes: u64,
+}
+impl Default for Quotas {
+    fn default() -> Self {
+        Self { deployment_bytes: 100 << 30, project_bytes: 1 << 30, member_bytes: 10 << 30 }
+    }
+}
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct CompileLimits {
+    pub cpu_seconds: u32,
+    pub wall_seconds: u32,
+    pub memory_mib: u32,
+    pub scratch_mib: u32,
+    pub output_mib: u32,
+    pub passes: u32,
+    pub concurrency: u32,
+    pub queue: u32,
+    pub per_member_per_hour: u32,
+}
+impl Default for CompileLimits {
+    fn default() -> Self {
+        Self { cpu_seconds: 60, wall_seconds: 120, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120 }
+    }
+}
+fn short_text(text: &str, max: usize) -> bool {
+    !text.trim().is_empty() && text.len() <= max && !text.chars().any(char::is_control)
+}
+fn claim_name(text: &str) -> bool {
+    !text.is_empty() && text.len() <= 128 && text.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.:/".contains(&b))
+}
+fn domain_name(text: &str) -> bool {
+    text.len() <= 253 && text.contains('.') && !text.starts_with(['.', '-']) && !text.ends_with(['.', '-']) && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
+}
+/// An `admins` entry: a lowercase email, or `issuer#subject`.
+fn admin_entry(text: &str) -> bool {
+    match text.split_once('#') {
+        Some((issuer, subject)) => crate::sso::secure_url(issuer) && short_text(subject, 255),
+        None => text.len() <= 254 && text.split_once('@').is_some_and(|(local, domain)| !local.is_empty() && !domain.contains('@') && domain_name(domain) && !local.chars().any(|c| c.is_whitespace() || c.is_control()) && text == text.to_lowercase()),
+    }
+}
+impl Deployment {
+    /// Field and cross-field rules; the error names the field.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        if !short_text(&self.name, 64) {
+            return Err("deployment.name must be 1-64 characters");
+        }
+        if self.providers.is_empty() || self.providers.len() > 16 {
+            return Err("deployment.providers must list 1-16 providers");
+        }
+        for (i, p) in self.providers.iter().enumerate() {
+            let id_ok = !p.id.is_empty() && p.id.len() <= 32 && p.id.as_bytes()[0].is_ascii_lowercase() && p.id.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-');
+            if !id_ok || self.providers[..i].iter().any(|o| o.id == p.id) {
+                return Err("deployment.providers[].id must be a unique short lowercase name (a-z, 0-9, -)");
+            }
+            if !short_text(&p.label, 64) {
+                return Err("deployment.providers[].label must be 1-64 characters");
+            }
+            if p.issuer.len() > 512 || !crate::sso::secure_url(&p.issuer) || url::Url::parse(&p.issuer).is_ok_and(|u| u.query().is_some()) {
+                return Err("deployment.providers[].issuer must be an https URL (http only on loopback) without query or fragment");
+            }
+            if p.client_id.is_empty() || p.client_id.len() > 255 || !p.client_id.bytes().all(|b| b.is_ascii_graphic()) {
+                return Err("deployment.providers[].client_id must be 1-255 printable characters");
+            }
+            if p.email_domains.len() > 64 || !p.email_domains.iter().all(|d| domain_name(d)) {
+                return Err("deployment.providers[].email_domains must be lowercase domain names such as example.org");
+            }
+            if p.groups_claim.as_deref().is_some_and(|c| !claim_name(c)) {
+                return Err("deployment.providers[].groups_claim must be a claim name");
+            }
+            let groups = p.admin_groups.iter().chain(&p.member_groups);
+            if p.admin_groups.len() + p.member_groups.len() > 256 || !groups.clone().all(|g| short_text(g, 256)) {
+                return Err("deployment.providers[].admin_groups and member_groups must be group names");
+            }
+            if (!p.admin_groups.is_empty() || !p.member_groups.is_empty()) && p.groups_claim.is_none() {
+                return Err("deployment.providers[].admin_groups and member_groups need groups_claim");
+            }
+            if p.guest.as_ref().is_some_and(|g| !claim_name(&g.claim) || !short_text(&g.equals, 256)) {
+                return Err("deployment.providers[].guest needs a claim name and a value");
+            }
+            if !(1..=720).contains(&p.session_hours) {
+                return Err("deployment.providers[].session_hours must be 1-720");
+            }
+            if !(1..=1440).contains(&p.recheck_minutes) {
+                return Err("deployment.providers[].recheck_minutes must be 1-1440");
+            }
+            if p.scopes.len() > 16 || !p.scopes.iter().all(|s| !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')) {
+                return Err("deployment.providers[].scopes must be at most 16 scope names");
+            }
+        }
+        if self.admins.len() > 256 || !self.admins.iter().all(|a| admin_entry(a)) {
+            return Err("deployment.admins must list lowercase emails or issuer#subject");
+        }
+        let q = &self.quotas;
+        if q.deployment_bytes == 0 || q.project_bytes == 0 || q.member_bytes == 0 || q.project_bytes > q.deployment_bytes || q.member_bytes > q.deployment_bytes {
+            return Err("deployment.quotas must be positive, and project and member quotas at most deployment_bytes");
+        }
+        if !(30..=3650).contains(&self.audit_retention_days) {
+            return Err("deployment.audit_retention_days must be 30-3650");
+        }
+        let c = &self.compile_limits;
+        let bounded = |v: u32, max: u32| (1..=max).contains(&v);
+        if !(bounded(c.cpu_seconds, 3600) && bounded(c.wall_seconds, 7200) && bounded(c.memory_mib, 65536) && bounded(c.scratch_mib, 65536) && bounded(c.output_mib, 4096) && bounded(c.passes, 16) && bounded(c.concurrency, 256) && bounded(c.queue, 100_000) && bounded(c.per_member_per_hour, 100_000)) {
+            return Err("deployment.compile_limits are out of range");
+        }
+        if self.compile != Compile::Browser {
+            if self.encryption != Encryption::Server {
+                return Err("deployment.compile \"server\" or \"both\" needs encryption \"server\"");
+            }
+            if self.texlive.is_none() {
+                return Err("deployment.compile \"server\" or \"both\" needs texlive");
+            }
+        }
+        Ok(())
+    }
+    pub fn provider(&self, id: &str) -> Option<&Provider> {
+        self.providers.iter().find(|p| p.id == id)
     }
 }
 
@@ -313,4 +606,119 @@ fn read_secret(path: &std::path::Path) -> Result<String, Box<dyn std::error::Err
         return Err("invalid secret file".into());
     }
     Ok(text.to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn config(deployment: serde_json::Value) -> Result<Config, String> {
+        let config: Config = serde_json::from_value(json!({"database_url": "postgres://x/y", "public_url": "https://scribyra.acme.org", "service_key_file": "master.key", "deployment": deployment})).map_err(|e| e.to_string())?;
+        config.validate().map_err(str::to_string)?;
+        Ok(config)
+    }
+    fn provider() -> serde_json::Value {
+        json!({"id": "acme", "label": "Acme account", "issuer": "https://login.acme.org/realms/lab", "client_id": "scribyra", "client_secret_file": "acme-secret"})
+    }
+    fn deployment(extra: serde_json::Value) -> serde_json::Value {
+        let mut d = json!({"name": "Acme Lab", "providers": [provider()]});
+        for (k, v) in extra.as_object().unwrap() {
+            d[k] = v.clone();
+        }
+        d
+    }
+
+    #[test]
+    fn defaults_follow_the_design() {
+        let c = config(deployment(json!({}))).unwrap();
+        let d = c.deployment.unwrap();
+        assert_eq!((d.encryption, d.offline, d.compile, d.link_sharing, d.guests), (Encryption::Server, true, Compile::Browser, false, Guests::Off));
+        assert_eq!((d.audit_retention_days, d.quotas.project_bytes, d.compile_limits.passes), (400, 1 << 30, 4));
+        let p = &d.providers[0];
+        assert_eq!((p.session_hours, p.recheck_minutes, p.offline_access, p.scope()), (12, 10, false, "openid email profile".to_string()));
+        assert!(Config::default().deployment.is_none());
+    }
+
+    #[test]
+    fn field_and_cross_field_rules() {
+        let refused = |extra: serde_json::Value| config(deployment(extra)).err().expect("refused");
+        assert!(refused(json!({"name": " "})).contains("deployment.name"));
+        assert!(refused(json!({"providers": []})).contains("1-16"));
+        assert!(refused(json!({"providers": (0..17).map(|i| { let mut p = provider(); p["id"] = json!(format!("p{i}")); p }).collect::<Vec<_>>()})).contains("1-16"));
+        assert!(refused(json!({"providers": [provider(), provider()]})).contains("unique"));
+        assert!(refused(json!({"audit_retention_days": 29})).contains("audit_retention_days"));
+        assert!(refused(json!({"audit_retention_days": 3651})).contains("audit_retention_days"));
+        config(deployment(json!({"audit_retention_days": 30}))).unwrap();
+        assert!(refused(json!({"admins": ["not an email"]})).contains("deployment.admins"));
+        config(deployment(json!({"admins": ["it-admin@acme.org", "https://login.acme.org/realms/lab#f81d4fae"]}))).unwrap();
+        assert!(refused(json!({"admins": ["ftp://login.acme.org#x"]})).contains("deployment.admins"));
+        // Server compile needs server-readable encryption and a TeX Live tree.
+        assert!(refused(json!({"compile": "server"})).contains("needs texlive"));
+        assert!(refused(json!({"compile": "both", "encryption": "e2ee", "texlive": "/tex"})).contains("needs encryption"));
+        config(deployment(json!({"compile": "both", "texlive": "/tex"}))).unwrap();
+        // Server-readable deployments need the master key; end-to-end ones do not.
+        let without_key = |d: serde_json::Value| {
+            let c: Config = serde_json::from_value(json!({"database_url": "postgres://x/y", "public_url": "https://scribyra.acme.org", "deployment": d})).unwrap();
+            c.validate()
+        };
+        assert_eq!(without_key(deployment(json!({}))).unwrap_err(), "deployment.encryption \"server\" needs service_key_file");
+        without_key(deployment(json!({"encryption": "e2ee"}))).unwrap();
+        // A deployment needs public_url.
+        let c: Config = serde_json::from_value(json!({"database_url": "postgres://x/y", "deployment": deployment(json!({"encryption": "e2ee"}))})).unwrap();
+        assert_eq!(c.validate().unwrap_err(), "deployment needs public_url");
+        // Quotas and compile limits.
+        assert!(refused(json!({"quotas": {"deployment_bytes": 100, "project_bytes": 200, "member_bytes": 50}})).contains("quotas"));
+        assert!(refused(json!({"compile_limits": {"passes": 0}})).contains("compile_limits"));
+        // Unknown fields and values are refused while parsing.
+        assert!(refused(json!({"mode": "managed"})).contains("unknown field"));
+        assert!(refused(json!({"encryption": "managed"})).contains("unknown variant"));
+        assert!(refused(json!({"guests": "anyone"})).contains("unknown variant"));
+    }
+
+    #[test]
+    fn provider_rules() {
+        let refused = |field: &str, value: serde_json::Value| {
+            let mut p = provider();
+            p[field] = value;
+            config(deployment(json!({"providers": [p]}))).err().expect("refused")
+        };
+        assert!(refused("id", json!("Acme")).contains(".id"));
+        assert!(refused("id", json!("1acme")).contains(".id"));
+        assert!(refused("label", json!("")).contains(".label"));
+        assert!(refused("issuer", json!("http://login.acme.org")).contains(".issuer"));
+        assert!(refused("issuer", json!("https://login.acme.org/?realm=x")).contains(".issuer"));
+        assert!(refused("client_id", json!("has space")).contains(".client_id"));
+        assert!(refused("email_domains", json!(["Acme.org"])).contains(".email_domains"));
+        assert!(refused("email_domains", json!(["acme"])).contains(".email_domains"));
+        assert!(refused("groups_claim", json!("bad claim")).contains(".groups_claim"));
+        assert!(refused("member_groups", json!(["staff"])).contains("need groups_claim"));
+        assert!(refused("guest", json!({"claim": "acct", "equals": ""})).contains(".guest"));
+        assert!(refused("session_hours", json!(721)).contains(".session_hours"));
+        assert!(refused("recheck_minutes", json!(0)).contains(".recheck_minutes"));
+        assert!(refused("scopes", json!(["a b"])).contains(".scopes"));
+        assert!(refused("required", json!(true)).contains("unknown field"));
+        let mut p = provider();
+        p["groups_claim"] = json!("roles");
+        p["admin_groups"] = json!(["scribyra-admins"]);
+        p["member_groups"] = json!(["scribyra"]);
+        p["guest"] = json!({"claim": "acct", "equals": "1"});
+        p["email_domains"] = json!(["acme.org", "lab.acme.org"]);
+        p["offline_access"] = json!(true);
+        p["scopes"] = json!(["groups"]);
+        let c = config(deployment(json!({"providers": [p], "guests": "shared"}))).unwrap();
+        assert_eq!(c.deployment.unwrap().providers[0].scope(), "openid email profile offline_access groups");
+    }
+
+    #[test]
+    fn the_deployment_can_come_from_the_environment() {
+        // SCRIBYRA_SERVICE_DEPLOYMENT is JSON like every structured field (see Config::load).
+        let mut value = serde_json::to_value(Config::default()).unwrap();
+        value["deployment"] = serde_json::from_str(&deployment(json!({"encryption": "e2ee"})).to_string()).unwrap();
+        value["database_url"] = json!("postgres://x/y");
+        value["public_url"] = json!("https://scribyra.acme.org");
+        let c: Config = serde_json::from_value(value).unwrap();
+        c.validate().unwrap();
+        assert_eq!(c.deployment.unwrap().encryption, Encryption::E2ee);
+    }
 }

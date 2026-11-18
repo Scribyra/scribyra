@@ -1,26 +1,33 @@
-//! OpenID Connect single sign-on: the service as a confidential relying party of each
-//! organisation's identity provider (authorization code flow with PKCE).
+//! OpenID Connect sign-in: the service as a confidential relying party of each provider the
+//! deployment configures (authorization code flow with PKCE). It is the only way anyone signs
+//! in: the service has no passwords, passkeys, setup codes or sign-in links of its own.
 //!
-//! Flow: the app sends `POST /v1/sso/start` with a SHA-256 challenge of its own 32-byte
-//! verifier and gets the provider's authorization URL. The provider redirects the browser to
-//! `GET /v1/sso/callback`, where the service exchanges the code (client secret and its own
-//! PKCE verifier), verifies the ID token ([`jose`]) and redirects back to the app with a
-//! one-time grant in the URL fragment. The app redeems the grant with its verifier
-//! (`POST /v1/sso/redeem`) for an SSO login token (`Authorization: ScribyraSSO <token>`).
+//! Flow: the app sends `POST /v1/sso/start` with a provider ID and a SHA-256 challenge of its
+//! own 32-byte verifier and gets the provider's authorization URL. The provider redirects the
+//! browser to `GET /v1/sso/callback`, where the service exchanges the code (client secret and
+//! its own PKCE verifier), verifies the ID token ([`jose`]), applies the deployment's guest and
+//! group rules, and redirects back to the app with a one-time grant in the URL fragment. The app
+//! redeems the grant with its verifier (`POST /v1/sso/redeem`) for a login token
+//! (`Authorization: ScribyraSSO <token>`).
 //!
-//! An SSO login proves an identity-provider subject; it is not an organisation session and
-//! grants no keys. The organisation module links subjects to people ([`Sso::link`]) and closes
-//! device sessions when [`Sso::revocations`] fires. A background task rechecks logins that hold
-//! a refresh token: when the provider refuses it (`invalid_grant`, for example because the
-//! account was disabled) the login is revoked and the link blocked.
+//! A login proves an identity-provider subject and carries the deployment role (administrator,
+//! member or guest) that the configuration and the provider's groups give it; it grants no
+//! keys. The organisation module links subjects to people ([`Sso::link`]) and closes device
+//! sessions when [`Sso::revocations`] fires. A background task rechecks logins that hold a
+//! refresh token: when the provider refuses it (`invalid_grant`, for example because the
+//! account was disabled) the login is revoked and the link blocked; when a refreshed ID token
+//! shows the account no longer passes the group rules, its logins are revoked.
 //!
 //! Never logged: tokens, codes, client secrets, ID tokens, emails or provider error text.
 pub mod jose;
 
-use crate::{config::Config, store::Store, store::StoreError};
+use crate::{
+    config::{Config, Deployment, Guests, Provider as Configured},
+    store::{Store, StoreError},
+};
 use axum::{
     Form, Json, Router,
-    extract::{Path, Query, State},
+    extract::{Query, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -41,7 +48,7 @@ use tokio::sync::{Semaphore, broadcast};
 const FLOW_SECONDS: u64 = 600;
 const GRANT_SECONDS: u64 = 120;
 const MAX_FLOWS: usize = 4096;
-const MAX_FLOWS_PER_ORG: usize = 256;
+const MAX_FLOWS_PER_PROVIDER: usize = 256;
 const MAX_GRANTS: usize = 4096;
 const MAX_LOGOUT_JTIS: usize = 4096;
 const DISCOVERY_SECONDS: u64 = 3600;
@@ -50,36 +57,44 @@ const HTTP_SECONDS: u64 = 10;
 const MAX_DOCUMENT_BYTES: u64 = 256 * 1024;
 const MAX_OUTBOUND: usize = 16;
 const RECHECK_BATCH: i64 = 200;
-pub const DEFAULT_SESSION_SECONDS: i32 = 12 * 3600;
-pub const DEFAULT_RECHECK_SECONDS: i32 = 600;
-const BASE_SCOPES: &str = "openid email profile";
 
-/// An organisation's sign-in policy, as the app and the org module need it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Policy {
-    /// Members must sign in with SSO (enforced by the org module).
-    pub required: bool,
-    pub issuer: String,
-    /// People added at or before this membership log position may be linked on first sign-in.
-    pub linked_before: u64,
+/// What a login may do in the deployment (design section 3, "Accounts and roles").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    Admin,
+    Member,
+    Guest,
 }
-/// A valid (unexpired, unrevoked) SSO login.
+impl Role {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Admin => "admin",
+            Self::Member => "member",
+            Self::Guest => "guest",
+        }
+    }
+}
+/// A valid (unexpired, unrevoked, still admitted) login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Login {
     pub org: String,
+    /// The configured provider's ID.
+    pub provider: String,
     pub issuer: String,
     pub subject: String,
     pub email: Option<String>,
     pub email_verified: bool,
     pub name: Option<String>,
     pub groups: Vec<String>,
+    pub guest: bool,
+    pub role: Role,
     pub expires: SystemTime,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LinkError {
     /// The subject is linked to another person, or the person to another subject.
     Conflict,
-    /// The person ID is not 64 lowercase hex.
+    /// The person ID is not a person ID.
     Invalid,
     Store(StoreError),
 }
@@ -89,29 +104,36 @@ impl From<sqlx::Error> for LinkError {
     }
 }
 
-/// Per-organisation identity provider settings (table `org_sso`).
-#[derive(Clone)]
-struct Settings {
-    issuer: String,
-    client_id: String,
-    client_secret: String,
-    required: bool,
-    email_domain: Option<String>,
-    groups_claim: Option<String>,
-    session_seconds: i32,
-    scopes: String,
-    linked_before: i64,
+/// The deployment role of an identity, or the code of the rule that refuses it: guests when the
+/// deployment admits none, and people outside `member_groups` when the provider names some.
+/// Administrators are the `admins` list (a verified email or `issuer#subject`) and members of
+/// `admin_groups`; a guest account is never an administrator.
+pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, email: Option<&str>, email_verified: bool, groups: &[String], guest: bool) -> Result<Role, &'static str> {
+    if guest {
+        return match deployment.guests {
+            Guests::Off => Err("guest"),
+            Guests::Shared => Ok(Role::Guest),
+        };
+    }
+    let pair = format!("{}#{subject}", provider.issuer);
+    let email = email.filter(|_| email_verified).map(str::to_lowercase);
+    let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref() == Some(a.as_str()));
+    let admin = listed || groups.iter().any(|g| provider.admin_groups.contains(g));
+    if !admin && !provider.member_groups.is_empty() && !groups.iter().any(|g| provider.member_groups.contains(g)) {
+        return Err("not_member");
+    }
+    Ok(if admin { Role::Admin } else { Role::Member })
 }
+
 /// The endpoints named by a provider's discovery document.
 #[derive(Clone)]
-struct Provider {
+struct Endpoints {
     authorization_endpoint: String,
     token_endpoint: String,
     jwks_uri: String,
 }
 struct Flow {
-    org: String,
-    issuer: String,
+    provider: String,
     return_to: String,
     challenge: String,
     nonce: String,
@@ -119,12 +141,11 @@ struct Flow {
     until: Instant,
 }
 struct Grant {
-    org: String,
-    issuer: String,
+    provider: String,
     challenge: String,
     identity: Identity,
     refresh_token: Option<String>,
-    session_seconds: i32,
+    session_seconds: i64,
     until: Instant,
 }
 struct Keys {
@@ -132,16 +153,18 @@ struct Keys {
     fetched: Instant,
 }
 
-/// The SSO relying party. Create one per service with [`Sso::new`] and share it.
+/// The relying party. Create one per service with [`Sso::new`] and share it.
 pub struct Sso {
     store: Arc<Store>,
     origins: Vec<String>,
     public_url: Option<String>,
+    deployment: Option<Deployment>,
+    org: Option<String>,
     agent: ureq::Agent,
     outbound: Arc<Semaphore>,
     jwks_refetch: Duration,
     recheck_tick: Duration,
-    discovery: Mutex<HashMap<String, (Provider, Instant)>>,
+    discovery: Mutex<HashMap<String, (Endpoints, Instant)>>,
     jwks: Mutex<HashMap<String, Keys>>,
     flows: Mutex<HashMap<String, Flow>>,
     grants: Mutex<HashMap<String, Grant>>,
@@ -201,6 +224,17 @@ fn internal<E>(_: E) -> Response {
 fn form_encode(text: &str) -> String {
     url::form_urlencoded::byte_serialize(text.as_bytes()).collect()
 }
+fn claim_reason(e: ClaimError) -> &'static str {
+    match e {
+        ClaimError::Issuer => "claim_iss",
+        ClaimError::Audience => "claim_aud",
+        ClaimError::Expired => "claim_exp",
+        ClaimError::IssuedAt => "claim_iat",
+        ClaimError::Nonce => "claim_nonce",
+        ClaimError::Subject => "claim_sub",
+        _ => "claim_email",
+    }
+}
 
 enum Outbound {
     Get(String),
@@ -223,6 +257,8 @@ impl Sso {
         Arc::new(Self {
             origins: config.origins.clone(),
             public_url: config.public_url.clone(),
+            deployment: config.deployment.clone(),
+            org: store.org.clone(),
             jwks_refetch: Duration::from_secs(config.sso_jwks_refetch_seconds),
             recheck_tick: Duration::from_secs(config.sso_recheck_tick_seconds),
             store,
@@ -237,34 +273,46 @@ impl Sso {
         })
     }
 
-    /// The organisation's SSO policy, or `None` when SSO is not configured for it.
-    pub async fn policy(&self, org: &str) -> Result<Option<Policy>, StoreError> {
-        Ok(self.settings(org).await?.map(|s| Policy { required: s.required, issuer: s.issuer, linked_before: s.linked_before as u64 }))
+    /// The deployment and the provider with this ID, if both are configured.
+    fn configured(&self, provider: &str) -> Option<(&Deployment, &Configured)> {
+        let deployment = self.deployment.as_ref()?;
+        Some((deployment, deployment.provider(provider)?))
     }
-    /// The login for a bearer token, if it is valid, unexpired and unrevoked and its org still
-    /// uses the provider that issued it.
+    /// The login for a bearer token, if it is valid, unexpired and unrevoked, its provider is
+    /// still configured with the same issuer, and the account still passes the deployment's
+    /// rules (which are applied again here, so a changed configuration takes effect at once).
     pub async fn login(&self, token: &str) -> Result<Option<Login>, StoreError> {
         if !is_hex64(token) {
             return Ok(None);
         }
+        let Some(org) = &self.org else { return Ok(None) };
         let row = sqlx::query(
-            "SELECT l.org, l.issuer, l.subject, l.email, l.email_verified, l.name, l.groups::text,
-                    extract(epoch FROM l.expires)::bigint
-             FROM sso_logins l JOIN org_sso s ON s.org = l.org AND s.issuer = l.issuer
-             WHERE l.token_hash = $1 AND NOT l.revoked AND l.expires > now()",
+            "SELECT provider, issuer, subject, email, email_verified, name, groups::text, guest, extract(epoch FROM expires)::bigint
+             FROM sso_logins WHERE token_hash = $1 AND org = $2 AND NOT revoked AND expires > now() AND provider IS NOT NULL",
         )
         .bind(sha256_hex(token.as_bytes()))
+        .bind(org)
         .fetch_optional(&self.store.pool)
         .await?;
-        Ok(row.map(|row| Login {
-            org: row.get(0),
-            issuer: row.get(1),
-            subject: row.get(2),
-            email: row.get(3),
-            email_verified: row.get(4),
+        let Some(row) = row else { return Ok(None) };
+        let (provider, issuer): (String, String) = (row.get(0), row.get(1));
+        let Some((deployment, configured)) = self.configured(&provider).filter(|(_, p)| p.issuer == issuer) else { return Ok(None) };
+        let (subject, email, email_verified): (String, Option<String>, bool) = (row.get(2), row.get(3), row.get(4));
+        let groups: Vec<String> = serde_json::from_str(&row.get::<String, _>(6)).unwrap_or_default();
+        let guest: bool = row.get(7);
+        let Ok(role) = admit(deployment, configured, &subject, email.as_deref(), email_verified, &groups, guest) else { return Ok(None) };
+        Ok(Some(Login {
+            org: org.clone(),
+            provider,
+            issuer,
+            subject,
+            email,
+            email_verified,
             name: row.get(5),
-            groups: serde_json::from_str(&row.get::<String, _>(6)).unwrap_or_default(),
-            expires: UNIX_EPOCH + Duration::from_secs(row.get::<i64, _>(7).max(0) as u64),
+            groups,
+            guest,
+            role,
+            expires: UNIX_EPOCH + Duration::from_secs(row.get::<i64, _>(8).max(0) as u64),
         }))
     }
     /// The person this login's subject is linked to, and whether that link is blocked.
@@ -277,9 +325,8 @@ impl Sso {
             .await?;
         Ok(row.map(|r| (r.get(0), r.get::<String, _>(1) == "blocked")))
     }
-    /// Links the SSO subject to a person: Ok if newly linked or already linked to the same
-    /// person (a blocked link stays blocked); Err(Conflict) if the subject or the person is
-    /// linked elsewhere.
+    /// Links the subject to a person: Ok if newly linked or already linked to the same person (a
+    /// blocked link stays blocked); Err(Conflict) if the subject or the person is linked elsewhere.
     pub async fn link(&self, login: &Login, person: &str) -> Result<(), LinkError> {
         if !scribyra_core::orgsync::is_uuid(person) {
             return Err(LinkError::Invalid);
@@ -315,7 +362,7 @@ impl Sso {
         tx.commit().await?;
         Ok(())
     }
-    /// The SSO identity linked to a person, if any: (issuer, subject, blocked).
+    /// The identity linked to a person, if any: (issuer, subject, blocked).
     pub async fn person_link(&self, org: &str, person: &str) -> Result<Option<(String, String, bool)>, StoreError> {
         let row = sqlx::query("SELECT issuer, subject, state FROM sso_links WHERE org = $1 AND person = $2").bind(org).bind(person).fetch_optional(&self.store.pool).await?;
         Ok(row.map(|r| (r.get(0), r.get(1), r.get::<String, _>(2) == "blocked")))
@@ -329,28 +376,6 @@ impl Sso {
     /// blocked, so device sessions can be closed. Logins of unlinked subjects fire nothing.
     pub fn revocations(&self) -> broadcast::Receiver<(String, String)> {
         self.revoked.subscribe()
-    }
-
-    async fn settings(&self, org: &str) -> Result<Option<Settings>, StoreError> {
-        let row = sqlx::query("SELECT issuer, client_id, client_secret, required, email_domain, groups_claim, session_seconds, scopes, linked_before FROM org_sso WHERE org = $1")
-            .bind(org)
-            .fetch_optional(&self.store.pool)
-            .await?;
-        Ok(row.map(|r| Settings {
-            issuer: r.get(0),
-            client_id: r.get(1),
-            client_secret: r.get(2),
-            required: r.get(3),
-            email_domain: r.get(4),
-            groups_claim: r.get(5),
-            session_seconds: r.get(6),
-            scopes: r.get(7),
-            linked_before: r.get(8),
-        }))
-    }
-    async fn org_exists(&self, org: &str) -> Result<bool, StoreError> {
-        let found: Option<i32> = sqlx::query_scalar("SELECT 1 FROM orgs WHERE org = $1").bind(org).fetch_optional(&self.store.pool).await?;
-        Ok(found.is_some())
     }
 
     /// One outbound HTTP call on a blocking thread; returns (status, body).
@@ -384,11 +409,11 @@ impl Sso {
     }
     /// The provider's discovery document, cached for an hour. Its `issuer` must equal the
     /// configured issuer exactly and every endpoint must be https (http only on loopback).
-    async fn provider(&self, issuer: &str) -> Result<Provider, &'static str> {
-        if let Some((provider, fetched)) = self.discovery.lock().unwrap().get(issuer)
+    async fn endpoints(&self, issuer: &str) -> Result<Endpoints, &'static str> {
+        if let Some((endpoints, fetched)) = self.discovery.lock().unwrap().get(issuer)
             && fetched.elapsed() < Duration::from_secs(DISCOVERY_SECONDS)
         {
-            return Ok(provider.clone());
+            return Ok(endpoints.clone());
         }
         let url = format!("{}/.well-known/openid-configuration", issuer.trim_end_matches('/'));
         let (status, body) = self.call(Outbound::Get(url)).await.map_err(|_| "unavailable")?;
@@ -401,13 +426,13 @@ impl Sso {
             log("sso_refused", "discovery_issuer");
             return Err("discovery");
         }
-        let provider = Provider {
+        let endpoints = Endpoints {
             authorization_endpoint: field("authorization_endpoint").ok_or("discovery")?,
             token_endpoint: field("token_endpoint").ok_or("discovery")?,
             jwks_uri: field("jwks_uri").ok_or("discovery")?,
         };
-        self.discovery.lock().unwrap().insert(issuer.to_owned(), (provider.clone(), Instant::now()));
-        Ok(provider)
+        self.discovery.lock().unwrap().insert(issuer.to_owned(), (endpoints.clone(), Instant::now()));
+        Ok(endpoints)
     }
     /// The provider's keys: cached for an hour; `refresh` refetches them unless they were
     /// fetched less than `sso_jwks_refetch_seconds` ago (one refetch a minute by default).
@@ -427,11 +452,11 @@ impl Sso {
         Ok(keys)
     }
     /// Verify a JWS from this provider, refetching the key set once on an unknown `kid`.
-    async fn verify(&self, provider: &Provider, token: &str) -> Result<jose::Verified, &'static str> {
-        let keys = self.keys(&provider.jwks_uri, false).await?;
+    async fn verify(&self, endpoints: &Endpoints, token: &str) -> Result<jose::Verified, &'static str> {
+        let keys = self.keys(&endpoints.jwks_uri, false).await?;
         let result = match jose::verify(token, &keys) {
             Err(JoseError::UnknownKey) => {
-                let fresh = self.keys(&provider.jwks_uri, true).await?;
+                let fresh = self.keys(&endpoints.jwks_uri, true).await?;
                 jose::verify(token, &fresh)
             }
             other => other,
@@ -494,90 +519,136 @@ impl Sso {
             }
         })
     }
-    /// One recheck pass: refresh each unrevoked login whose last check is older than its org's
-    /// `recheck_seconds`. A refused refresh token (`invalid_grant`) revokes every login of
-    /// that subject and blocks its link; any other 4xx revokes that login only; network and
-    /// server errors keep the login and retry on the next pass.
+    /// One recheck pass: refresh each unrevoked login whose last check is older than its
+    /// provider's `recheck_minutes`. A refused refresh token (`invalid_grant`) revokes every
+    /// login of that subject and blocks its link; any other 4xx revokes that login only; network
+    /// and server errors keep the login and retry on the next pass. A refreshed ID token updates
+    /// the login's groups and guest mark, and an account that no longer passes the group and
+    /// guest rules has its logins revoked (not blocked: the provider still vouches for it).
     pub async fn recheck(&self) {
         // Expired or revoked logins are kept a week for operators, then deleted.
         let _ = sqlx::query("DELETE FROM sso_logins WHERE expires < now() - interval '7 days' OR (revoked AND created < now() - interval '7 days')")
             .execute(&self.store.pool)
             .await;
-        let rows = sqlx::query(
-            "SELECT l.token_hash, l.org, l.issuer, l.subject, l.refresh_token
-             FROM sso_logins l JOIN org_sso s ON s.org = l.org AND s.issuer = l.issuer
-             WHERE NOT l.revoked AND l.refresh_token IS NOT NULL AND l.expires > now()
-               AND l.checked <= now() - make_interval(secs => s.recheck_seconds)
-             ORDER BY l.checked LIMIT $1",
-        )
-        .bind(RECHECK_BATCH)
-        .fetch_all(&self.store.pool)
-        .await;
-        let Ok(rows) = rows else {
-            log("sso_recheck_failed", "database");
-            return;
-        };
-        let (mut refreshed, mut revoked, mut failed) = (0u32, 0u32, 0u32);
-        for row in &rows {
-            let (token_hash, org, issuer, subject, refresh): (String, String, String, String, String) = (row.get(0), row.get(1), row.get(2), row.get(3), row.get(4));
-            let Ok(Some(settings)) = self.settings(&org).await else {
-                failed += 1;
-                continue;
+        let (Some(deployment), Some(org)) = (&self.deployment, &self.org) else { return };
+        let (mut checked, mut refreshed, mut revoked, mut failed) = (0usize, 0u32, 0u32, 0u32);
+        for configured in &deployment.providers {
+            let rows = sqlx::query(
+                "SELECT token_hash, issuer, subject, refresh_token FROM sso_logins
+                 WHERE org = $1 AND provider = $2 AND NOT revoked AND refresh_token IS NOT NULL AND expires > now()
+                   AND checked <= now() - make_interval(secs => $3)
+                 ORDER BY checked LIMIT $4",
+            )
+            .bind(org)
+            .bind(&configured.id)
+            .bind(configured.recheck_minutes as f64 * 60.0)
+            .bind(RECHECK_BATCH)
+            .fetch_all(&self.store.pool)
+            .await;
+            let Ok(rows) = rows else {
+                log("sso_recheck_failed", "database");
+                return;
             };
-            let Ok(provider) = self.provider(&settings.issuer).await else {
-                failed += 1;
-                continue;
-            };
-            let outcome = self
-                .call(Outbound::Token {
-                    url: provider.token_endpoint,
-                    client_id: settings.client_id,
-                    client_secret: settings.client_secret,
-                    form: vec![("grant_type", "refresh_token".into()), ("refresh_token", refresh)],
-                })
-                .await;
-            let result = match outcome {
-                Ok((200, body)) => {
-                    let rotated = serde_json::from_slice::<Value>(&body).ok().and_then(|v| v.get("refresh_token").and_then(Value::as_str).map(str::to_owned));
-                    refreshed += 1;
-                    sqlx::query("UPDATE sso_logins SET checked = now(), refresh_token = COALESCE($2, refresh_token) WHERE token_hash = $1")
-                        .bind(&token_hash)
-                        .bind(rotated)
-                        .execute(&self.store.pool)
-                        .await
-                        .map(|_| ())
-                        .map_err(StoreError::from)
-                }
-                // 408 and 429 are transient: keep the login and retry on the next pass.
-                Ok((status, body)) if (400..500).contains(&status) && status != 408 && status != 429 => {
-                    revoked += 1;
-                    let invalid_grant = serde_json::from_slice::<Value>(&body).ok().is_some_and(|v| v.get("error").and_then(Value::as_str) == Some("invalid_grant"));
-                    if invalid_grant {
-                        self.revoke_where(
-                            "UPDATE sso_logins SET revoked = true WHERE org = $1 AND issuer = $2 AND subject = $3 AND NOT revoked RETURNING org, issuer, subject",
-                            &[Some(&org), Some(&issuer), Some(&subject)],
-                            true,
-                        )
-                        .await
-                        .map(|_| ())
-                    } else {
-                        self.revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked RETURNING org, issuer, subject", &[Some(&token_hash)], false)
-                            .await
-                            .map(|_| ())
-                    }
-                }
-                _ => {
+            checked += rows.len();
+            for row in &rows {
+                let (token_hash, issuer, subject, refresh): (String, String, String, String) = (row.get(0), row.get(1), row.get(2), row.get(3));
+                if issuer != configured.issuer {
                     failed += 1;
-                    Ok(())
+                    continue;
                 }
-            };
-            if result.is_err() {
-                failed += 1;
+                match self.recheck_one(deployment, configured, org, &token_hash, &subject, refresh).await {
+                    Ok(Recheck::Kept) => refreshed += 1,
+                    Ok(Recheck::Revoked) => revoked += 1,
+                    Ok(Recheck::Retry) | Err(_) => failed += 1,
+                }
             }
         }
-        if !rows.is_empty() {
-            println!("{}", json!({"event": "sso_recheck", "checked": rows.len(), "refreshed": refreshed, "revoked": revoked, "failed": failed}));
+        if checked > 0 {
+            println!("{}", json!({"event": "sso_recheck", "checked": checked, "refreshed": refreshed, "revoked": revoked, "failed": failed}));
         }
+    }
+    async fn recheck_one(&self, deployment: &Deployment, configured: &Configured, org: &str, token_hash: &str, subject: &str, refresh: String) -> Result<Recheck, StoreError> {
+        let (Ok(endpoints), Ok(secret)) = (self.endpoints(&configured.issuer).await, configured.client_secret()) else { return Ok(Recheck::Retry) };
+        let outcome = self
+            .call(Outbound::Token {
+                url: endpoints.token_endpoint.clone(),
+                client_id: configured.client_id.clone(),
+                client_secret: secret,
+                form: vec![("grant_type", "refresh_token".into()), ("refresh_token", refresh)],
+            })
+            .await;
+        let same_subject = "UPDATE sso_logins SET revoked = true WHERE org = $1 AND issuer = $2 AND subject = $3 AND NOT revoked RETURNING org, issuer, subject";
+        match outcome {
+            Ok((200, body)) => {
+                let tokens: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                let rotated = tokens.get("refresh_token").and_then(Value::as_str).filter(|t| t.len() <= 8192).map(str::to_owned);
+                // A refreshed ID token (when the provider sends one) carries current groups.
+                let mut identity = None;
+                if let Some(id_token) = tokens.get("id_token").and_then(Value::as_str) {
+                    let Ok(verified) = self.verify(&endpoints, id_token).await else { return Ok(Recheck::Retry) };
+                    let expect = expect(configured, None);
+                    match jose::check_refreshed_id_token(&verified.claims, &expect) {
+                        Ok(id) if id.subject == subject => identity = Some(id),
+                        Ok(_) => return Ok(Recheck::Retry),
+                        Err(e) => {
+                            log("sso_refused", claim_reason(e));
+                            return Ok(Recheck::Retry);
+                        }
+                    }
+                }
+                sqlx::query("UPDATE sso_logins SET checked = now(), refresh_token = COALESCE($2, refresh_token) WHERE token_hash = $1")
+                    .bind(token_hash)
+                    .bind(rotated)
+                    .execute(&self.store.pool)
+                    .await?;
+                let Some(id) = identity else { return Ok(Recheck::Kept) };
+                sqlx::query("UPDATE sso_logins SET email = $4, email_verified = $5, name = $6, groups = $7::jsonb, guest = $8 WHERE org = $1 AND issuer = $2 AND subject = $3 AND NOT revoked")
+                    .bind(org)
+                    .bind(&configured.issuer)
+                    .bind(subject)
+                    .bind(&id.email)
+                    .bind(id.email_verified)
+                    .bind(&id.name)
+                    .bind(serde_json::to_string(&id.groups).unwrap_or_else(|_| "[]".into()))
+                    .bind(id.guest)
+                    .execute(&self.store.pool)
+                    .await?;
+                if admit(deployment, configured, subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest).is_err() {
+                    log("sso_refused", "recheck_rules");
+                    self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], false).await?;
+                    return Ok(Recheck::Revoked);
+                }
+                Ok(Recheck::Kept)
+            }
+            // 408 and 429 are transient: keep the login and retry on the next pass.
+            Ok((status, body)) if (400..500).contains(&status) && status != 408 && status != 429 => {
+                let invalid_grant = serde_json::from_slice::<Value>(&body).ok().is_some_and(|v| v.get("error").and_then(Value::as_str) == Some("invalid_grant"));
+                if invalid_grant {
+                    self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], true).await?;
+                } else {
+                    self.revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked RETURNING org, issuer, subject", &[Some(token_hash)], false).await?;
+                }
+                Ok(Recheck::Revoked)
+            }
+            _ => Ok(Recheck::Retry),
+        }
+    }
+}
+enum Recheck {
+    Kept,
+    Revoked,
+    Retry,
+}
+/// What an ID token of this provider must satisfy.
+fn expect<'a>(configured: &'a Configured, nonce: Option<&'a str>) -> Expect<'a> {
+    Expect {
+        issuer: &configured.issuer,
+        client_id: &configured.client_id,
+        nonce,
+        email_domains: &configured.email_domains,
+        groups_claim: configured.groups_claim.as_deref(),
+        guest: configured.guest.as_ref().map(|g| (g.claim.as_str(), g.equals.as_str())),
+        now: now_seconds(),
     }
 }
 
@@ -590,74 +661,66 @@ fn login_json(login: &Login, link: Option<(String, bool)>) -> Value {
     json!({
         "expires": login.expires.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         "org": login.org,
+        "provider": login.provider,
+        "role": login.role.as_str(),
         "subject": {"email": login.email, "name": login.name, "groups": login.groups},
         "person": link.map(|(p, _)| p),
         "state": state,
     })
 }
-/// The SSO login token from `Authorization: ScribyraSSO <token>`, if well formed.
+/// The login token from `Authorization: ScribyraSSO <token>`, if well formed.
 pub fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("ScribyraSSO ")).filter(|t| is_hex64(t))
 }
 
-async fn policy_route(State(s): State<Shared>, Path(org): Path<String>) -> Response {
-    if !is_hex64(&org) {
-        return error(StatusCode::BAD_REQUEST, "invalid organisation");
-    }
-    match s.org_exists(&org).await {
-        Ok(true) => {}
-        Ok(false) => return error(StatusCode::NOT_FOUND, "unknown organisation"),
-        Err(e) => return internal(e),
-    }
-    match s.settings(&org).await {
-        Ok(Some(settings)) => Json(json!({"enabled": true, "required": settings.required, "issuer": settings.issuer})).into_response(),
-        Ok(None) => Json(json!({"enabled": false, "required": false, "issuer": null})).into_response(),
-        Err(e) => internal(e),
-    }
+/// `GET /v1/deployment`: what the app needs before anyone signs in. Public; no secret and no
+/// provider client setting leaves the service.
+async fn deployment_route(State(s): State<Shared>) -> Response {
+    let (Some(d), Some(org)) = (&s.deployment, &s.org) else { return error(StatusCode::NOT_FOUND, "this service has no deployment") };
+    let providers: Vec<Value> = d.providers.iter().map(|p| json!({"id": p.id, "label": p.label})).collect();
+    (
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(json!({"name": d.name, "encryption": d.encryption.as_str(), "offline": d.offline, "compile": d.compile, "linkSharing": d.link_sharing, "providers": providers, "org": org})),
+    )
+        .into_response()
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StartRequest {
-    org: String,
+    provider: String,
     #[serde(rename = "return")]
     return_to: String,
     challenge: String,
 }
 async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Response {
     let Some(public_url) = s.public_url.clone() else {
-        return error(StatusCode::NOT_FOUND, "single sign-on needs public_url on this service");
+        return error(StatusCode::NOT_FOUND, "sign-in needs public_url on this service");
     };
-    if !is_hex64(&request.org) || !is_hex64(&request.challenge) {
+    if !is_hex64(&request.challenge) || request.provider.len() > 32 {
         return error(StatusCode::BAD_REQUEST, "invalid request");
     }
     if !s.origins.contains(&request.return_to) {
         return error(StatusCode::BAD_REQUEST, "return origin not allowed");
     }
-    let settings = match s.settings(&request.org).await {
-        Ok(Some(settings)) => settings,
-        Ok(None) => return error(StatusCode::NOT_FOUND, "single sign-on is not configured"),
-        Err(e) => return internal(e),
+    let Some((_, configured)) = s.configured(&request.provider) else {
+        return error(StatusCode::NOT_FOUND, "unknown provider");
     };
-    let provider = match s.provider(&settings.issuer).await {
+    let endpoints = match s.endpoints(&configured.issuer).await {
         Ok(p) => p,
         Err(_) => return error(StatusCode::BAD_GATEWAY, "identity provider unavailable"),
     };
     let (state, nonce) = (random_hex(), random_hex());
     let verifier = jose::b64_encode(&random_bytes());
     let idp_challenge = jose::b64_encode(&Sha256::digest(verifier.as_bytes()));
-    let Ok(mut url) = url::Url::parse(&provider.authorization_endpoint) else {
+    let Ok(mut url) = url::Url::parse(&endpoints.authorization_endpoint) else {
         return error(StatusCode::BAD_GATEWAY, "identity provider unavailable");
     };
-    let mut scope = BASE_SCOPES.to_string();
-    if settings.scopes.split(' ').any(|s| s == "offline_access") {
-        scope.push_str(" offline_access");
-    }
     url.query_pairs_mut()
         .append_pair("response_type", "code")
-        .append_pair("client_id", &settings.client_id)
+        .append_pair("client_id", &configured.client_id)
         .append_pair("redirect_uri", &format!("{public_url}/v1/sso/callback"))
-        .append_pair("scope", &scope)
+        .append_pair("scope", &configured.scope())
         .append_pair("state", &state)
         .append_pair("nonce", &nonce)
         .append_pair("code_challenge", &idp_challenge)
@@ -666,20 +729,12 @@ async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Re
         let mut flows = s.flows.lock().unwrap();
         let now = Instant::now();
         flows.retain(|_, f| f.until > now);
-        if flows.len() >= MAX_FLOWS || flows.values().filter(|f| f.org == request.org).count() >= MAX_FLOWS_PER_ORG {
+        if flows.len() >= MAX_FLOWS || flows.values().filter(|f| f.provider == request.provider).count() >= MAX_FLOWS_PER_PROVIDER {
             return error(StatusCode::SERVICE_UNAVAILABLE, "too many sign-ins in progress");
         }
         flows.insert(
             state,
-            Flow {
-                org: request.org,
-                issuer: settings.issuer,
-                return_to: request.return_to,
-                challenge: request.challenge,
-                nonce,
-                verifier,
-                until: now + Duration::from_secs(FLOW_SECONDS),
-            },
+            Flow { provider: request.provider, return_to: request.return_to, challenge: request.challenge, nonce, verifier, until: now + Duration::from_secs(FLOW_SECONDS) },
         );
     }
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({"url": url.as_str()}))).into_response()
@@ -709,31 +764,29 @@ async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, S
     if flow.until <= Instant::now() {
         return fail(&flow.return_to, "expired");
     }
+    let (Some((deployment, configured)), Some(org)) = (s.configured(&flow.provider), s.org.clone()) else {
+        return fail(&flow.return_to, "not_configured");
+    };
     if query.contains_key("error") {
         return fail(&flow.return_to, "idp_error");
     }
     // RFC 9207: a provider that names itself in the response must name the right issuer.
-    if query.get("iss").is_some_and(|iss| *iss != flow.issuer) {
+    if query.get("iss").is_some_and(|iss| *iss != configured.issuer) {
         return fail(&flow.return_to, "idp_error");
     }
     let Some(code) = query.get("code").filter(|c| !c.is_empty() && c.len() <= 4096) else {
         return fail(&flow.return_to, "idp_error");
     };
-    let settings = match s.settings(&flow.org).await {
-        Ok(Some(settings)) if settings.issuer == flow.issuer => settings,
-        Ok(_) => return fail(&flow.return_to, "not_configured"),
-        Err(_) => return fail(&flow.return_to, "unavailable"),
-    };
-    let provider = match s.provider(&settings.issuer).await {
+    let endpoints = match s.endpoints(&configured.issuer).await {
         Ok(p) => p,
         Err(code) => return fail(&flow.return_to, code),
     };
-    let Some(public_url) = s.public_url.clone() else { return fail(&flow.return_to, "not_configured") };
+    let (Some(public_url), Ok(secret)) = (s.public_url.clone(), configured.client_secret()) else { return fail(&flow.return_to, "not_configured") };
     let exchanged = s
         .call(Outbound::Token {
-            url: provider.token_endpoint.clone(),
-            client_id: settings.client_id.clone(),
-            client_secret: settings.client_secret.clone(),
+            url: endpoints.token_endpoint.clone(),
+            client_id: configured.client_id.clone(),
+            client_secret: secret,
             form: vec![
                 ("grant_type", "authorization_code".into()),
                 ("code", code.clone()),
@@ -751,36 +804,21 @@ async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, S
     let Some(id_token) = tokens.get("id_token").and_then(Value::as_str) else {
         return fail(&flow.return_to, "token_exchange");
     };
-    let verified = match s.verify(&provider, id_token).await {
+    let verified = match s.verify(&endpoints, id_token).await {
         Ok(v) => v,
         Err(code) => return fail(&flow.return_to, code),
     };
-    let expect = Expect {
-        issuer: &settings.issuer,
-        client_id: &settings.client_id,
-        nonce: Some(&flow.nonce),
-        email_domain: settings.email_domain.as_deref(),
-        groups_claim: settings.groups_claim.as_deref(),
-        now: now_seconds(),
-    };
-    let identity = match jose::check_id_token(&verified.claims, &expect) {
+    let identity = match jose::check_id_token(&verified.claims, &expect(configured, Some(&flow.nonce))) {
         Ok(identity) => identity,
         Err(e) => {
-            log(
-                "sso_refused",
-                match e {
-                    ClaimError::Issuer => "claim_iss",
-                    ClaimError::Audience => "claim_aud",
-                    ClaimError::Expired => "claim_exp",
-                    ClaimError::IssuedAt => "claim_iat",
-                    ClaimError::Nonce => "claim_nonce",
-                    ClaimError::Subject => "claim_sub",
-                    _ => "claim_email",
-                },
-            );
+            log("sso_refused", claim_reason(e));
             return fail(&flow.return_to, e.code());
         }
     };
+    // Guests (when the deployment admits none) and people outside the member groups stop here.
+    if let Err(code) = admit(deployment, configured, &identity.subject, identity.email.as_deref(), identity.email_verified, &identity.groups, identity.guest) {
+        return fail(&flow.return_to, code);
+    }
     let refresh_token = tokens.get("refresh_token").and_then(Value::as_str).filter(|t| t.len() <= 8192).map(str::to_owned);
     let grant = random_hex();
     {
@@ -794,18 +832,17 @@ async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, S
         grants.insert(
             grant.clone(),
             Grant {
-                org: flow.org.clone(),
-                issuer: settings.issuer,
+                provider: flow.provider.clone(),
                 challenge: flow.challenge,
                 identity,
                 refresh_token,
-                session_seconds: settings.session_seconds,
+                session_seconds: configured.session_hours as i64 * 3600,
                 until: now + Duration::from_secs(GRANT_SECONDS),
             },
         );
     }
     log("sso_callback", "ok");
-    redirect(format!("{}/#scribyra-sso={grant}&org={}", flow.return_to, flow.org))
+    redirect(format!("{}/#scribyra-sso={grant}&org={org}", flow.return_to))
 }
 
 #[derive(Deserialize)]
@@ -826,39 +863,35 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     if !bool::from(sha256_hex(&verifier).as_bytes().ct_eq(grant.challenge.as_bytes())) {
         return error(StatusCode::UNAUTHORIZED, "wrong verifier");
     }
+    let (Some((_, configured)), Some(org)) = (s.configured(&grant.provider), s.org.clone()) else { return error(StatusCode::UNAUTHORIZED, "unknown or expired grant") };
     let token = random_hex();
     let id = &grant.identity;
-    let row = sqlx::query(
-        "INSERT INTO sso_logins (token_hash, org, issuer, subject, email, email_verified, name, groups, sid, refresh_token, expires)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, now() + make_interval(secs => $11))
-         RETURNING extract(epoch FROM expires)::bigint",
+    let inserted = sqlx::query(
+        "INSERT INTO sso_logins (token_hash, org, provider, issuer, subject, email, email_verified, name, groups, guest, sid, refresh_token, expires)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, now() + make_interval(secs => $13))",
     )
     .bind(sha256_hex(token.as_bytes()))
-    .bind(&grant.org)
-    .bind(&grant.issuer)
+    .bind(&org)
+    .bind(&grant.provider)
+    .bind(&configured.issuer)
     .bind(&id.subject)
     .bind(&id.email)
     .bind(id.email_verified)
     .bind(&id.name)
     .bind(serde_json::to_string(&id.groups).unwrap_or_else(|_| "[]".into()))
+    .bind(id.guest)
     .bind(&id.sid)
     .bind(&grant.refresh_token)
-    .bind(grant.session_seconds)
-    .fetch_one(&s.store.pool)
+    .bind(grant.session_seconds as f64)
+    .execute(&s.store.pool)
     .await;
-    let expires = match row {
-        Ok(row) => row.get::<i64, _>(0),
+    if let Err(e) = inserted {
+        return internal(e);
+    }
+    let login = match s.login(&token).await {
+        Ok(Some(login)) => login,
+        Ok(None) => return error(StatusCode::FORBIDDEN, "this account cannot sign in here"),
         Err(e) => return internal(e),
-    };
-    let login = Login {
-        org: grant.org,
-        issuer: grant.issuer,
-        subject: id.subject.clone(),
-        email: id.email.clone(),
-        email_verified: id.email_verified,
-        name: id.name.clone(),
-        groups: id.groups.clone(),
-        expires: UNIX_EPOCH + Duration::from_secs(expires.max(0) as u64),
     };
     let link = match s.linked_person(&login).await {
         Ok(link) => link,
@@ -900,13 +933,10 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
         error(StatusCode::BAD_REQUEST, "invalid_request")
     };
     let Some(token) = form.get("logout_token") else { return refuse() };
-    // The unverified claims only choose which organisations' settings to verify against.
+    // The unverified claims only choose which providers' settings to verify against.
     let Ok(peek) = jose::unverified_claims(token) else { return refuse() };
     let Some(issuer) = peek.get("iss").and_then(Value::as_str) else { return refuse() };
-    let rows = match sqlx::query("SELECT org, client_id FROM org_sso WHERE issuer = $1 LIMIT 100").bind(issuer).fetch_all(&s.store.pool).await {
-        Ok(rows) => rows,
-        Err(e) => return internal(e),
-    };
+    let (Some(deployment), Some(org)) = (&s.deployment, &s.org) else { return refuse() };
     let audiences: Vec<&str> = match peek.get("aud") {
         Some(Value::String(a)) => vec![a.as_str()],
         Some(Value::Array(list)) => list.iter().filter_map(Value::as_str).collect(),
@@ -914,24 +944,23 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
     };
     // Only configured issuers are ever contacted: an unknown `iss` must not make the service
     // fetch an attacker-chosen URL.
-    if rows.is_empty() {
+    let providers: Vec<&Configured> = deployment.providers.iter().filter(|p| p.issuer == issuer).collect();
+    if providers.is_empty() {
         return refuse();
     }
-    let Ok(provider) = s.provider(issuer).await else { return refuse() };
+    let Ok(endpoints) = s.endpoints(issuer).await else { return refuse() };
     let mut matched = false;
-    for row in rows {
-        let (org, client_id): (String, String) = (row.get(0), row.get(1));
-        if !audiences.contains(&client_id.as_str()) {
+    for configured in providers {
+        if !audiences.contains(&configured.client_id.as_str()) {
             continue;
         }
-        let Ok(verified) = s.verify(&provider, token).await else { return refuse() };
-        let expect = Expect { issuer, client_id: &client_id, nonce: None, email_domain: None, groups_claim: None, now: now_seconds() };
-        let Ok(logout) = jose::check_logout_token(&verified.claims, &expect) else { return refuse() };
+        let Ok(verified) = s.verify(&endpoints, token).await else { return refuse() };
+        let Ok(logout) = jose::check_logout_token(&verified.claims, &expect(configured, None)) else { return refuse() };
         {
             let mut jtis = s.logout_jtis.lock().unwrap();
             let now = Instant::now();
             jtis.retain(|_, until| *until > now);
-            let key = format!("{org}\n{}", logout.jti);
+            let key = format!("{}\n{}", configured.id, logout.jti);
             if jtis.contains_key(&key) || jtis.len() >= MAX_LOGOUT_JTIS {
                 return refuse();
             }
@@ -939,10 +968,10 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
         }
         let revoked = s
             .revoke_where(
-                "UPDATE sso_logins SET revoked = true WHERE org = $1 AND issuer = $2 AND NOT revoked
+                "UPDATE sso_logins SET revoked = true WHERE org = $1 AND issuer = $2 AND provider = $5 AND NOT revoked
                    AND ($3::text IS NULL OR subject = $3) AND ($4::text IS NULL OR sid = $4)
                  RETURNING org, issuer, subject",
-                &[Some(&org), Some(issuer), logout.subject.as_deref(), logout.sid.as_deref()],
+                &[Some(org), Some(issuer), logout.subject.as_deref(), logout.sid.as_deref(), Some(&configured.id)],
                 false,
             )
             .await;
@@ -958,10 +987,10 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")]).into_response()
 }
 
-/// The SSO routes; merged into [`crate::service::router`].
+/// The sign-in routes and `GET /v1/deployment`; merged into [`crate::service::router`].
 pub fn routes(s: Shared) -> Router {
     Router::new()
-        .route("/v1/orgs/{org}/sso", get(policy_route))
+        .route("/v1/deployment", get(deployment_route))
         .route("/v1/sso/start", post(start))
         .route("/v1/sso/callback", get(callback))
         .route("/v1/sso/redeem", post(redeem))
@@ -969,108 +998,4 @@ pub fn routes(s: Shared) -> Router {
         .route("/v1/sso/logout", post(logout))
         .route("/v1/sso/backchannel", post(backchannel))
         .with_state(s)
-}
-
-/// `scribyra-sync org sso …`: set or remove an organisation's identity provider. Runs beside a
-/// live service, like `org create`. Returns the JSON line to print; errors are fixed strings
-/// that never contain the secret or database details.
-pub async fn command(config: &Config, args: &[String]) -> Result<Value, &'static str> {
-    use sqlx::Connection;
-    let mut org = None;
-    let (mut off, mut issuer, mut client_id, mut secret_file, mut required) = (false, None, None, None, false);
-    let (mut email_domain, mut groups_claim, mut offline) = (None, None, false);
-    let (mut session_seconds, mut recheck_seconds) = (DEFAULT_SESSION_SECONDS, DEFAULT_RECHECK_SECONDS);
-    let mut rest = args.iter();
-    while let Some(flag) = rest.next() {
-        let mut value = || rest.next().cloned().ok_or("missing value for a flag");
-        match flag.as_str() {
-            "--org" => org = Some(value()?),
-            "--off" => off = true,
-            "--issuer" => issuer = Some(value()?),
-            "--client-id" => client_id = Some(value()?),
-            "--client-secret-file" => secret_file = Some(value()?),
-            "--required" => required = true,
-            "--email-domain" => email_domain = Some(value()?.to_ascii_lowercase()),
-            "--groups-claim" => groups_claim = Some(value()?),
-            "--offline-access" => offline = true,
-            "--session-hours" => {
-                let hours: i32 = value()?.parse().map_err(|_| "--session-hours takes 1-720")?;
-                if !(1..=720).contains(&hours) {
-                    return Err("--session-hours takes 1-720");
-                }
-                session_seconds = hours * 3600;
-            }
-            "--recheck-minutes" => {
-                let minutes: i32 = value()?.parse().map_err(|_| "--recheck-minutes takes 1-1440")?;
-                if !(1..=1440).contains(&minutes) {
-                    return Err("--recheck-minutes takes 1-1440");
-                }
-                recheck_seconds = minutes * 60;
-            }
-            _ => return Err("unknown flag"),
-        }
-    }
-    let org = org.filter(|o| is_hex64(o)).ok_or("--org takes an organisation ID (64 lowercase hex)")?;
-    let settings = if off {
-        if issuer.is_some() || client_id.is_some() || secret_file.is_some() || required || email_domain.is_some() || groups_claim.is_some() {
-            return Err("--off takes no other settings");
-        }
-        None
-    } else {
-        let issuer = issuer.ok_or("--issuer is required")?;
-        if issuer.len() > 512 || !secure_url(&issuer) || url::Url::parse(&issuer).is_ok_and(|u| u.query().is_some()) {
-            return Err("--issuer must be an https URL (http only on loopback) without query or fragment");
-        }
-        let client_id = client_id.filter(|c| !c.is_empty() && c.len() <= 255 && c.bytes().all(|b| b.is_ascii_graphic())).ok_or("--client-id is required (printable, at most 255 characters)")?;
-        let path = secret_file.ok_or("--client-secret-file is required")?;
-        let text = std::fs::read_to_string(&path).map_err(|_| "cannot read the client secret file")?;
-        let secret = text.trim_end_matches(['\n', '\r']);
-        if secret.is_empty() || secret.len() > 1024 || secret.contains(['\n', '\r']) {
-            return Err("the client secret file must hold one non-empty line");
-        }
-        if email_domain.as_ref().is_some_and(|d| d.len() > 253 || !d.contains('.') || d.starts_with(['.', '-']) || !d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-')) {
-            return Err("--email-domain must be a domain name such as example.org");
-        }
-        if groups_claim.as_ref().is_some_and(|c| c.is_empty() || c.len() > 128 || !c.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.:/".contains(&b))) {
-            return Err("--groups-claim must be a claim name");
-        }
-        Some((issuer, client_id, secret.to_owned()))
-    };
-    let url = config.database_url().map_err(|_| "cannot read the database URL")?;
-    let options: sqlx::postgres::PgConnectOptions = url.parse().map_err(|_| "invalid database URL")?;
-    let mut db = sqlx::PgConnection::connect_with(&options.application_name("scribyra-sync-admin")).await.map_err(|_| "cannot connect to the database")?;
-    let migrated: Option<i64> = sqlx::query_scalar("SELECT version FROM _sqlx_migrations WHERE version = 4 AND success").fetch_optional(&mut db).await.unwrap_or(None);
-    if migrated.is_none() {
-        return Err("start the service once so it can upgrade the database, then try again");
-    }
-    let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM orgs WHERE org = $1").bind(&org).fetch_optional(&mut db).await.map_err(|_| "database error")?;
-    if exists.is_none() {
-        return Err("unknown organisation");
-    }
-    let Some((issuer, client_id, secret)) = settings else {
-        sqlx::query("DELETE FROM org_sso WHERE org = $1").bind(&org).execute(&mut db).await.map_err(|_| "database error")?;
-        return Ok(json!({"event": "org_sso", "org": org, "enabled": false}));
-    };
-    let scopes = if offline { format!("{BASE_SCOPES} offline_access") } else { BASE_SCOPES.to_owned() };
-    sqlx::query(
-        "INSERT INTO org_sso (org, issuer, client_id, client_secret, required, email_domain, groups_claim, session_seconds, recheck_seconds, scopes, linked_before)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, (SELECT count(*) FROM org_events WHERE org = $1))
-         ON CONFLICT (org) DO UPDATE SET issuer = $2, client_id = $3, client_secret = $4, required = $5, email_domain = $6,
-           groups_claim = $7, session_seconds = $8, recheck_seconds = $9, scopes = $10",
-    )
-    .bind(&org)
-    .bind(&issuer)
-    .bind(&client_id)
-    .bind(&secret)
-    .bind(required)
-    .bind(&email_domain)
-    .bind(&groups_claim)
-    .bind(session_seconds)
-    .bind(recheck_seconds)
-    .bind(&scopes)
-    .execute(&mut db)
-    .await
-    .map_err(|_| "database error")?;
-    let redirect_uri = config.public_url.as_ref().map(|u| format!("{u}/v1/sso/callback"));
-    Ok(json!({"event": "org_sso", "org": org, "enabled": true, "issuer": issuer, "required": required, "redirect_uri": redirect_uri}))
 }

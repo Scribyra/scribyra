@@ -1,12 +1,13 @@
 //! Organisation routes end to end through the real binary against real PostgreSQL, with
-//! filesystem blobs and with Garage (S3) blobs: setup, genesis, sign-in, project log
+//! filesystem blobs and with Garage (S3) blobs: genesis by a signed-in administrator, sign-in
+//! bound to the login, project log
 //! appends (inline and blob-stored), idempotent retries, refusal of forged or reordered
 //! entries, and durability across a hard kill.
 mod support;
 use scribyra_core::orgsync::{self as core, EntryHeader};
 use serde_json::{Value, json};
 use std::time::Duration;
-use support::*;
+use support::{sso, *};
 
 fn agent() -> ureq::Agent {
     ureq::Agent::config_builder().http_status_as_error(false).timeout_global(Some(Duration::from_secs(30))).build().into()
@@ -22,19 +23,6 @@ fn post(url: &str, token: Option<&str>, content_type: &str, body: &[u8]) -> (u16
 fn fetch(url: &str, token: &str) -> (u16, Vec<u8>) {
     let mut response = agent().get(url).header("Authorization", &format!("Scribyra {token}")).call().unwrap();
     (response.status().as_u16(), response.body_mut().read_to_vec().unwrap())
-}
-fn b64url_decode(text: &str) -> Vec<u8> {
-    const A: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
-    let (mut acc, mut bits, mut out) = (0u32, 0u32, Vec::new());
-    for c in text.bytes() {
-        acc = (acc << 6) | A.iter().position(|&x| x == c).unwrap() as u32;
-        bits += 6;
-        if bits >= 8 {
-            bits -= 8;
-            out.push((acc >> bits) as u8);
-        }
-    }
-    out
 }
 fn sign_event(org: &str, prev: &str, kind: &str, body: Value, seed: &[u8]) -> String {
     let mut event = json!({"v":1,"org":org,"prev":prev,"type":kind,"body":body,"signer":core::hex(&core::ed25519_public(seed).unwrap())});
@@ -52,46 +40,41 @@ fn entry(org: &str, project: &str, seed: &[u8], client_seq: u64, ciphertext: &[u
 }
 
 fn org_log(backend: Value) {
-    let port = free_port();
-    let public = format!("http://127.0.0.1:{port}");
-    let mut overrides = json!({"bind": format!("127.0.0.1:{port}"), "public_url": public, "entry_inline_bytes": 1024});
+    let mut overrides = json!({"entry_inline_bytes": 1024});
     for (k, v) in backend.as_object().unwrap() {
         overrides[k] = v.clone();
     }
-    let mut s = Service::new(overrides);
-    let (code, out) = s.run(&["org", "create", "--label", "test"]);
-    assert_eq!(code, 0, "{out}");
-    let created: Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
-    let setup = created["setup"].as_str().unwrap();
-    let parts: Vec<&str> = setup.split(':').collect();
-    assert_eq!(String::from_utf8(b64url_decode(parts[2])).unwrap(), public);
-    let (org, secret) = (parts[3].to_string(), b64url_decode(parts[4]));
+    let mut env = sso::Env::start("RS256", sso::people(), overrides, json!({}));
+    let public = env.public.clone();
+    let org = env.org();
+    let client = env.client();
     let device_seed = random_bytes(32);
     let device = core::hex(&core::ed25519_public(&device_seed).unwrap());
     let agreement = core::hex(&core::x25519_public(&random_bytes(32)).unwrap());
-    let enrol_seed = core::enrol_seed(&secret).unwrap();
     let person = core::person_id(&org, &device).unwrap();
-    let mut body = json!({"person":person,"device":device,"agreement":agreement,"enrol":core::hex(&core::ed25519_public(&enrol_seed).unwrap()),"enrolSig":"","mode":"e2ee","adminRead":true,"name":random_hex(60),"directoryCommit":random_hex(32),"ownerName":random_hex(60)});
-    let parsed: core::GenesisBody = serde_json::from_value(body.clone()).unwrap();
-    body["enrolSig"] = json!(core::hex(&core::ed25519_sign(&enrol_seed, &core::enrol_message(&org, &parsed)).unwrap()));
+    let body = json!({"person":person,"device":device,"agreement":agreement,"name":random_hex(60),"directoryCommit":random_hex(32),"ownerName":random_hex(60)});
     let genesis = sign_event(&org, &org, "genesis", body, &device_seed);
-    let events = format!("{}/v1/orgs/{org}/events", s.url);
-    assert_eq!(post(&events, None, "application/json", genesis.as_bytes()).0, 201);
-    // The setup code is single use.
-    assert_ne!(post(&events, None, "application/json", genesis.as_bytes()).0, 201);
-    // Sign in: challenge, then a signature bound to this service's public address.
-    let base = s.url.clone();
-    let sign_in = |seed: &[u8], url: &str| -> (u16, Value) {
+    let events = format!("{}/v1/orgs/{org}/events", env.service.url);
+    // No sign-in, no genesis: there is no setup code any more.
+    assert_eq!(post(&events, None, "application/json", genesis.as_bytes()).0, 403);
+    let alice = client.login("alice")["token"].as_str().unwrap().to_owned();
+    assert_eq!(orgs::post_with_login(&env.service.url, &org, &genesis, &alice).status, 201);
+    // Once only.
+    assert_ne!(orgs::post_with_login(&env.service.url, &org, &genesis, &alice).status, 201);
+    // Sign in: challenge, then a signature bound to this service's public address and the login.
+    let base = env.service.url.clone();
+    let sign_in = |seed: &[u8], url: &str, sso: &str| -> (u16, Value) {
         let (_, c) = post(&format!("{base}/v1/auth/challenge"), None, "application/json", json!({"org": org}).to_string().as_bytes());
         let challenge = serde_json::from_slice::<Value>(&c).unwrap()["challenge"].as_str().unwrap().to_string();
         let key = core::hex(&core::ed25519_public(seed).unwrap());
-        let sig = core::hex(&core::ed25519_sign(seed, format!("scribyra-auth/1\n{url}\n{org}\n{key}\n{challenge}").as_bytes()).unwrap());
-        let (status, body) = post(&format!("{base}/v1/auth/session"), None, "application/json", json!({"org":org,"key":key,"challenge":challenge,"sig":sig}).to_string().as_bytes());
+        let hash = core::hex(&core::sha256(sso.as_bytes()));
+        let sig = core::hex(&core::ed25519_sign(seed, scribyra_sync::org::session_message(url, &org, &key, &hash, &challenge).as_bytes()).unwrap());
+        let (status, body) = post(&format!("{base}/v1/auth/session"), None, "application/json", json!({"org":org,"key":key,"challenge":challenge,"sig":sig,"sso":sso}).to_string().as_bytes());
         (status, serde_json::from_slice(&body).unwrap_or(Value::Null))
     };
-    assert_eq!(sign_in(&device_seed, "https://elsewhere.example").0, 401);
-    assert_eq!(sign_in(&random_bytes(32), &public).0, 403);
-    let (status, session) = sign_in(&device_seed, &public);
+    assert_eq!(sign_in(&device_seed, "https://elsewhere.example", &alice).0, 401);
+    assert_eq!(sign_in(&random_bytes(32), &public, &alice).0, 403);
+    let (status, session) = sign_in(&device_seed, &public, &alice);
     assert_eq!(status, 200);
     let token = session["token"].as_str().unwrap().to_string();
     let head = core::event_hash(&serde_json::from_str(&genesis).unwrap()).unwrap();
@@ -102,7 +85,7 @@ fn org_log(backend: Value) {
     let stale = sign_event(&org, &head, "project.create", json!({"project":random_hex(32),"epoch":1,"keyCommit":random_hex(32)}), &device_seed);
     assert_eq!(post(&events, Some(&token), "application/json", stale.as_bytes()).0, 409);
 
-    let log = format!("{}/v1/projects/{project}/log", s.url);
+    let log = format!("{}/v1/projects/{project}/log", env.service.url);
     let small = entry(&org, &project, &device_seed, 1, &random_bytes(100));
     let large = entry(&org, &project, &device_seed, 2, &random_bytes(200_000));
     let (status, ack) = post(&log, Some(&token), "application/octet-stream", &small);
@@ -116,10 +99,10 @@ fn org_log(backend: Value) {
     assert_eq!(post(&log, Some(&token), "application/octet-stream", &entry(&org, &project, &random_bytes(32), 1, &random_bytes(100))).0, 403);
     assert_eq!(post(&log, Some(&token), "application/octet-stream", &large).0, 201);
     // The large entry lives in the blob store, the small one inline.
-    assert_eq!(postgres().psql(s.database_url(), "SELECT count(*) FILTER (WHERE inline IS NULL) || ',' || count(*) FROM entries"), "1,2");
-    s.kill();
-    s.start().unwrap();
-    let (_, session) = sign_in(&device_seed, &public);
+    assert_eq!(postgres().psql(env.service.database_url(), "SELECT count(*) FILTER (WHERE inline IS NULL) || ',' || count(*) FROM entries"), "1,2");
+    env.service.kill();
+    env.service.start().unwrap();
+    let (_, session) = sign_in(&device_seed, &public, &alice);
     let token = session["token"].as_str().unwrap();
     let (status, bytes) = fetch(&format!("{log}?after=0"), token);
     assert_eq!(status, 200);

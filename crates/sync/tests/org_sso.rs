@@ -1,133 +1,173 @@
-//! Single sign-on inside organisations: SSO-bound invitations and join requests, account
-//! linking, orgs that require SSO for device sessions, blocking when the identity provider
-//! disables someone, and linking a new browser through SSO. Real binary, PostgreSQL and the
-//! repository's test identity provider.
+//! Sign-in inside the end-to-end organisation: every device session needs a live login of the
+//! device's own person, join requests link the identity, a second browser asks through its
+//! sign-in and is added by an existing device, and the provider disabling someone or a sign-out
+//! closes their sessions. Real binary, PostgreSQL and the repository's test provider.
 mod support;
 use scribyra_core::orgsync as core;
 use serde_json::json;
 use support::{orgs::*, sso::*, *};
 
-fn sso_header(token: &str) -> String {
-    format!("ScribyraSSO {token}")
-}
-/// Posts an event authenticated by an SSO login instead of a device session.
-fn post_with_sso(org: &mut Org, kind: &str, body: serde_json::Value, seed: &[u8], sso: &str) -> u16 {
-    let raw = sign_event(&org.id, &org.state.head.clone(), kind, body, seed);
-    let mut response = orgs::agent().post(&org.url(&format!("/v1/orgs/{}/events", org.id))).header("Content-Type", "application/json").header("Authorization", &sso_header(sso)).send(raw.as_bytes()).unwrap();
+/// A route called with an organisation session token, with a login token instead, or with nothing.
+fn call(method: &str, url: &str, auth: Option<&str>) -> u16 {
+    let http = support::orgs::agent();
+    let mut response = match method {
+        "GET" => {
+            let mut r = http.get(url);
+            if let Some(a) = auth {
+                r = r.header("Authorization", a);
+            }
+            r.call().unwrap()
+        }
+        _ => {
+            let mut r = if method == "PUT" { http.put(url) } else { http.post(url) }.header("Content-Type", "application/json");
+            if let Some(a) = auth {
+                r = r.header("Authorization", a);
+            }
+            r.send(b"[]".as_slice()).unwrap()
+        }
+    };
     let status = response.status().as_u16();
-    let _ = response.body_mut().read_to_string();
-    if status == 201 {
-        org.state.apply(&raw, None).unwrap();
-    }
+    let _ = response.body_mut().read_to_vec();
     status
 }
 
 #[test]
-fn sso_joins_linking_required_sessions_blocking_and_device_requests() {
-    let s = Service::new(org_overrides(json!({"origins": [APP], "sso_recheck_tick_seconds": 1, "requests_per_second": 100000, "source_requests_per_second": 100000})));
-    let mut org = Org::create(&s, &[], json!({}));
-    let mut users = default_users();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-gina", "username": "gina", "password": "pw-gina", "email": "gina@example.org", "email_verified": true, "name": "Gina"}));
-    let idp = Idp::start("RS256", &org.public, users);
-    let (code, out) = configure(&s, &org.id, &idp, &["--offline-access"]);
-    assert_eq!(code, 0, "{out}");
-    let sso = Client { base: s.url.clone(), org: org.id.clone(), idp: &idp };
+fn no_route_accepts_a_device_key_without_its_persons_login() {
+    let env = Env::start("RS256", people(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000}), json!({}));
+    let client = env.client();
+    let mut org = Org::create(&env, "alice");
+    let owner = org.owner.clone();
+    let alice = org.logins[&org.owner_person].clone();
+    let token = org.token(&owner.seed);
+    let project = org.create_project(&token, &owner);
+    // A session request without a login is refused; so is an unknown or expired login.
+    assert_eq!(org.sign_in_with(&owner.seed, json!({"sso": null})).status, 422);
+    assert_eq!(org.sign_in_with(&owner.seed, json!({"sso": random_hex(32)})).status, 401);
+    // Someone else's login (not linked to this person) is refused, and so is a login the device
+    // did not sign for: the signature covers the login's hash.
+    let bob = client.login("bob")["token"].as_str().unwrap().to_owned();
+    let refused = org.sign_in_with(&owner.seed, json!({"sso": bob}));
+    assert_eq!((refused.status, refused.json()["error"].as_str()), (403, Some("this single sign-on identity is not linked to this member")));
+    let c = send("POST", &org.url("/v1/auth/challenge"), None, "application/json", json!({"org": org.id}).to_string().as_bytes()).json();
+    let challenge = c["challenge"].as_str().unwrap();
+    let signed_for = core::hex(&core::sha256(bob.as_bytes()));
+    let sig = owner.sign(scribyra_sync::org::session_message(&org.public, &org.id, &owner.key, &signed_for, challenge).as_bytes());
+    let swapped = send("POST", &org.url("/v1/auth/session"), None, "application/json", json!({"org":org.id,"key":owner.key,"challenge":challenge,"sig":sig,"sso":alice}).to_string().as_bytes());
+    assert_eq!(swapped.status, 401);
+    // A recovery key needs its person's login too.
+    let (r_seed, r_secret) = (random_bytes(32), random_bytes(32));
+    let body = org.recovery_body(&org.owner_person.clone(), &r_seed, &r_secret);
+    assert_eq!(org.post(Some(&token), "recovery.set", body, &owner.seed).status, 201);
+    assert_eq!(org.sign_in_with(&r_seed, json!({"sso": null})).status, 422);
+    assert_eq!(org.sign_in_with(&r_seed, json!({"sso": bob})).status, 403);
+    assert_eq!(org.sign_in_with(&r_seed, json!({})).status, 200);
+    // Every organisation route refuses a request without a device session, also one that
+    // carries only a login (a login is not a session) or a device signature.
+    let o = org.id.clone();
+    let routes = [
+        ("GET", format!("/v1/orgs/{o}/events")),
+        ("GET", format!("/v1/orgs/{o}/keys")),
+        ("PUT", format!("/v1/orgs/{o}/keys")),
+        ("POST", format!("/v1/orgs/{o}/keys/report")),
+        ("GET", format!("/v1/orgs/{o}/pending")),
+        ("GET", format!("/v1/orgs/{o}/heads")),
+        ("GET", format!("/v1/orgs/{o}/device-links")),
+        ("GET", format!("/v1/projects/{project}/log")),
+        ("POST", format!("/v1/projects/{project}/log")),
+        ("GET", format!("/v1/projects/{project}/objects/{}", random_hex(32))),
+        ("PUT", format!("/v1/projects/{project}/objects/{}?epoch=1", random_hex(32))),
+    ];
+    let signature = format!("Scribyra {}", owner.sign(b"anything"));
+    for (method, path) in &routes {
+        let url = org.url(path);
+        for auth in [None, Some(format!("ScribyraSSO {alice}")), Some(signature.clone()), Some(format!("Scribyra {}", random_hex(32)))] {
+            let status = call(method, &url, auth.as_deref());
+            assert!(status == 401 || status == 422 || status == 400, "{method} {path} with {auth:?} answered {status}");
+            assert_ne!(status, 200);
+        }
+        // With the session the same routes answer (or refuse for their own reasons, never 401).
+        assert_ne!(call(method, &url, Some(&format!("Scribyra {token}"))), 401, "{method} {path}");
+    }
+    // Membership events other than a genesis or a join request need a session too.
+    let body = json!({"project":random_hex(32),"epoch":1,"keyCommit":random_hex(32)});
+    assert_eq!(org.post_login("project.create", body, &owner.seed, &alice).status, 401);
+    // The link-code routes are gone.
+    assert_eq!(send("POST", &org.url(&format!("/v1/orgs/{o}/device-links")), Some(&token), "application/json", json!({"link":random_hex(16),"key":random_hex(32)}).to_string().as_bytes()).status, 405);
+    assert_eq!(send("POST", &org.url(&format!("/v1/orgs/{o}/device-links/{}", random_hex(16))), None, "application/json", b"{}").status, 404);
+    // Signing out ends the login and closes the device sessions behind it.
+    assert_eq!(client.logout(&alice).status, 200);
+    assert_eq!(send("GET", &org.url(&format!("/v1/orgs/{o}/events")), Some(&token), "", b"").status, 401);
+    assert_eq!(org.sign_in_with(&owner.seed, json!({})).status, 401);
+}
+
+#[test]
+fn joins_link_identities_device_requests_and_blocking() {
+    let env = Env::start("RS256", people(), json!({"sso_recheck_tick_seconds": 1, "requests_per_second": 100000, "source_requests_per_second": 100000}), json!({"provider": {"offline_access": true}}));
+    let client = env.client();
+    let s = &env.service;
+    let mut org = Org::create(&env, "alice");
     let owner = org.owner.clone();
     let token = org.token(&owner.seed);
-    let token_of = |login: &serde_json::Value| login["token"].as_str().unwrap().to_string();
 
-    // An invitation bound to SSO and to Alice's verified email.
-    let email_hash = core::hex(&core::sha256(b"alice@example.org"));
-    let (reply, invite, seed) = org.invite(&token, &owner, json!({"sso": true, "emailHash": email_hash}));
-    assert_eq!(reply.status, 201);
-    let alice = Device::new();
-    assert_eq!(org.join(&alice, &invite, &seed).status, 403, "no SSO login");
-    let bob_login = sso.login("bob");
-    let body = org.join_body(&alice, &invite, &seed);
-    assert_eq!(post_with_sso(&mut org, "person.join", body, &alice.seed, &token_of(&bob_login)), 403, "another email");
-    let alice_login = sso.login("alice");
-    let body = org.join_body(&alice, &invite, &seed);
-    assert_eq!(post_with_sso(&mut org, "person.join", body, &alice.seed, &token_of(&alice_login)), 201);
-    let me = sso.me(&token_of(&alice_login)).json();
-    assert_eq!((me["state"].as_str(), me["person"].as_str()), (Some("linked"), Some(org.person(&alice).as_str())));
-
-    // Bob asks to join through SSO alone: pending, no session, until an admin approves.
+    // Bob asks to join: pending, no session, until an admin approves; then his identity is his.
     let bob = Device::new();
-    let bob_person = org.person(&bob);
-    let request = |org: &Org, d: &Device| {
-        let person = org.person(d);
-        let proof = d.sign(&core::device_proof_message(&org.id, &org.state.head, &person, &d.key, &d.agreement));
-        json!({"person":person,"device":d.key,"agreement":d.agreement,"proof":proof,"name":random_hex(60)})
-    };
-    let body = request(&org, &bob);
-    assert_eq!(org.post(None, "person.request", body, &bob.seed).status, 403);
-    let body = request(&org, &bob);
-    assert_eq!(post_with_sso(&mut org, "person.request", body, &bob.seed, &token_of(&bob_login)), 201);
+    assert_eq!(org.request(&client, "bob", &bob).status, 201);
+    let bob_login = org.logins[&org.person(&bob)].clone();
     assert_eq!(org.sign_in_with(&bob.seed, json!({})).status, 403);
-    // The same identity cannot ask twice under another device.
-    let again = Device::new();
-    let body = request(&org, &again);
-    assert_eq!(post_with_sso(&mut org, "person.request", body, &again.seed, &token_of(&bob_login)), 409);
-    assert_eq!(org.post(Some(&token), "person.approve", json!({"person":bob_person,"role":"member"}), &owner.seed).status, 201);
-    assert_eq!(org.sign_in_with(&bob.seed, json!({})).status, 200);
+    let me = client.me(&bob_login).json();
+    assert_eq!((me["state"].as_str(), me["person"].as_str(), me["role"].as_str()), (Some("linked"), Some(org.person(&bob).as_str()), Some("member")));
+    assert_eq!(postgres().psql(s.database_url(), "SELECT count(*) FROM sso_links WHERE subject = 'sub-bob'"), "1");
+    assert_eq!(org.post(Some(&token), "person.approve", json!({"person":org.person(&bob),"role":"member"}), &owner.seed).status, 201);
+    let bob_session = org.sign_in_with(&bob.seed, json!({}));
+    assert_eq!(bob_session.status, 200);
+    let bob_token = bob_session.json()["token"].as_str().unwrap().to_string();
 
-    // Review M3: Gina joins with a plain invitation after SSO was configured. Later presenting an
-    // SSO identity does not link her on first use (that is only for people from before SSO).
-    let (_, invite, seed) = org.invite(&token, &owner, json!({}));
-    let gina = Device::new();
-    assert_eq!(org.join(&gina, &invite, &seed).status, 201);
-    let gina_login = sso.login("gina");
-    assert_eq!(org.sign_in_with(&gina.seed, json!({"sso": token_of(&gina_login)})).status, 403);
-    assert_eq!(sso.me(&token_of(&gina_login)).json()["state"], "unlinked");
-
-    // Now the org requires SSO: device keys alone no longer open a session.
-    let (code, out) = configure(&s, &org.id, &idp, &["--offline-access", "--required"]);
-    assert_eq!(code, 0, "{out}");
-    let refused = org.sign_in_with(&owner.seed, json!({}));
-    assert_eq!((refused.status, refused.json()["error"].as_str()), (401, Some("single sign-on is required")));
-    // The owner joined before SSO: the first sign-in with both links them (trust on first use).
-    let dave_login = sso.login("dave");
-    assert_eq!(org.sign_in_with(&owner.seed, json!({"sso": token_of(&dave_login)})).status, 200);
-    // An SSO identity belongs to one person only.
-    assert_eq!(org.sign_in_with(&alice.seed, json!({"sso": token_of(&dave_login)})).status, 403);
-    let alice_session = org.sign_in_with(&alice.seed, json!({"sso": token_of(&alice_login)}));
-    assert_eq!(alice_session.status, 200);
-    let alice_token = alice_session.json()["token"].as_str().unwrap().to_string();
-
-    // A second browser of Alice's asks through SSO; her first device compares and approves.
+    // A second browser of Bob's signs in and asks to be added; his first device approves it.
     let laptop = Device::new();
     let link = random_hex(16);
-    let alice_person = org.person(&alice);
-    let proof = laptop.sign(&core::device_proof_message(&org.id, &core::link_binding(&link), &alice_person, &laptop.key, &laptop.agreement));
+    let bob_person = org.person(&bob);
+    let proof = laptop.sign(&core::device_proof_message(&org.id, &core::link_binding(&link), &bob_person, &laptop.key, &laptop.agreement));
+    let laptop_login = client.login("bob")["token"].as_str().unwrap().to_owned();
     let url = org.url(&format!("/v1/orgs/{}/device-links/sso", org.id));
-    let laptop_login = sso.login("alice");
-    let mut response = orgs::agent().post(&url).header("Content-Type", "application/json").header("Authorization", &sso_header(&token_of(&laptop_login))).send(json!({"link":link,"device":laptop.key,"agreement":laptop.agreement,"proof":proof,"mac":random_hex(32)}).to_string().as_bytes()).unwrap();
+    let request = json!({"link":link,"device":laptop.key,"agreement":laptop.agreement,"proof":proof,"mac":random_hex(32)});
+    let mut response = orgs::agent().post(&url).header("Content-Type", "application/json").header("Authorization", &format!("ScribyraSSO {laptop_login}")).send(request.to_string().as_bytes()).unwrap();
     assert_eq!(response.status().as_u16(), 202, "{}", response.body_mut().read_to_string().unwrap());
-    let listed = send("GET", &org.url(&format!("/v1/orgs/{}/device-links", org.id)), Some(&alice_token), "", b"").json();
+    // Without a login, or with someone else's identity, nobody can ask on Bob's behalf.
+    assert_eq!(send("POST", &url, None, "application/json", request.to_string().as_bytes()).status, 401);
+    let carol = client.login("carol")["token"].as_str().unwrap().to_owned();
+    let mut response = orgs::agent().post(&url).header("Content-Type", "application/json").header("Authorization", &format!("ScribyraSSO {carol}")).send(request.to_string().as_bytes()).unwrap();
+    assert_eq!(response.status().as_u16(), 403);
+    let _ = response.body_mut().read_to_vec();
+    let listed = send("GET", &org.url(&format!("/v1/orgs/{}/device-links", org.id)), Some(&bob_token), "", b"").json();
     let waiting = &listed["links"][0]["request"];
     assert_eq!((waiting["via"].as_str(), waiting["device"].as_str()), (Some("sso"), Some(laptop.key.as_str())));
-    let body = json!({"person":alice_person,"device":laptop.key,"agreement":laptop.agreement,"proof":waiting["proof"],"link":link});
-    assert_eq!(org.post(Some(&alice_token), "device.add", body, &alice.seed).status, 201);
-    assert_eq!(org.sign_in_with(&laptop.seed, json!({"sso": token_of(&laptop_login)})).status, 200);
+    // The new browser cannot sign in before it is added.
+    assert_eq!(org.sign_in_with(&laptop.seed, json!({"sso": laptop_login})).status, 403);
+    let body = json!({"person":bob_person,"device":laptop.key,"agreement":laptop.agreement,"proof":waiting["proof"],"link":link});
+    assert_eq!(org.post(Some(&bob_token), "device.add", body.clone(), &bob.seed).status, 201);
+    assert_eq!(org.sign_in_with(&laptop.seed, json!({"sso": laptop_login})).status, 200);
+    assert_eq!(send("GET", &org.url(&format!("/v1/orgs/{}/device-links", org.id)), Some(&bob_token), "", b"").json()["links"], json!([]));
+    // A request is used once.
+    assert_eq!(org.post(Some(&bob_token), "device.add", body, &bob.seed).status, 400);
+    // Removing the device closes its sessions.
+    let laptop_token = org.sign_in_with(&laptop.seed, json!({"sso": laptop_login})).json()["token"].as_str().unwrap().to_string();
+    assert_eq!(org.post(Some(&bob_token), "device.remove", json!({"device":laptop.key}), &bob.seed).status, 201);
+    assert_eq!(send("GET", &org.url(&format!("/v1/orgs/{}/events", org.id)), Some(&laptop_token), "", b"").status, 401);
 
-    // The identity provider disables Alice: her sessions close and sign-in is refused.
-    postgres().psql(s.database_url(), "UPDATE org_sso SET recheck_seconds = 1");
-    assert_eq!(idp.control("disable?user=alice").status, 200);
+    // The provider disables Bob: at the next recheck his sessions close and sign-in is refused.
+    assert_eq!(env.idp.control("disable?user=bob").status, 200);
     let events = org.url(&format!("/v1/orgs/{}/events", org.id));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
-    while send("GET", &events, Some(&alice_token), "", b"").status != 401 {
-        assert!(std::time::Instant::now() < deadline, "Alice's session survived the IdP disabling her");
+    while send("GET", &events, Some(&bob_token), "", b"").status != 401 {
+        assert!(std::time::Instant::now() < deadline, "Bob's session survived the provider disabling him");
+        // Time passes: every login is due for its recheck.
+        postgres().psql(s.database_url(), "UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked");
         std::thread::sleep(std::time::Duration::from_millis(250));
     }
-    let blocked = org.sign_in_with(&alice.seed, json!({"sso": token_of(&alice_login)}));
+    let blocked = org.sign_in_with(&bob.seed, json!({}));
     assert!(blocked.status == 401 || blocked.status == 403, "{}", blocked.status);
+    // Signing in again does not help while the link is blocked.
+    assert_eq!(client.login("alice")["state"], "linked");
     // Others are unaffected.
-    assert_eq!(org.sign_in_with(&bob.seed, json!({"sso": token_of(&bob_login)})).status, 200);
-    // Review M3: with SSO required, even an invitation that does not ask for SSO needs it…
-    let (_, invite, seed) = org.invite(&org.token_with(&owner.seed, &token_of(&dave_login)), &owner, json!({}));
-    let erin = Device::new();
-    assert_eq!(org.join(&erin, &invite, &seed).status, 403);
-    // A login for this org is useless in another org on the same service.
-    let other = Org::create(&s, &[], json!({}));
-    assert_eq!(other.sign_in_with(&other.owner.seed, json!({"sso": token_of(&bob_login)})).status, 403);
+    assert_eq!(send("GET", &events, Some(&org.token(&owner.seed)), "", b"").status, 200);
 }

@@ -52,15 +52,6 @@ pub fn org_x25519_shared(secret: &[u8], public: &str) -> Result<Vec<u8>, JsValue
     let public = core::unhex(public, 32).map_err(js)?;
     core::x25519_shared(secret, &public).map(|k| k.to_vec()).map_err(js)
 }
-#[wasm_bindgen]
-pub fn org_enrol_seed(secret: &[u8]) -> Result<Vec<u8>, JsValue> {
-    core::enrol_seed(secret).map_err(js)
-}
-#[wasm_bindgen]
-pub fn org_enrol_message(org: &str, body_json: &str) -> Result<Vec<u8>, JsValue> {
-    let body: core::GenesisBody = serde_json::from_str(body_json).map_err(|_| JsValue::from_str("invalid genesis body"))?;
-    Ok(core::enrol_message(org, &body))
-}
 /// Signing seed (32 bytes) followed by the agreement secret (32 bytes).
 #[wasm_bindgen]
 pub fn org_recovery_secrets(code: &[u8]) -> Result<Vec<u8>, JsValue> {
@@ -99,14 +90,6 @@ pub fn org_device_proof_message(org: &str, prev: &str, person: &str, device: &st
 pub fn org_recovery_proof_message(org: &str, prev: &str, person: &str, signing: &str, agreement: &str) -> Vec<u8> {
     core::recovery_proof_message(org, prev, person, signing, agreement)
 }
-#[wasm_bindgen]
-pub fn org_invite_message(org: &str, prev: &str, invite: &str, person: &str, device: &str, agreement: &str) -> Vec<u8> {
-    core::invite_message(org, prev, invite, person, device, agreement)
-}
-#[wasm_bindgen]
-pub fn org_device_request_message(org: &str, link: &str, person: &str, device: &str, agreement: &str) -> Vec<u8> {
-    core::device_request_message(org, link, person, device, agreement)
-}
 /// The X25519 keys entitled to a project's key (or the directory key, `project` = org ID).
 #[wasm_bindgen]
 pub fn org_wrap_recipients(state_json: &str, project: &str) -> Result<String, JsValue> {
@@ -116,7 +99,7 @@ pub fn org_wrap_recipients(state_json: &str, project: &str) -> Result<String, Js
 /// Replay events (a JSON array of canonical event strings) onto a state, or onto a
 /// fresh state for `org` when `state_json` is empty. Returns the new state as JSON.
 #[wasm_bindgen]
-pub fn org_apply_events(state_json: &str, org: &str, events_json: &str, expected_enrol: Option<String>) -> Result<String, JsValue> {
+pub fn org_apply_events(state_json: &str, org: &str, events_json: &str) -> Result<String, JsValue> {
     let mut state = if state_json.is_empty() {
         core::OrgState::new(org).map_err(js)?
     } else {
@@ -124,7 +107,7 @@ pub fn org_apply_events(state_json: &str, org: &str, events_json: &str, expected
     };
     let events: Vec<String> = serde_json::from_str(events_json).map_err(|_| JsValue::from_str("invalid event list"))?;
     for raw in &events {
-        state.apply(raw, expected_enrol.as_deref()).map_err(js)?;
+        state.apply(raw).map_err(js)?;
     }
     Ok(serde_json::to_string(&state).unwrap())
 }

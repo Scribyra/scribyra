@@ -1,7 +1,7 @@
-//! A small organisation client for integration tests: devices, signed events, sign-in,
-//! wraps and log entries, built on the same `scribyra_core::orgsync` code as the browser.
+//! A small organisation client for integration tests: devices, signed events, sign-in through
+//! the test provider, wraps and log entries, built on the same `scribyra_core::orgsync` code as the browser.
 #![allow(dead_code)]
-use super::{Service, random_bytes, random_hex};
+use super::{random_bytes, random_hex};
 use scribyra_core::orgsync::{self as core, EntryHeader};
 use serde_json::{Value, json};
 use std::time::Duration;
@@ -92,15 +92,17 @@ pub fn entry(org: &str, project: &str, seed: &[u8], client_seq: u64, epoch: u32,
     body
 }
 
-/// One organisation on a running service, with a local replay of its membership log.
+/// The deployment's organisation on a running service, with a local replay of its membership
+/// log and the sign-in (login token) of each person the tests act as.
 pub struct Org {
-    pub setup_secret: Vec<u8>,
     pub base: String,
     pub public: String,
     pub id: String,
     pub state: core::OrgState,
     pub owner: Device,
     pub owner_person: String,
+    /// Login tokens by person.
+    pub logins: std::collections::HashMap<String, String>,
 }
 /// Overrides that give a service a fixed address and `public_url`, as organisations need.
 pub fn org_overrides(extra: Value) -> Value {
@@ -111,58 +113,65 @@ pub fn org_overrides(extra: Value) -> Value {
     }
     overrides
 }
+/// A genesis body for a fresh owner device.
+pub fn genesis_body(org: &str, owner: &Device) -> Value {
+    json!({"person":core::person_id(org, &owner.key).unwrap(),"device":owner.key,"agreement":owner.agreement,"name":random_hex(60),"directoryCommit":random_hex(32),"ownerName":random_hex(60)})
+}
+/// Posts a membership event authenticated by a login (`ScribyraSSO`) rather than a session.
+pub fn post_with_login(base: &str, org: &str, raw: &str, login: &str) -> Reply {
+    let mut response = agent().post(&format!("{base}/v1/orgs/{org}/events")).header("Content-Type", "application/json").header("Authorization", &format!("ScribyraSSO {login}")).send(raw.as_bytes()).unwrap();
+    Reply { status: response.status().as_u16(), body: response.body_mut().read_to_vec().unwrap(), head: None }
+}
 impl Org {
-    /// `scribyra-sync org create`, then a genesis signed by a fresh owner device.
-    pub fn create(s: &Service, extra_args: &[&str], genesis_extra: Value) -> Org {
-        let mut args = vec!["org", "create", "--label", "test"];
-        args.extend_from_slice(extra_args);
-        let (code, out) = s.run(&args);
-        assert_eq!(code, 0, "{out}");
-        let created: Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
-        let setup = created["setup"].as_str().unwrap();
-        let parts: Vec<&str> = setup.split(':').collect();
-        let public = String::from_utf8(b64url_decode(parts[2])).unwrap();
-        let (id, secret) = (parts[3].to_string(), b64url_decode(parts[4]));
+    /// The deployment's administrator `admin` signs in and creates the organisation with a
+    /// genesis from a fresh owner device.
+    pub fn create(env: &super::sso::Env, admin: &str) -> Org {
+        let id = env.org();
+        let login = env.client().login(admin)["token"].as_str().unwrap().to_owned();
         let owner = Device::new();
-        let enrol_seed = core::enrol_seed(&secret).unwrap();
-        let person = core::person_id(&id, &owner.key).unwrap();
-        let mut body = json!({"person":person,"device":owner.key,"agreement":owner.agreement,"enrol":core::hex(&core::ed25519_public(&enrol_seed).unwrap()),"enrolSig":"","mode":"e2ee","adminRead":true,"name":random_hex(60),"directoryCommit":random_hex(32),"ownerName":random_hex(60)});
-        for (k, v) in genesis_extra.as_object().unwrap() {
-            body[k] = v.clone();
-        }
-        if body["mode"] == "managed" && body.get("serviceKey").is_none() {
-            let info = send("GET", &format!("{}/v1/orgs/{id}/info", s.url), None, "", b"").json();
-            body["serviceKey"] = info["serviceKey"].clone();
-        }
-        let parsed: core::GenesisBody = serde_json::from_value(body.clone()).unwrap();
-        body["enrolSig"] = json!(core::hex(&core::ed25519_sign(&enrol_seed, &core::enrol_message(&id, &parsed)).unwrap()));
-        let genesis = sign_event(&id, &id, "genesis", body, &owner.seed);
-        let reply = send("POST", &format!("{}/v1/orgs/{id}/events", s.url), None, "application/json", genesis.as_bytes());
+        let genesis = sign_event(&id, &id, "genesis", genesis_body(&id, &owner), &owner.seed);
+        let reply = post_with_login(&env.service.url, &id, &genesis, &login);
         assert_eq!(reply.status, 201, "{}", String::from_utf8_lossy(&reply.body));
         let mut state = core::OrgState::new(&id).unwrap();
-        state.apply(&genesis, None).unwrap();
-        Org { setup_secret: secret, base: s.url.clone(), public, id, state, owner, owner_person: person }
+        state.apply(&genesis).unwrap();
+        let person = core::person_id(&id, &owner.key).unwrap();
+        Org { base: env.service.url.clone(), public: env.public.clone(), id, state, owner, owner_person: person.clone(), logins: [(person, login)].into() }
     }
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
-    /// Challenge-response sign-in; returns (status, body).
+    /// The login of the person a key (device or recovery) acts for.
+    pub fn login_for(&self, seed: &[u8]) -> Option<String> {
+        let key = core::hex(&core::ed25519_public(seed).unwrap());
+        // Also for pending, removed and retired keys, so tests can show what the service refuses.
+        let recovery = |k: &str| self.state.persons.iter().find(|(_, p)| p.recovery_signing.as_deref() == Some(k)).map(|(id, _)| id.clone());
+        let person = self.state.devices.get(&key).map(|d| d.person.clone()).or_else(|| self.state.former_devices.get(&key).cloned()).or_else(|| recovery(&key))?;
+        self.logins.get(&person).cloned()
+    }
+    /// Challenge-response sign-in with the person's login (unless `extra` names another `sso`,
+    /// or `null` to send none); returns (status, body).
     pub fn sign_in_with(&self, seed: &[u8], extra: Value) -> Reply {
         let c = send("POST", &self.url("/v1/auth/challenge"), None, "application/json", json!({"org": self.id}).to_string().as_bytes());
         assert_eq!(c.status, 200, "{}", String::from_utf8_lossy(&c.body));
         let challenge = c.json()["challenge"].as_str().unwrap().to_string();
         let key = core::hex(&core::ed25519_public(seed).unwrap());
-        let sig = core::hex(&core::ed25519_sign(seed, format!("scribyra-auth/1\n{}\n{}\n{key}\n{challenge}", self.public, self.id).as_bytes()).unwrap());
+        let sso = match extra.get("sso") {
+            Some(Value::String(s)) => Some(s.clone()),
+            Some(_) => None,
+            None => self.login_for(seed),
+        };
+        let login_hash = core::hex(&core::sha256(sso.clone().unwrap_or_default().as_bytes()));
+        let sig = core::hex(&core::ed25519_sign(seed, scribyra_sync::org::session_message(&self.public, &self.id, &key, &login_hash, &challenge).as_bytes()).unwrap());
         let mut body = json!({"org":self.id,"key":key,"challenge":challenge,"sig":sig});
+        if let Some(sso) = sso {
+            body["sso"] = json!(sso);
+        }
         for (k, v) in extra.as_object().unwrap() {
-            body[k] = v.clone();
+            if k != "sso" {
+                body[k] = v.clone();
+            }
         }
         send("POST", &self.url("/v1/auth/session"), None, "application/json", body.to_string().as_bytes())
-    }
-    pub fn token_with(&self, seed: &[u8], sso: &str) -> String {
-        let reply = self.sign_in_with(seed, json!({"sso": sso}));
-        assert_eq!(reply.status, 200, "{}", String::from_utf8_lossy(&reply.body));
-        reply.json()["token"].as_str().unwrap().to_string()
     }
     pub fn token(&self, seed: &[u8]) -> String {
         let reply = self.sign_in_with(seed, json!({}));
@@ -177,9 +186,42 @@ impl Org {
     pub fn post_raw(&mut self, token: Option<&str>, raw: &str) -> Reply {
         let reply = send("POST", &self.url(&format!("/v1/orgs/{}/events", self.id)), token, "application/json", raw.as_bytes());
         if reply.status == 201 {
-            self.state.apply(raw, None).unwrap();
+            self.state.apply(raw).unwrap();
         }
         reply
+    }
+    /// Signs an event and posts it with a login instead of a session.
+    pub fn post_login(&mut self, kind: &str, body: Value, seed: &[u8], login: &str) -> Reply {
+        let raw = sign_event(&self.id, &self.state.head.clone(), kind, body, seed);
+        let reply = post_with_login(&self.base, &self.id, &raw, login);
+        if reply.status == 201 {
+            self.state.apply(&raw).unwrap();
+        }
+        reply
+    }
+    /// A join request body for a new device, at the current head.
+    pub fn request_body(&self, device: &Device) -> Value {
+        let person = self.person(device);
+        let proof = device.sign(&core::device_proof_message(&self.id, &self.state.head, &person, &device.key, &device.agreement));
+        json!({"person":person,"device":device.key,"agreement":device.agreement,"proof":proof,"name":random_hex(60)})
+    }
+    /// `user` signs in and asks to join with `device` (pending until approved).
+    pub fn request(&mut self, client: &super::sso::Client, user: &str, device: &Device) -> Reply {
+        let login = client.login(user)["token"].as_str().unwrap().to_owned();
+        let body = self.request_body(device);
+        let reply = self.post_login("person.request", body, &device.seed, &login);
+        if reply.status == 201 {
+            self.logins.insert(self.person(device), login);
+        }
+        reply
+    }
+    /// `user` asks to join with `device` and the owner approves them as an organisation member.
+    pub fn admit(&mut self, client: &super::sso::Client, user: &str, device: &Device) {
+        let reply = self.request(client, user, device);
+        assert_eq!(reply.status, 201, "{}", String::from_utf8_lossy(&reply.body));
+        let (owner, token) = (self.owner.clone(), self.token(&self.owner.seed.clone()));
+        let reply = self.post(Some(&token), "person.approve", json!({"person":self.person(device),"role":"member"}), &owner.seed);
+        assert_eq!(reply.status, 201, "{}", String::from_utf8_lossy(&reply.body));
     }
     pub fn recovery_body(&self, person: &str, recovery_seed: &[u8], recovery_secret: &[u8]) -> Value {
         let signing = core::hex(&core::ed25519_public(recovery_seed).unwrap());
@@ -190,27 +232,6 @@ impl Org {
     pub fn device_body(&self, person: &str, device: &Device) -> Value {
         let proof = device.sign(&core::device_proof_message(&self.id, &self.state.head, person, &device.key, &device.agreement));
         json!({"person":person,"device":device.key,"agreement":device.agreement,"proof":proof})
-    }
-    /// Creates an invitation signed by `by`; returns (invite id, invitation seed).
-    pub fn invite(&mut self, token: &str, by: &Device, body: Value) -> (Reply, String, Vec<u8>) {
-        let (invite, seed) = (random_hex(16), random_bytes(32));
-        let mut full = json!({"invite":invite,"inviteKey":core::hex(&core::ed25519_public(&seed).unwrap()),"role":"member","expires":4_000_000_000u64,"approval":false,"sso":false});
-        for (k, v) in body.as_object().unwrap() {
-            full[k] = v.clone();
-        }
-        let reply = self.post(Some(token), "invite.create", full, &by.seed);
-        (reply, invite, seed)
-    }
-    pub fn join_body(&self, device: &Device, invite: &str, invite_seed: &[u8]) -> Value {
-        let person = core::person_id(&self.id, &device.key).unwrap();
-        let proof = device.sign(&core::device_proof_message(&self.id, &self.state.head, &person, &device.key, &device.agreement));
-        let invite_sig = core::hex(&core::ed25519_sign(invite_seed, &core::invite_message(&self.id, &self.state.head, invite, &person, &device.key, &device.agreement)).unwrap());
-        json!({"invite":invite,"person":person,"device":device.key,"agreement":device.agreement,"proof":proof,"inviteSig":invite_sig,"name":random_hex(60)})
-    }
-    /// Joins with an invitation (no session: the invitation authenticates the event).
-    pub fn join(&mut self, device: &Device, invite: &str, invite_seed: &[u8]) -> Reply {
-        let body = self.join_body(device, invite, invite_seed);
-        self.post(None, "person.join", body, &device.seed)
     }
     pub fn person(&self, device: &Device) -> String {
         core::person_id(&self.id, &device.key).unwrap()

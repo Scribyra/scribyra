@@ -4,12 +4,13 @@
 mod support;
 use scribyra_core::orgsync as core;
 use serde_json::json;
-use support::{orgs::*, *};
+use support::{orgs::*, sso::*, *};
 
 #[test]
 fn retired_recovery_and_device_keys_lose_their_wraps() {
-    let s = Service::new(org_overrides(json!({})));
-    let mut org = Org::create(&s, &[], json!({}));
+    let env = Env::start("RS256", people(), json!({}), json!({}));
+    let s = &env.service;
+    let mut org = Org::create(&env, "alice");
     let owner = org.owner.clone();
     let person = org.owner_person.clone();
     let token = org.token(&owner.seed);
@@ -32,7 +33,8 @@ fn retired_recovery_and_device_keys_lose_their_wraps() {
     assert_eq!(org.post(Some(&token), "recovery.set", body, &owner.seed).status, 201);
     assert_eq!(count(&first_recovery), "0");
     // The old kit can no longer sign in.
-    assert_eq!(org.sign_in_with(&r1_seed, json!({})).status, 403);
+    let login = org.logins[&person].clone();
+    assert_eq!(org.sign_in_with(&r1_seed, json!({"sso": login})).status, 403);
     // A browser that lost its agreement key re-keys its device; the old key's wraps go too.
     let mut rekeyed = owner.clone();
     rekeyed.agreement_secret = random_bytes(32);
@@ -51,8 +53,8 @@ fn retired_recovery_and_device_keys_lose_their_wraps() {
 
 #[test]
 fn logs_and_membership_are_read_to_an_explicit_head() {
-    let s = Service::new(org_overrides(json!({"entry_inline_bytes": 1024})));
-    let mut org = Org::create(&s, &[], json!({}));
+    let env = Env::start("RS256", people(), json!({"entry_inline_bytes": 1024}), json!({}));
+    let mut org = Org::create(&env, "alice");
     let owner = org.owner.clone();
     let token = org.token(&owner.seed);
     // More than one page of membership events.
@@ -90,24 +92,22 @@ fn logs_and_membership_are_read_to_an_explicit_head() {
 #[test]
 fn sign_in_state_is_bounded_per_organisation_and_per_key() {
     // Request-rate limits are not under test here.
-    let s = Service::new(org_overrides(json!({"requests_per_second": 100000, "source_requests_per_second": 100000})));
-    let org = Org::create(&s, &[], json!({}));
-    let other = Org::create(&s, &[], json!({}));
-    // An unknown organisation gets no challenge (and no cached state).
+    let env = Env::start("RS256", people(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000}), json!({}));
+    let org = Org::create(&env, "alice");
+    // An unknown organisation gets no challenge (and no cached state): a deployment serves one.
     let unknown = send("POST", &org.url("/v1/auth/challenge"), None, "application/json", json!({"org": random_hex(32)}).to_string().as_bytes());
     assert_eq!(unknown.status, 404);
     let junk = send("POST", &org.url("/v1/orgs/not-hex/events"), None, "application/json", b"{}");
     assert_eq!(junk.status, 400);
-    // Unanswered challenges fill only their own organisation's allowance.
+    // One key holds at most eight sessions; the oldest makes room.
+    let tokens: Vec<String> = (0..9).map(|_| org.token(&org.owner.seed)).collect();
+    let events = |t: &str| send("GET", &org.url(&format!("/v1/orgs/{}/events", org.id)), Some(t), "", b"").status;
+    assert_eq!(events(&tokens[0]), 401);
+    let rest: Vec<u16> = tokens[1..].iter().map(|t| events(t)).collect();
+    assert_eq!(rest, [200; 8]);
+    // Unanswered challenges are bounded per organisation.
     let challenge = |id: &str| send("POST", &org.url("/v1/auth/challenge"), None, "application/json", json!({"org": id}).to_string().as_bytes()).status;
     let statuses: Vec<u16> = (0..70).map(|_| challenge(&org.id)).collect();
     assert!(statuses[..64].iter().all(|&s| s == 200));
     assert_eq!(statuses[64..], [503; 6]);
-    assert_eq!(challenge(&other.id), 200);
-    // One key holds at most eight sessions; the oldest makes room.
-    let tokens: Vec<String> = (0..9).map(|_| other.token(&other.owner.seed)).collect();
-    let events = |t: &str| send("GET", &other.url(&format!("/v1/orgs/{}/events", other.id)), Some(t), "", b"").status;
-    assert_eq!(events(&tokens[0]), 401);
-    let rest: Vec<u16> = tokens[1..].iter().map(|t| events(t)).collect();
-    assert_eq!(rest, [200; 8]);
 }

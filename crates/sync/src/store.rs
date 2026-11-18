@@ -121,10 +121,47 @@ pub struct Store {
     pub pool: PgPool,
     pub blobs: Arc<dyn BlobStore>,
     pub config: Config,
+    /// The organisation this deployment serves (set when the configuration has a deployment).
+    pub org: Option<String>,
     /// Dedicated connection holding the advisory lock; never returned to the pool.
     owner: Mutex<PgConnection>,
     /// Exclusive lock on the filesystem blob directory, if any.
     _directory: Option<File>,
+}
+
+/// Records the deployment's encryption mode and organisation at its first start, and refuses to
+/// start when the configuration later names the other mode (moving between modes is an export
+/// and import, never a silent switch). The organisation gets a random ID at first start; a
+/// database that already holds exactly one organisation (from before deployments) keeps it.
+async fn record_deployment(pool: &PgPool, deployment: &crate::config::Deployment) -> Result<String, Error> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("LOCK TABLE deployment IN EXCLUSIVE MODE").execute(&mut *tx).await?;
+    let recorded: Option<(String, String)> = sqlx::query_as("SELECT encryption, org FROM deployment").fetch_optional(&mut *tx).await?;
+    let org = match recorded {
+        Some((encryption, _)) if encryption != deployment.encryption.as_str() => {
+            println!("{}", serde_json::json!({"event": "deployment_encryption_changed", "recorded": encryption, "configured": deployment.encryption.as_str()}));
+            return Err("the deployment's encryption mode cannot change".into());
+        }
+        Some((_, org)) => org,
+        None => {
+            let existing: Vec<String> = sqlx::query_scalar("SELECT org FROM orgs LIMIT 2").fetch_all(&mut *tx).await?;
+            let org = match existing.as_slice() {
+                [only] => only.clone(),
+                _ => {
+                    let mut id = [0u8; 32];
+                    getrandom::fill(&mut id)?;
+                    let org = scribyra_core::orgsync::hex(&id);
+                    sqlx::query("INSERT INTO orgs (org, label) VALUES ($1, $2)").bind(&org).bind(&deployment.name).execute(&mut *tx).await?;
+                    org
+                }
+            };
+            sqlx::query("INSERT INTO deployment (encryption, org) VALUES ($1, $2)").bind(deployment.encryption.as_str()).bind(&org).execute(&mut *tx).await?;
+            org
+        }
+    };
+    sqlx::query("UPDATE orgs SET label = $2 WHERE org = $1").bind(&org).bind(&deployment.name).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(org)
 }
 
 impl Store {
@@ -179,9 +216,14 @@ impl Store {
                 (Arc::new(S3BlobStore::new(settings)?), None)
             }
         };
+        let org = match &config.deployment {
+            Some(deployment) => Some(record_deployment(&pool, deployment).await?),
+            None => None,
+        };
         let store = Self {
             pool,
             blobs,
+            org,
             config,
             owner: Mutex::new(owner),
             _directory: directory,

@@ -1,5 +1,6 @@
-//! Single sign-on test helpers: the `test-idp` example provider and a browserless client for
-//! the service's SSO flow (start, provider authorization, callback, redeem).
+//! Sign-in test helpers: the `test-idp` example provider, a deployment configured with it, and a
+//! browserless client for the service's sign-in flow (start, provider authorization, callback,
+//! redeem).
 //!
 //! The provider binary is built once per test binary with
 //! `cargo build -p scribyra-sync --example test-idp` (cargo is already running the tests, so
@@ -130,7 +131,7 @@ impl Idp {
     pub fn control(&self, path: &str) -> Http {
         fetch(&format!("{}/control/{path}", self.issuer), None)
     }
-    /// Write the client secret to a file for `org sso --client-secret-file`.
+    /// Write the client secret to a file for a provider's `client_secret_file`.
     pub fn secret_file(&self) -> PathBuf {
         let path = self.dir.join("client-secret");
         std::fs::write(&path, format!("{}\n", self.secret)).unwrap();
@@ -145,10 +146,64 @@ impl Drop for Idp {
     }
 }
 
-/// A browserless SSO client against one service and organisation.
+/// People for organisation tests: the default users plus verified example.org members.
+pub fn people() -> Value {
+    let mut users = default_users();
+    for name in ["ben", "cat", "dan", "erin", "gina", "mallory", "nina", "omar", "pia", "quinn"] {
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": format!("{name}@example.org"), "email_verified": true, "name": name}));
+    }
+    users
+}
+/// The `deployment` object for a service that signs in with `idp` (provider `test`): end to end
+/// encrypted, alice@example.org an administrator. `extra` replaces top-level fields; its
+/// `provider` object is merged into the provider.
+pub fn deployment(idp: &Idp, extra: Value) -> Value {
+    let mut provider = json!({"id": "test", "label": "Test account", "issuer": idp.issuer, "client_id": CLIENT_ID, "client_secret_file": idp.secret_file()});
+    let mut deployment = json!({"name": "Test Lab", "encryption": "e2ee", "admins": ["alice@example.org"]});
+    for (k, v) in extra.as_object().unwrap() {
+        if k == "provider" {
+            for (pk, pv) in v.as_object().unwrap() {
+                provider[pk] = pv.clone();
+            }
+        } else {
+            deployment[k] = v.clone();
+        }
+    }
+    deployment["providers"] = json!([provider]);
+    deployment
+}
+/// A running service with a deployment that signs in with its own test provider.
+pub struct Env {
+    pub service: Service,
+    pub idp: Idp,
+    pub public: String,
+}
+impl Env {
+    /// `service_extra` merges into the service configuration, `deployment_extra` as in
+    /// [`deployment`].
+    pub fn start(alg: &str, users: Value, service_extra: Value, deployment_extra: Value) -> Env {
+        let port = free_port();
+        let public = format!("http://127.0.0.1:{port}");
+        let idp = Idp::start(alg, &public, users);
+        let mut overrides = json!({"bind": format!("127.0.0.1:{port}"), "public_url": public, "origins": [APP], "deployment": deployment(&idp, deployment_extra)});
+        for (k, v) in service_extra.as_object().unwrap() {
+            overrides[k] = v.clone();
+        }
+        let service = Service::new(overrides);
+        Env { service, idp, public }
+    }
+    pub fn client(&self) -> Client<'_> {
+        Client { base: self.service.url.clone(), provider: "test".into(), idp: &self.idp }
+    }
+    /// The deployment's organisation ID.
+    pub fn org(&self) -> String {
+        fetch(&format!("{}/v1/deployment", self.service.url), None).json()["org"].as_str().unwrap().to_owned()
+    }
+}
+/// A browserless sign-in client against one service and provider.
 pub struct Client<'a> {
     pub base: String,
-    pub org: String,
+    pub provider: String,
     pub idp: &'a Idp,
 }
 /// A sign-in in progress: the provider's authorization URL and the app's verifier (hex).
@@ -165,12 +220,12 @@ impl Client<'_> {
     pub fn url(&self, path: &str) -> String {
         format!("{}{path}", self.base)
     }
-    pub fn start_with(&self, org: &str, return_to: &str, challenge: &str) -> Http {
-        post_json(&self.url("/v1/sso/start"), None, &json!({"org": org, "return": return_to, "challenge": challenge}))
+    pub fn start_with(&self, provider: &str, return_to: &str, challenge: &str) -> Http {
+        post_json(&self.url("/v1/sso/start"), None, &json!({"provider": provider, "return": return_to, "challenge": challenge}))
     }
     pub fn start(&self) -> Started {
         let verifier = random_bytes(32);
-        let reply = self.start_with(&self.org, APP, &sha256(&verifier));
+        let reply = self.start_with(&self.provider, APP, &sha256(&verifier));
         assert_eq!(reply.status, 200, "{}", reply.body);
         Started { url: reply.json()["url"].as_str().unwrap().to_owned(), verifier: verifier.iter().map(|b| format!("{b:02x}")).collect() }
     }
@@ -221,19 +276,4 @@ pub fn parse_return(location: &str) -> Outcome {
         return Outcome::Error(code.clone());
     }
     Outcome::Grant { grant: pairs["scribyra-sso"].clone(), org: pairs["org"].clone() }
-}
-
-/// `scribyra-sync org create`; returns the new organisation's ID.
-pub fn create_org(service: &Service) -> String {
-    let (code, out) = service.run(&["org", "create", "--label", "sso"]);
-    assert_eq!(code, 0, "{out}");
-    let created: Value = serde_json::from_str(out.lines().last().unwrap()).unwrap();
-    created["org"].as_str().unwrap().to_owned()
-}
-/// `scribyra-sync org sso` for `org` against `idp`, plus `extra` flags.
-pub fn configure(service: &Service, org: &str, idp: &Idp, extra: &[&str]) -> (i32, String) {
-    let secret = idp.secret_file();
-    let mut args = vec!["org", "sso", "--org", org, "--issuer", &idp.issuer, "--client-id", CLIENT_ID, "--client-secret-file", secret.to_str().unwrap()];
-    args.extend_from_slice(extra);
-    service.run(&args)
 }

@@ -5,22 +5,23 @@
 mod support;
 use scribyra_core::orgsync as core;
 use serde_json::{Value, json};
-use support::{orgs::*, *};
+use support::{orgs::*, sso::*, *};
 
 fn epochs(backend: Value) {
     let mut overrides = json!({"requests_per_second": 100000, "source_requests_per_second": 100000, "entry_inline_bytes": 1024});
     for (k, v) in backend.as_object().unwrap() {
         overrides[k] = v.clone();
     }
-    let s = Service::new(org_overrides(overrides));
-    let mut org = Org::create(&s, &[], json!({}));
+    let env = Env::start("RS256", people(), overrides, json!({}));
+    let s = &env.service;
+    let client = env.client();
+    let mut org = Org::create(&env, "alice");
     let owner = org.owner.clone();
     let token = org.token(&owner.seed);
     let project = org.create_project(&token, &owner);
     let (ben, cat) = (Device::new(), Device::new());
-    for d in [&ben, &cat] {
-        let (_, invite, seed) = org.invite(&token, &owner, json!({}));
-        assert_eq!(org.join(d, &invite, &seed).status, 201);
+    for (d, user) in [(&ben, "ben"), (&cat, "cat")] {
+        org.admit(&client, user, d);
         assert_eq!(org.post(Some(&token), "project.grant", json!({"project":project,"person":org.person(d),"role":"editor"}), &owner.seed).status, 201);
     }
     let (ben_token, cat_token) = (org.token(&ben.seed), org.token(&cat.seed));
@@ -85,7 +86,7 @@ fn epochs(backend: Value) {
     let events: Vec<String> = serde_json::from_value(reply["events"].clone()).unwrap();
     let mut replay = core::OrgState::new(&org.id).unwrap();
     for raw in &events {
-        replay.apply(raw, None).unwrap();
+        replay.apply(raw).unwrap();
     }
     assert_eq!(replay.projects[&project], org.state.projects[&project]);
 }

@@ -270,13 +270,18 @@ impl ClaimError {
 }
 
 /// What the relying party expects of a token.
+#[derive(Clone, Copy)]
 pub struct Expect<'a> {
     pub issuer: &'a str,
     pub client_id: &'a str,
-    /// The nonce sent with this flow; `None` for logout tokens (which must not carry one).
+    /// The nonce sent with this flow; `None` for logout tokens (which must not carry one) and
+    /// for ID tokens from a refresh (which need not carry one).
     pub nonce: Option<&'a str>,
-    pub email_domain: Option<&'a str>,
+    /// When not empty, a verified email in one of these domains is required.
+    pub email_domains: &'a [String],
     pub groups_claim: Option<&'a str>,
+    /// The claim and value that mark a guest account at this provider.
+    pub guest: Option<(&'a str, &'a str)>,
     /// Seconds since the Unix epoch.
     pub now: i64,
 }
@@ -289,6 +294,8 @@ pub struct Identity {
     pub name: Option<String>,
     pub groups: Vec<String>,
     pub sid: Option<String>,
+    /// The provider marked this account as a guest (by the configured claim and value).
+    pub guest: bool,
 }
 fn number(claims: &Map<String, Value>, name: &str) -> Option<i64> {
     let value = claims.get(name)?;
@@ -322,8 +329,27 @@ fn check_common(claims: &Map<String, Value>, expect: &Expect) -> Result<(), Clai
     }
     Ok(())
 }
+/// Whether a claim holds the value that marks a guest: the same string, number or boolean, or
+/// an array that contains it.
+fn claim_equals(value: Option<&Value>, want: &str) -> bool {
+    match value {
+        Some(Value::String(s)) => s == want,
+        Some(Value::Number(n)) => n.to_string() == want,
+        Some(Value::Bool(b)) => b.to_string() == want,
+        Some(Value::Array(list)) => list.iter().any(|v| claim_equals(Some(v), want)),
+        _ => false,
+    }
+}
 /// Check an ID token's claims (OpenID Connect Core 1.0, section 3.1.3.7).
 pub fn check_id_token(claims: &Map<String, Value>, expect: &Expect) -> Result<Identity, ClaimError> {
+    check_id_token_with(claims, expect, false)
+}
+/// Check an ID token returned by a refresh (section 12.2): the same claims, but the nonce, which
+/// only a sign-in sends, need not be present. The caller checks the subject is unchanged.
+pub fn check_refreshed_id_token(claims: &Map<String, Value>, expect: &Expect) -> Result<Identity, ClaimError> {
+    check_id_token_with(claims, &Expect { nonce: None, ..*expect }, true)
+}
+fn check_id_token_with(claims: &Map<String, Value>, expect: &Expect, refreshed: bool) -> Result<Identity, ClaimError> {
     check_common(claims, expect)?;
     let exp = number(claims, "exp").ok_or(ClaimError::Expired)?;
     if exp + SKEW_SECONDS <= expect.now {
@@ -331,25 +357,24 @@ pub fn check_id_token(claims: &Map<String, Value>, expect: &Expect) -> Result<Id
     }
     match (expect.nonce, member(claims, "nonce")) {
         (Some(want), Some(got)) if want == got => {}
+        (None, _) if refreshed => {}
         _ => return Err(ClaimError::Nonce),
     }
     let subject = short(claims, "sub").ok_or(ClaimError::Subject)?;
     let email = short(claims, "email");
     let email_verified = claims.get("email_verified") == Some(&Value::Bool(true));
-    if let Some(domain) = expect.email_domain {
+    if !expect.email_domains.is_empty() {
         if !email_verified {
             return Err(ClaimError::EmailUnverified);
         }
-        let matches = email
-            .as_deref()
-            .and_then(|e| e.rsplit_once('@'))
-            .is_some_and(|(local, d)| !local.is_empty() && d.eq_ignore_ascii_case(domain));
+        let domain = email.as_deref().and_then(|e| e.rsplit_once('@')).filter(|(local, _)| !local.is_empty()).map(|(_, d)| d);
+        let listed = domain.and_then(|d| expect.email_domains.iter().find(|allowed| d.eq_ignore_ascii_case(allowed)));
         // Google Workspace names the hosted domain in `hd`; when present it must agree too.
         let hd_ok = match claims.get("hd") {
             None => true,
-            Some(hd) => hd.as_str().is_some_and(|hd| hd.eq_ignore_ascii_case(domain)),
+            Some(hd) => hd.as_str().zip(listed).is_some_and(|(hd, d)| hd.eq_ignore_ascii_case(d)),
         };
-        if !matches || !hd_ok {
+        if listed.is_none() || !hd_ok {
             return Err(ClaimError::EmailDomain);
         }
     }
@@ -363,7 +388,8 @@ pub fn check_id_token(claims: &Map<String, Value>, expect: &Expect) -> Result<Id
             .collect(),
         _ => vec![],
     };
-    Ok(Identity { subject, email, email_verified, name: short(claims, "name"), groups, sid: short(claims, "sid") })
+    let guest = expect.guest.is_some_and(|(claim, value)| claim_equals(claims.get(claim), value));
+    Ok(Identity { subject, email, email_verified, name: short(claims, "name"), groups, sid: short(claims, "sid"), guest })
 }
 /// What a back-channel logout token asks to end: a subject, a provider session, or both.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -436,7 +462,7 @@ mod tests {
         json!({"iss":"https://idp.example","aud":"client","sub":"alice","nonce":"n1","iat":1000,"exp":2000,"email":"Alice@Example.org","email_verified":true,"name":"Alice","groups":["a","b"]})
     }
     fn expect() -> Expect<'static> {
-        Expect { issuer: "https://idp.example", client_id: "client", nonce: Some("n1"), email_domain: None, groups_claim: Some("groups"), now: 1500 }
+        Expect { issuer: "https://idp.example", client_id: "client", nonce: Some("n1"), email_domains: &[], groups_claim: Some("groups"), guest: None, now: 1500 }
     }
 
     #[test]
@@ -594,7 +620,8 @@ mod tests {
         assert_eq!(check_id_token(&c(json!({"nonce":"n2"})), &e).unwrap_err(), ClaimError::Nonce);
         assert_eq!(check_id_token(&c(json!({"nonce":null})), &e).unwrap_err(), ClaimError::Nonce);
         assert_eq!(check_id_token(&c(json!({"sub":""})), &e).unwrap_err(), ClaimError::Subject);
-        let domain = Expect { email_domain: Some("example.ORG"), ..expect() };
+        let domains = ["example.org".to_string()];
+        let domain = Expect { email_domains: &domains, ..expect() };
         assert!(check_id_token(&c(json!({})), &domain).is_ok());
         assert_eq!(check_id_token(&c(json!({"email_verified":false})), &domain).unwrap_err(), ClaimError::EmailUnverified);
         assert_eq!(check_id_token(&c(json!({"email_verified":"true"})), &domain).unwrap_err(), ClaimError::EmailUnverified);
@@ -608,6 +635,23 @@ mod tests {
         assert_eq!(id.groups.len(), MAX_GROUPS);
         let id = check_id_token(&c(json!({"groups": ["x".repeat(300), "ok"]})), &e).unwrap();
         assert_eq!(id.groups, vec!["ok"]);
+        // Several domains: any one of them, and `hd` must name the email's own domain.
+        let two = ["example.org".to_string(), "lab.example".to_string()];
+        let both = Expect { email_domains: &two, ..expect() };
+        assert!(check_id_token(&c(json!({"email":"bob@lab.example"})), &both).is_ok());
+        assert_eq!(check_id_token(&c(json!({"email":"bob@lab.example","hd":"example.org"})), &both).unwrap_err(), ClaimError::EmailDomain);
+        assert_eq!(check_id_token(&c(json!({"email":"bob@other.example"})), &both).unwrap_err(), ClaimError::EmailDomain);
+        // Guests: the configured claim and value, as a string, number, boolean or in a list.
+        let guest = Expect { guest: Some(("acct", "1")), ..expect() };
+        assert!(!check_id_token(&c(json!({})), &guest).unwrap().guest);
+        assert!(check_id_token(&c(json!({"acct": 1})), &guest).unwrap().guest);
+        assert!(check_id_token(&c(json!({"acct": "1"})), &guest).unwrap().guest);
+        assert!(!check_id_token(&c(json!({"acct": 0})), &guest).unwrap().guest);
+        assert!(check_id_token(&c(json!({"acct": ["x", "1"]})), &guest).unwrap().guest);
+        // A refreshed ID token need not carry the nonce; every other claim is checked as at sign-in.
+        assert!(check_refreshed_id_token(&c(json!({"nonce":null})), &e).is_ok());
+        assert_eq!(check_refreshed_id_token(&c(json!({"nonce":null,"aud":"other"})), &e).unwrap_err(), ClaimError::Audience);
+        assert_eq!(check_refreshed_id_token(&c(json!({"nonce":null,"exp":1000})), &e).unwrap_err(), ClaimError::Expired);
     }
     #[test]
     fn logout_token_checks() {

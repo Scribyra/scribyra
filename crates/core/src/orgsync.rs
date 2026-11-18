@@ -233,20 +233,6 @@ pub fn is_uuid(value: &str) -> bool {
             }
         })
 }
-/// The Ed25519 seed an operator's single-use setup secret stands for.
-pub fn enrol_seed(secret: &[u8]) -> Result<Vec<u8>> {
-    if secret.len() != 32 {
-        return Err(fail("invalid setup secret"));
-    }
-    hkdf_sha256(secret, b"scribyra-enrol/1", b"signing", 32)
-}
-/// What the setup code's key signs: every genesis field except its own signature, so the
-/// operator's setup code vouches for the owner's keys, the mode, admin read access, the
-/// service key and the encrypted names exactly as the owner chose them.
-pub fn enrol_message(org: &str, body: &GenesisBody) -> Vec<u8> {
-    let value = without(&serde_json::to_value(body).expect("genesis body serialises"), "enrolSig");
-    format!("scribyra-org-enrol/2\n{org}\n{}", canonical(&value).expect("genesis body is canonical JSON")).into_bytes()
-}
 /// Ed25519 seed and X25519 secret derived from a 32-byte recovery code.
 pub fn recovery_secrets(code: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
     if code.len() != 32 {
@@ -648,18 +634,15 @@ mod tests {
     }
     fn genesis() -> Fixture {
         let org = hex(&[7; 32]);
-        let secret = [9u8; 32];
-        let enrol = enrol_seed(&secret).unwrap();
         let device_seed = vec![1u8; 32];
         let device = hex(&ed25519_public(&device_seed).unwrap());
         let agreement = hex(&x25519_public(&[2u8; 32]).unwrap());
         let person = person_id(&org, &device).unwrap();
         let name = hex(&[0x4e; 60]);
-        let mut body = GenesisBody { person: person.clone(), device: device.clone(), agreement, enrol: hex(&ed25519_public(&enrol).unwrap()), enrol_sig: String::new(), mode: "e2ee".into(), admin_read: true, name: name.clone(), directory_commit: hex(&[0x44; 32]), owner_name: name, service_key: None };
-        body.enrol_sig = sign(&enrol, &enrol_message(&org, &body));
+        let body = GenesisBody { person: person.clone(), device: device.clone(), agreement, name: name.clone(), directory_commit: hex(&[0x44; 32]), owner_name: name };
         let raw = event(&org, &org, "genesis", serde_json::to_value(&body).unwrap(), &device_seed);
         let mut state = OrgState::new(&org).unwrap();
-        state.apply(&raw, Some(&body.enrol)).unwrap();
+        state.apply(&raw).unwrap();
         Fixture { org, state, device_seed, person }
     }
 
@@ -701,16 +684,17 @@ mod tests {
     }
 
     #[test]
-    fn genesis_requires_the_setup_key_and_a_canonical_signed_chain() {
+    fn genesis_needs_a_valid_body_and_a_canonical_signed_chain() {
         let f = genesis();
         assert_eq!(f.state.persons[&f.person].role, "owner");
-        // A second genesis or a replay is refused.
         let mut copy = OrgState::new(&f.org).unwrap();
-        let wrong_enrol = hex(&[1u8; 32]);
         let device = hex(&ed25519_public(&f.device_seed).unwrap());
         assert!(f.state.key_role(&device).is_some());
         let raw = event(&f.org, &f.org, "genesis", json!({}), &f.device_seed);
-        assert!(copy.apply(&raw, Some(&wrong_enrol)).is_err());
+        assert!(copy.apply(&raw).is_err());
+        // A non-canonical event (same content, other spacing) is refused.
+        let spaced = event(&f.org, &f.org, "genesis", json!({}), &f.device_seed).replace(",", ", ");
+        assert!(copy.apply(&spaced).is_err());
     }
 
     #[test]
@@ -720,10 +704,10 @@ mod tests {
         let rsign_pub = hex(&ed25519_public(&rsign).unwrap());
         let ragree_pub = hex(&x25519_public(&ragree).unwrap());
         let unproven = event(&f.org, &f.state.head.clone(), "recovery.set", json!({"person":f.person,"signing":rsign_pub,"agreement":ragree_pub,"proof":hex(&[0u8;64])}), &f.device_seed);
-        assert!(f.state.apply(&unproven, None).is_err());
+        assert!(f.state.apply(&unproven).is_err());
         let rproof = sign(&rsign, &recovery_proof_message(&f.org, &f.state.head, &f.person, &rsign_pub, &ragree_pub));
         let set = event(&f.org, &f.state.head.clone(), "recovery.set", json!({"person":f.person,"signing":rsign_pub,"agreement":ragree_pub,"proof":rproof}), &f.device_seed);
-        f.state.apply(&set, None).unwrap();
+        f.state.apply(&set).unwrap();
         assert_eq!(f.state.key_role(&rsign_pub), Some(KeyRole::Recovery { person: f.person.clone() }));
         // New device certified by the recovery key, with proof of possession.
         let new_seed = [21u8; 32];
@@ -732,15 +716,15 @@ mod tests {
         let proof = sign(&new_seed, &device_proof_message(&f.org, &f.state.head, &f.person, &new_device, &new_agree));
         let bad_proof = sign(&[23u8; 32], &device_proof_message(&f.org, &f.state.head, &f.person, &new_device, &new_agree));
         let forged = event(&f.org, &f.state.head.clone(), "device.add", json!({"person":f.person,"device":new_device,"agreement":new_agree,"proof":bad_proof}), &rsign);
-        assert!(f.state.apply(&forged, None).is_err());
+        assert!(f.state.apply(&forged).is_err());
         let add = event(&f.org, &f.state.head.clone(), "device.add", json!({"person":f.person,"device":new_device,"agreement":new_agree,"proof":proof}), &rsign);
-        f.state.apply(&add, None).unwrap();
+        f.state.apply(&add).unwrap();
         assert_eq!(f.state.device_person(&new_device), Some(f.person.as_str()));
         // Replaying the same event fails because the head moved.
-        assert!(f.state.apply(&add, None).is_err());
+        assert!(f.state.apply(&add).is_err());
         // A stranger's key cannot certify.
         let stranger = event(&f.org, &f.state.head.clone(), "device.add", json!({"person":f.person,"device":hex(&[5u8;32]),"agreement":hex(&[6u8;32]),"proof":proof}), &[77u8; 32]);
-        assert!(f.state.apply(&stranger, None).is_err());
+        assert!(f.state.apply(&stranger).is_err());
     }
 
     #[test]
@@ -749,9 +733,9 @@ mod tests {
         let project = hex(&[8u8; 32]);
         let pk = [33u8; 32];
         let create = event(&f.org, &f.state.head.clone(), "project.create", json!({"project":project,"epoch":1,"keyCommit":key_commit(&pk)}), &f.device_seed);
-        f.state.apply(&create, None).unwrap();
+        f.state.apply(&create).unwrap();
         assert!(f.state.can_access(&f.person, &project));
-        assert!(f.state.apply(&event(&f.org, &f.state.head.clone(), "project.create", json!({"project":project,"epoch":1,"keyCommit":key_commit(&pk)}), &f.device_seed), None).is_err());
+        assert!(f.state.apply(&event(&f.org, &f.state.head.clone(), "project.create", json!({"project":project,"epoch":1,"keyCommit":key_commit(&pk)}), &f.device_seed)).is_err());
         let device = hex(&ed25519_public(&f.device_seed).unwrap());
         let recipient = f.state.devices[&device].agreement.clone();
         let mut wrap = json!({"v":1,"org":f.org,"project":project,"epoch":1,"recipient":recipient,"enc":hex(&[1u8;32]),"nonce":hex(&[2u8;24]),"ct":hex(&[3u8;48]),"sender":device});

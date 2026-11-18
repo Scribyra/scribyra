@@ -20,8 +20,10 @@
 //! Endpoints: discovery, `/jwks`, `/authorize` (a plain login form; with `test_shortcuts`
 //! also `login_hint=<username>&test_password=<password>` to skip it), `/login`, `/token`
 //! (authorization code with PKCE S256, client_secret_basic or client_secret_post; refresh
-//! tokens rotate and are refused for disabled users), `/end_session`. On a loopback bind only,
-//! `/control/disable?user=`, `/control/enable?user=`, `/control/rotate[?drop=1]`,
+//! tokens rotate and are refused for disabled users; a refresh returns a new ID token without a
+//! nonce), `/end_session`. A user's `claims` object adds claims to their ID tokens (for example
+//! a guest marker). On a loopback bind only, `/control/disable?user=`, `/control/enable?user=`,
+//! `/control/groups?user=&groups=a,b` (the user's groups from now on), `/control/rotate[?drop=1]`,
 //! `/control/fault?kind=` (the next ID token is defective: `bad_signature`, `wrong_aud`,
 //! `wrong_iss`, `wrong_nonce`, `expired`, `alg_none`, `alg_hs256`, `unknown_kid`,
 //! `no_kid_multi_key` or `email_unverified`) and `/control/backchannel?user=` (posts a signed
@@ -81,6 +83,8 @@ struct User {
     groups: Vec<String>,
     #[serde(default)]
     hd: Option<String>,
+    #[serde(default)]
+    claims: serde_json::Map<String, Value>,
     #[serde(default)]
     disabled: bool,
 }
@@ -186,6 +190,8 @@ struct Idp {
     codes: Mutex<HashMap<String, Code>>,
     refresh: Mutex<HashMap<String, Refresh>>,
     disabled: Mutex<HashSet<String>>,
+    /// Groups set through `/control/groups`, replacing a user's configured ones.
+    groups: Mutex<HashMap<String, Vec<String>>>,
     sids: Mutex<HashMap<String, String>>,
     fault: Mutex<Option<String>>,
 }
@@ -228,15 +234,24 @@ impl Idp {
     fn client(&self, client_id: &str) -> Option<&Client> {
         self.config.clients.iter().find(|c| c.client_id == client_id)
     }
-    fn id_token(&self, client_id: &str, user: &User, nonce: &str, sid: &str) -> String {
-        let fault = self.fault.lock().unwrap().take();
+    /// An ID token for a sign-in (with its nonce, and any pending fault) or, without a nonce,
+    /// for a refresh.
+    fn id_token(&self, client_id: &str, user: &User, nonce: Option<&str>, sid: &str) -> String {
+        let fault = if nonce.is_some() { self.fault.lock().unwrap().take() } else { None };
         let fault = fault.as_deref().unwrap_or("");
         let now = now();
+        let groups = self.groups.lock().unwrap().get(&user.username).cloned().unwrap_or_else(|| user.groups.clone());
         let mut claims = json!({
             "iss": self.config.issuer, "sub": user.sub, "aud": client_id, "exp": now + 300, "iat": now,
-            "auth_time": now, "nonce": nonce, "sid": sid, "email": user.email, "email_verified": user.email_verified,
-            "name": user.name, "groups": user.groups,
+            "auth_time": now, "sid": sid, "email": user.email, "email_verified": user.email_verified,
+            "name": user.name, "groups": groups,
         });
+        if let Some(nonce) = nonce {
+            claims["nonce"] = json!(nonce);
+        }
+        for (k, v) in &user.claims {
+            claims[k] = v.clone();
+        }
         if let Some(hd) = &user.hd {
             claims["hd"] = json!(hd);
         }
@@ -430,9 +445,7 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
     let refresh = random_hex();
     idp.refresh.lock().unwrap().insert(refresh.clone(), Refresh { client_id: client.client_id.clone(), username: user.username.clone() });
     let mut body = json!({"access_token": random_hex(), "token_type": "Bearer", "expires_in": 300, "refresh_token": refresh});
-    if let Some(nonce) = nonce {
-        body["id_token"] = json!(idp.id_token(&client.client_id, &user, &nonce, &sid));
-    }
+    body["id_token"] = json!(idp.id_token(&client.client_id, &user, nonce.as_deref(), &sid));
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
 async fn end_session() -> Response {
@@ -450,6 +463,10 @@ async fn control(State(idp): State<Shared>, ConnectInfo(peer): ConnectInfo<Socke
         }
         "enable" => {
             idp.disabled.lock().unwrap().remove(&arg("user"));
+        }
+        "groups" => {
+            let groups = arg("groups").split(',').filter(|g| !g.is_empty()).map(str::to_owned).collect();
+            idp.groups.lock().unwrap().insert(arg("user"), groups);
         }
         "fault" => {
             const KINDS: [&str; 10] = ["bad_signature", "wrong_aud", "wrong_iss", "wrong_nonce", "expired", "alg_none", "alg_hs256", "unknown_kid", "no_kid_multi_key", "email_unverified"];
@@ -544,6 +561,7 @@ async fn main() {
         codes: Mutex::default(),
         refresh: Mutex::default(),
         disabled: Mutex::default(),
+        groups: Mutex::default(),
         sids: Mutex::default(),
         fault: Mutex::default(),
     });
