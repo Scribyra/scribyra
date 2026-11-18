@@ -250,6 +250,7 @@ fn verify_detects_a_missing_s3_object() {
             .trim()
             .into(),
         path_style: true,
+        ca_pem: None,
     };
     let store = scribyra_sync::blobs::S3BlobStore::new(settings).unwrap();
     let key = scribyra_sync::blobs::BlobKey::new(format!("objects/{}/{}", s.namespace, sha256(&a)))

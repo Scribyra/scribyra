@@ -164,6 +164,27 @@ async fn record_deployment(pool: &PgPool, deployment: &crate::config::Deployment
     Ok(org)
 }
 
+/// Apply pending migrations and return the schema version, without opening the blob store or
+/// serving: `scribyra-sync migrate`, which the Kubernetes operator runs as a Job before it rolls
+/// out a new version. Takes the same ownership lock as [`Store::open`], so it refuses to run
+/// while another process owns the database; an unknown (newer) applied migration is refused
+/// exactly as at startup.
+pub async fn migrate(config: &Config) -> Result<i64, Error> {
+    let options = PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?
+        .application_name("scribyra-sync-migrate");
+    let mut owner = PgConnection::connect_with(&options).await?;
+    let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        .bind(LOCK_KEY)
+        .fetch_one(&mut owner)
+        .await?;
+    if !locked {
+        return Err("database is owned by another process".into());
+    }
+    MIGRATOR.run(&mut owner).await?;
+    let _: bool = sqlx::query_scalar("SELECT pg_advisory_unlock($1)").bind(LOCK_KEY).fetch_one(&mut owner).await?;
+    Ok(MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0))
+}
+
 impl Store {
     /// Connect, take single-process ownership, apply migrations and open the blob store.
     /// Does not read stored objects: use [`Store::verify`] for a full check.

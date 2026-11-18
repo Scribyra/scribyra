@@ -263,6 +263,9 @@ pub struct S3Settings {
     pub access_key_id: String,
     pub secret_access_key: String,
     pub path_style: bool,
+    /// PEM certificate authority that alone is trusted for the endpoint, instead of the
+    /// platform's (an in-cluster store with a private CA, such as the operator's Garage).
+    pub ca_pem: Option<Vec<u8>>,
 }
 impl fmt::Debug for S3Settings {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -311,9 +314,22 @@ impl S3BlobStore {
             .map_err(|_| invalid())?;
         let credentials =
             rusty_s3::Credentials::new(settings.access_key_id, settings.secret_access_key);
-        let tls = ureq::tls::TlsConfig::builder()
-            .root_certs(ureq::tls::RootCerts::PlatformVerifier)
-            .build();
+        let roots = match &settings.ca_pem {
+            None => ureq::tls::RootCerts::PlatformVerifier,
+            Some(pem) => {
+                let certs = ureq::tls::parse_pem(pem)
+                    .filter_map(|item| match item {
+                        Ok(ureq::tls::PemItem::Certificate(cert)) => Some(cert),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                if certs.is_empty() {
+                    return Err(invalid());
+                }
+                ureq::tls::RootCerts::Specific(std::sync::Arc::new(certs))
+            }
+        };
+        let tls = ureq::tls::TlsConfig::builder().root_certs(roots).build();
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(S3_TIMEOUT))
             .max_redirects(0)

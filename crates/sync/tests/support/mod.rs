@@ -323,6 +323,7 @@ impl Garage {
             access_key_id: self.key_id.clone(),
             secret_access_key: self.secret.clone(),
             path_style: true,
+            ca_pem: None,
         }
     }
     /// Service configuration fields for a fresh bucket.

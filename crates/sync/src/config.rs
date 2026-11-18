@@ -38,6 +38,8 @@ pub struct Config {
     pub s3_access_key_id: Option<String>,
     pub s3_secret_access_key_file: Option<PathBuf>,
     pub s3_path_style: bool,
+    /// PEM file with the only certificate authority trusted for `s3_endpoint` (optional).
+    pub s3_ca_file: Option<PathBuf>,
     pub origins: Vec<String>,
     pub principals: Vec<Principal>,
     pub object_bytes: usize,
@@ -102,6 +104,7 @@ impl Default for Config {
             s3_access_key_id: None,
             s3_secret_access_key_file: None,
             s3_path_style: false,
+            s3_ca_file: None,
             origins: vec![],
             principals: vec![],
             object_bytes: 8 * 1024 * 1024,
@@ -201,6 +204,10 @@ impl Config {
                     .ok_or("incomplete s3 settings")?,
             )?,
             path_style: self.s3_path_style,
+            ca_pem: match &self.s3_ca_file {
+                Some(path) => Some(std::fs::read(path).map_err(|_| "s3_ca_file cannot be read")?),
+                None => None,
+            },
         }))
     }
     /// Startup checks of the files the configuration names: the master key and each provider's
