@@ -86,6 +86,28 @@ pub struct Config {
     /// The organisation this deployment serves: its policy and sign-in providers. Optional only
     /// so a plain object store and relay can run without one; every organisation route needs it.
     pub deployment: Option<Deployment>,
+    /// Apply pending migrations at start (default). With `false` the service refuses to start
+    /// unless the database schema is exactly the one it was built for; run `scribyra-sync
+    /// migrate` (for example as a Kubernetes Job) first.
+    pub migrate_on_start: bool,
+    /// After SIGTERM: stop accepting, end long polls, and give in-flight requests this long to
+    /// finish before exiting 0.
+    pub shutdown_grace_seconds: u64,
+    /// Server-readable mode: largest log entry (one Yjs update, or a project's initial state).
+    pub sr_entry_bytes: usize,
+    /// Server-readable mode: largest asset or history object.
+    pub sr_object_bytes: usize,
+    /// Server-readable mode: write a snapshot after this many entries since the last one...
+    pub sr_snapshot_entries: u64,
+    /// ...or after this many stored bytes of entries since the last one.
+    pub sr_snapshot_bytes: u64,
+    /// Server-readable mode: how long a snapshot must be durable before the floor moves to it
+    /// (offline copies resume from entries within this window).
+    pub sr_retention_seconds: u64,
+    /// Server-readable mode: days until a pending invitation expires.
+    pub sr_invitation_days: u32,
+    /// Server-readable mode: how often background maintenance (erasure, floors, garbage) runs.
+    pub sr_maintenance_seconds: u64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -138,9 +160,34 @@ impl Default for Config {
             sso_recheck_tick_seconds: 60,
             sso_jwks_refetch_seconds: 60,
             deployment: None,
+            migrate_on_start: true,
+            shutdown_grace_seconds: 25,
+            sr_entry_bytes: 16 * 1024 * 1024,
+            sr_object_bytes: 32 * 1024 * 1024,
+            sr_snapshot_entries: 2000,
+            sr_snapshot_bytes: 32 * 1024 * 1024,
+            sr_retention_seconds: 7 * 24 * 3600,
+            sr_invitation_days: 30,
+            sr_maintenance_seconds: 30,
         }
     }
 }
+/// The `deployment` fields that `SCRIBYRA_SERVICE_DEPLOYMENT_<FIELD>` can set one by one; the
+/// listed ones are plain text, the others JSON.
+const DEPLOYMENT_FIELDS: [(&str, bool); 12] = [
+    ("name", true),
+    ("encryption", true),
+    ("offline", false),
+    ("compile", true),
+    ("link_sharing", false),
+    ("guests", true),
+    ("admins", false),
+    ("providers", false),
+    ("quotas", false),
+    ("audit_retention_days", false),
+    ("compile_limits", false),
+    ("texlive", true),
+];
 impl Config {
     /// The deployment's master key, if configured.
     pub fn master_key(&self) -> Result<Option<[u8; 32]>, Box<dyn std::error::Error>> {
@@ -150,13 +197,24 @@ impl Config {
         Ok(Some(key))
     }
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
+        let file = match std::env::var("SCRIBYRA_SERVICE_CONFIG") {
+            Ok(path) => Some(std::fs::read(path)?),
+            Err(_) => None,
+        };
+        Self::from_sources(file.as_deref(), |name| std::env::var(name).ok())
+    }
+    /// The configuration from a file's bytes (if any) and environment variables (`env` looks
+    /// one up by name): `SCRIBYRA_SERVICE_<FIELD>` replaces a top-level field (plain text for
+    /// string and optional fields, JSON otherwise; `SCRIBYRA_SERVICE_DEPLOYMENT` is JSON), then
+    /// `SCRIBYRA_SERVICE_DEPLOYMENT_<FIELD>` replaces one field of the deployment object.
+    pub fn from_sources(file: Option<&[u8]>, env: impl Fn(&str) -> Option<String>) -> Result<Self, Box<dyn std::error::Error>> {
         let mut value = serde_json::to_value(Self::default())?;
-        if let Ok(path) = std::env::var("SCRIBYRA_SERVICE_CONFIG") {
-            let file: Self = serde_json::from_slice(&std::fs::read(path)?)?;
+        if let Some(bytes) = file {
+            let file: Self = serde_json::from_slice(bytes)?;
             value = serde_json::to_value(file)?;
         }
         for (name, slot) in value.as_object_mut().unwrap() {
-            if let Ok(raw) = std::env::var(format!("SCRIBYRA_SERVICE_{}", name.to_uppercase())) {
+            if let Some(raw) = env(&format!("SCRIBYRA_SERVICE_{}", name.to_uppercase())) {
                 // Optional fields default to null and are strings or paths, except the
                 // deployment object, which is JSON like every other structured field.
                 *slot = if name == "deployment" {
@@ -166,6 +224,17 @@ impl Config {
                 } else {
                     serde_json::from_str(&raw)?
                 };
+            }
+        }
+        // Nested deployment fields, after SCRIBYRA_SERVICE_DEPLOYMENT (which they refine).
+        for (name, text) in DEPLOYMENT_FIELDS {
+            if let Some(raw) = env(&format!("SCRIBYRA_SERVICE_DEPLOYMENT_{}", name.to_uppercase())) {
+                let slot = value.as_object_mut().unwrap().entry("deployment").or_insert(serde_json::Value::Null);
+                if slot.is_null() {
+                    *slot = serde_json::json!({});
+                }
+                let field = if text { raw.into() } else { serde_json::from_str(&raw)? };
+                slot.as_object_mut().ok_or("deployment must be an object")?.insert(name.into(), field);
             }
         }
         let config: Self = serde_json::from_value(value)?;
@@ -226,6 +295,16 @@ impl Config {
             || self.sessions > 1_000_000
         {
             return Err("invalid organisation limits");
+        }
+        if !(1..=3600).contains(&self.shutdown_grace_seconds) {
+            return Err("shutdown_grace_seconds must be 1-3600");
+        }
+        let blob_max = scribyra_core::blob::MAX_BLOB_BYTES - 64;
+        if !(1024..=blob_max).contains(&self.sr_entry_bytes) || !(1024..=blob_max).contains(&self.sr_object_bytes) {
+            return Err("sr_entry_bytes and sr_object_bytes must be 1 KiB to 64 MiB less 64 bytes");
+        }
+        if self.sr_snapshot_entries == 0 || self.sr_snapshot_bytes == 0 || self.sr_retention_seconds > 366 * 24 * 3600 || !(1..=365).contains(&self.sr_invitation_days) || !(1..=3600).contains(&self.sr_maintenance_seconds) {
+            return Err("invalid server-readable limits (sr_snapshot_entries, sr_snapshot_bytes, sr_retention_seconds, sr_invitation_days, sr_maintenance_seconds)");
         }
         if !(1..=3600).contains(&self.sso_recheck_tick_seconds) || self.sso_jwks_refetch_seconds > 3600 {
             return Err("invalid single sign-on limits");
@@ -708,6 +787,42 @@ mod tests {
         p["scopes"] = json!(["groups"]);
         let c = config(deployment(json!({"providers": [p], "guests": "shared"}))).unwrap();
         assert_eq!(c.deployment.unwrap().providers[0].scope(), "openid email profile offline_access groups");
+    }
+
+    #[test]
+    fn every_field_and_each_deployment_field_can_come_from_the_environment() {
+        let dir = std::env::temp_dir().join(format!("scribyra-config-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (secret, key) = (dir.join("secret"), dir.join("master.key"));
+        std::fs::write(&secret, "s3cret\n").unwrap();
+        std::fs::write(&key, [7u8; 32]).unwrap();
+        let file = json!({"database_url_file": dir.join("db"), "public_url": "https://scribyra.acme.org", "deployment": deployment(json!({"encryption": "e2ee"}))});
+        let mut provider = provider();
+        provider["client_secret_file"] = json!(secret);
+        let env: std::collections::HashMap<String, String> = [
+            ("SCRIBYRA_SERVICE_MIGRATE_ON_START", "false".to_string()),
+            ("SCRIBYRA_SERVICE_SHUTDOWN_GRACE_SECONDS", "7".to_string()),
+            ("SCRIBYRA_SERVICE_SERVICE_KEY_FILE", key.display().to_string()),
+            ("SCRIBYRA_SERVICE_SR_RETENTION_SECONDS", "0".to_string()),
+            ("SCRIBYRA_SERVICE_DEPLOYMENT_NAME", "Env Lab".to_string()),
+            ("SCRIBYRA_SERVICE_DEPLOYMENT_ENCRYPTION", "server".to_string()),
+            ("SCRIBYRA_SERVICE_DEPLOYMENT_OFFLINE", "false".to_string()),
+            ("SCRIBYRA_SERVICE_DEPLOYMENT_PROVIDERS", json!([provider]).to_string()),
+            ("SCRIBYRA_SERVICE_DEPLOYMENT_QUOTAS", json!({"project_bytes": 1000}).to_string()),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect();
+        let c = Config::from_sources(Some(file.to_string().as_bytes()), |name| env.get(name).cloned()).unwrap();
+        assert_eq!((c.migrate_on_start, c.shutdown_grace_seconds, c.sr_retention_seconds), (false, 7, 0));
+        let d = c.deployment.unwrap();
+        assert_eq!((d.name.as_str(), d.encryption, d.offline, d.quotas.project_bytes, d.quotas.deployment_bytes), ("Env Lab", Encryption::Server, false, 1000, 100 << 30));
+        // Nested fields alone make a deployment; values still go through validation.
+        let only: std::collections::HashMap<&str, String> = [("SCRIBYRA_SERVICE_DATABASE_URL", "postgres://x/y".into()), ("SCRIBYRA_SERVICE_PUBLIC_URL", "https://a.example.org".into()), ("SCRIBYRA_SERVICE_DEPLOYMENT_NAME", "Lab".into()), ("SCRIBYRA_SERVICE_DEPLOYMENT_ENCRYPTION", "e2ee".into()), ("SCRIBYRA_SERVICE_DEPLOYMENT_PROVIDERS", json!([provider]).to_string())].into();
+        assert_eq!(Config::from_sources(None, |n| only.get(n).cloned()).unwrap().deployment.unwrap().name, "Lab");
+        let bad: std::collections::HashMap<&str, String> = [("SCRIBYRA_SERVICE_DATABASE_URL", "postgres://x/y".into()), ("SCRIBYRA_SERVICE_SHUTDOWN_GRACE_SECONDS", "0".into())].into();
+        assert!(Config::from_sources(None, |n| bad.get(n).cloned()).err().unwrap().to_string().contains("shutdown_grace_seconds"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -1,10 +1,11 @@
 use scribyra_sync::{config::Config, migrate_sqlite, service, store::Store};
 use std::{path::PathBuf, process::ExitCode};
 
-const USAGE: &str = "usage: scribyra-sync [serve] | verify | migrate-sqlite <old-data-dir>";
+const USAGE: &str = "usage: scribyra-sync [serve] | migrate | verify | migrate-sqlite <old-data-dir>";
 
 enum Command {
     Serve,
+    Migrate,
     Verify,
     MigrateSqlite(PathBuf),
 }
@@ -13,6 +14,7 @@ fn parse(args: &[String]) -> Option<Command> {
         [] => Some(Command::Serve),
         [cmd] if cmd == "serve" => Some(Command::Serve),
         [cmd] if cmd == "verify" => Some(Command::Verify),
+        [cmd] if cmd == "migrate" => Some(Command::Migrate),
         [cmd, dir] if cmd == "migrate-sqlite" => Some(Command::MigrateSqlite(dir.into())),
         _ => None,
     }
@@ -30,9 +32,17 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
             return Err(text.into());
         }
     };
+    if let Command::Migrate = command {
+        // Applies migrations and exits: the operator runs it as a Job before replicas start.
+        let applied = scribyra_sync::store::migrate(&config).await?;
+        let schema = scribyra_sync::store::MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
+        println!("{}", serde_json::json!({"event": "migrated", "applied": applied, "schema": schema}));
+        return Ok(ExitCode::SUCCESS);
+    }
     let store = Store::open(config).await?;
     match command {
         Command::Serve => service::serve(store).await.map(|()| ExitCode::SUCCESS),
+        Command::Migrate => unreachable!(),
         Command::Verify => {
             let report = store.verify().await?;
             println!(

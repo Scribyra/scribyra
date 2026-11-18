@@ -2,7 +2,8 @@
 //!
 //! Invariants: a metadata row exists only after its blob is durable; every read verifies the
 //! hash; quota scopes are locked `FOR UPDATE` in a fixed order (global first) and charged in
-//! the same transaction as the insert; one process owns the database (advisory lock).
+//! the same transaction as the insert; one process owns the database (advisory lock), except in
+//! a server-readable deployment, whose replicas keep no state in memory and share it.
 use crate::{
     blobs::{BlobError, BlobKey, BlobStore, Bytes, FsBlobStore, S3BlobStore},
     config::{BlobBackend, Config},
@@ -164,15 +165,70 @@ async fn record_deployment(pool: &PgPool, deployment: &crate::config::Deployment
     Ok(org)
 }
 
+/// Whether the database schema matches the migrations this build embeds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Schema {
+    Current,
+    /// Migrations this build has are not applied (run `scribyra-sync migrate`).
+    Behind,
+    /// The database has migrations this build does not know (a newer version migrated it).
+    Ahead,
+}
+impl Schema {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Behind => "behind",
+            Self::Ahead => "ahead",
+        }
+    }
+}
+/// Compares the applied migrations with [`MIGRATOR`] (version and checksum).
+pub async fn schema(pool: &PgPool) -> Result<Schema, Error> {
+    let exists: bool = sqlx::query_scalar("SELECT to_regclass('_sqlx_migrations') IS NOT NULL").fetch_one(pool).await?;
+    if !exists {
+        return Ok(Schema::Behind);
+    }
+    let applied: Vec<(i64, Vec<u8>)> = sqlx::query_as("SELECT version, checksum FROM _sqlx_migrations WHERE success").fetch_all(pool).await?;
+    if applied.iter().any(|(v, _)| !MIGRATOR.iter().any(|m| m.version == *v)) {
+        return Ok(Schema::Ahead);
+    }
+    for m in MIGRATOR.iter() {
+        match applied.iter().find(|(v, _)| *v == m.version) {
+            None => return Ok(Schema::Behind),
+            Some((_, checksum)) if checksum.as_slice() != &*m.checksum => return Err("an applied migration differs from this build's".into()),
+            Some(_) => {}
+        }
+    }
+    Ok(Schema::Current)
+}
+/// `scribyra-sync migrate`: applies pending migrations and returns how many there were. Takes no
+/// ownership lock (the migrator takes its own), so it can run while replicas serve.
+pub async fn migrate(config: &Config) -> Result<usize, Error> {
+    let options = PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?.application_name("scribyra-sync-migrate");
+    let pool = PgPoolOptions::new().max_connections(1).acquire_timeout(Duration::from_secs(30)).connect_with(options).await?;
+    let before: i64 = match schema(&pool).await? {
+        Schema::Ahead => return Err("the database schema is newer than this build".into()),
+        _ => sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success").fetch_one(&pool).await.unwrap_or(0),
+    };
+    MIGRATOR.run(&pool).await?;
+    let after: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success").fetch_one(&pool).await?;
+    pool.close().await;
+    Ok((after - before).max(0) as usize)
+}
+
 impl Store {
-    /// Connect, take single-process ownership, apply migrations and open the blob store.
+    /// Connect, take ownership, apply migrations (or, with `migrate_on_start: false`, check that
+    /// they are applied) and open the blob store. End-to-end and plain deployments take
+    /// single-process ownership; server-readable replicas share it.
     /// Does not read stored objects: use [`Store::verify`] for a full check.
     pub async fn open(config: Config) -> Result<Self, Error> {
         let options =
             PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?
                 .application_name("scribyra-sync");
         let mut owner = PgConnection::connect_with(&options).await?;
-        let locked: bool = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+        let shared = config.deployment.as_ref().is_some_and(|d| d.encryption == crate::config::Encryption::Server);
+        let locked: bool = sqlx::query_scalar(if shared { "SELECT pg_try_advisory_lock_shared($1)" } else { "SELECT pg_try_advisory_lock($1)" })
             .bind(LOCK_KEY)
             .fetch_one(&mut owner)
             .await?;
@@ -184,7 +240,15 @@ impl Store {
             .acquire_timeout(Duration::from_secs(10))
             .connect_with(options)
             .await?;
-        MIGRATOR.run(&pool).await?;
+        if config.migrate_on_start {
+            MIGRATOR.run(&pool).await?;
+        } else {
+            let found = schema(&pool).await?;
+            if found != Schema::Current {
+                println!("{}", serde_json::json!({"event": "schema_mismatch", "schema": found.as_str()}));
+                return Err("the database schema does not match this build".into());
+            }
+        }
         let (blobs, directory): (Arc<dyn BlobStore>, _) = match config.blob_store {
             BlobBackend::Filesystem => {
                 let data = config.data.clone();
@@ -232,9 +296,12 @@ impl Store {
         Ok(store)
     }
 
-    /// Readiness: a pooled round trip, the ownership connection, and a blob store probe.
+    /// Readiness: a pooled round trip, the schema this build expects, the ownership connection,
+    /// and a blob store probe.
     pub async fn ready(&self) -> Result<(), Error> {
-        sqlx::query("SELECT 1").execute(&self.pool).await?;
+        if schema(&self.pool).await? != Schema::Current {
+            return Err("schema mismatch".into());
+        }
         self.owner_alive().await?;
         self.blobs.probe().await?;
         Ok(())

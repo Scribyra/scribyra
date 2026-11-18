@@ -183,6 +183,10 @@ impl Orgs {
         Ok(guard.as_mut().unwrap())
     }
     fn session(&self, headers: &HeaderMap) -> Result<Session, Response> {
+        // Only an end-to-end deployment has these routes at all.
+        if self.org.is_none() {
+            return Err(error(StatusCode::NOT_FOUND, "unknown organisation"));
+        }
         let token = headers
             .get(header::AUTHORIZATION)
             .and_then(|v| v.to_str().ok())

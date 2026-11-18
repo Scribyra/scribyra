@@ -18,6 +18,10 @@
 //! account was disabled) the login is revoked and the link blocked; when a refreshed ID token
 //! shows the account no longer passes the group rules, its logins are revoked.
 //!
+//! Every sign-in makes or updates an **account** (`accounts`, one per provider and subject), and
+//! sign-ins in progress, one-time grants and sessions live in PostgreSQL, so a sign-in started
+//! on one replica can finish on another.
+//!
 //! Never logged: tokens, codes, client secrets, ID tokens, emails or provider error text.
 pub mod jose;
 
@@ -78,6 +82,8 @@ impl Role {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Login {
     pub org: String,
+    /// The account this login belongs to (logins from before accounts existed have none).
+    pub account: Option<String>,
     /// The configured provider's ID.
     pub provider: String,
     pub issuer: String,
@@ -132,21 +138,38 @@ struct Endpoints {
     token_endpoint: String,
     jwks_uri: String,
 }
+/// A sign-in in progress (a row of `sso_flows`, consumed by the callback).
 struct Flow {
     provider: String,
     return_to: String,
     challenge: String,
     nonce: String,
     verifier: String,
-    until: Instant,
+    live: bool,
 }
+/// A one-time grant (a row of `sso_grants`, consumed by the redeem).
 struct Grant {
     provider: String,
     challenge: String,
     identity: Identity,
     refresh_token: Option<String>,
     session_seconds: i64,
-    until: Instant,
+}
+fn identity_json(id: &Identity) -> Value {
+    json!({"subject": id.subject, "email": id.email, "email_verified": id.email_verified, "name": id.name, "groups": id.groups, "sid": id.sid, "guest": id.guest})
+}
+fn identity_from_json(text: &str) -> Option<Identity> {
+    let v: Value = serde_json::from_str(text).ok()?;
+    let text = |name: &str| v.get(name).and_then(Value::as_str).map(str::to_owned);
+    Some(Identity {
+        subject: text("subject")?,
+        email: text("email"),
+        email_verified: v.get("email_verified")?.as_bool()?,
+        name: text("name"),
+        groups: v.get("groups")?.as_array()?.iter().filter_map(|g| g.as_str().map(str::to_owned)).collect(),
+        sid: text("sid"),
+        guest: v.get("guest")?.as_bool()?,
+    })
 }
 struct Keys {
     keys: Arc<Vec<jose::Jwk>>,
@@ -166,9 +189,6 @@ pub struct Sso {
     recheck_tick: Duration,
     discovery: Mutex<HashMap<String, (Endpoints, Instant)>>,
     jwks: Mutex<HashMap<String, Keys>>,
-    flows: Mutex<HashMap<String, Flow>>,
-    grants: Mutex<HashMap<String, Grant>>,
-    logout_jtis: Mutex<HashMap<String, Instant>>,
     revoked: broadcast::Sender<(String, String)>,
 }
 type Shared = Arc<Sso>;
@@ -266,9 +286,6 @@ impl Sso {
             outbound: Arc::new(Semaphore::new(MAX_OUTBOUND)),
             discovery: Mutex::default(),
             jwks: Mutex::default(),
-            flows: Mutex::default(),
-            grants: Mutex::default(),
-            logout_jtis: Mutex::default(),
             revoked: broadcast::channel(1024).0,
         })
     }
@@ -287,8 +304,10 @@ impl Sso {
         }
         let Some(org) = &self.org else { return Ok(None) };
         let row = sqlx::query(
-            "SELECT provider, issuer, subject, email, email_verified, name, groups::text, guest, extract(epoch FROM expires)::bigint
-             FROM sso_logins WHERE token_hash = $1 AND org = $2 AND NOT revoked AND expires > now() AND provider IS NOT NULL",
+            "SELECT l.provider, l.issuer, l.subject, l.email, l.email_verified, l.name, l.groups::text, l.guest, extract(epoch FROM l.expires)::bigint, l.account
+             FROM sso_logins l LEFT JOIN accounts a ON a.account = l.account
+             WHERE l.token_hash = $1 AND l.org = $2 AND NOT l.revoked AND l.expires > now() AND l.provider IS NOT NULL
+               AND (a.account IS NULL OR a.state = 'active')",
         )
         .bind(sha256_hex(token.as_bytes()))
         .bind(org)
@@ -303,6 +322,7 @@ impl Sso {
         let Ok(role) = admit(deployment, configured, &subject, email.as_deref(), email_verified, &groups, guest) else { return Ok(None) };
         Ok(Some(Login {
             org: org.clone(),
+            account: row.get(9),
             provider,
             issuer,
             subject,
@@ -497,6 +517,9 @@ impl Sso {
             .bind(&subject)
             .fetch_optional(&mut *tx)
             .await?;
+            if block {
+                sqlx::query("UPDATE accounts SET state = 'blocked' WHERE issuer = $1 AND subject = $2 AND state = 'active'").bind(&issuer).bind(&subject).execute(&mut *tx).await?;
+            }
             if let Some(person) = person {
                 fired.push((org, person));
             }
@@ -613,7 +636,20 @@ impl Sso {
                     .bind(id.guest)
                     .execute(&self.store.pool)
                     .await?;
-                if admit(deployment, configured, subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest).is_err() {
+                let admitted = admit(deployment, configured, subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest);
+                if let Ok(role) = admitted {
+                    sqlx::query("UPDATE accounts SET email = $3, email_verified = $4, name = $5, role = $6, guest = $7 WHERE provider = $1 AND subject = $2")
+                        .bind(&configured.id)
+                        .bind(subject)
+                        .bind(&id.email)
+                        .bind(id.email_verified)
+                        .bind(&id.name)
+                        .bind(role.as_str())
+                        .bind(id.guest)
+                        .execute(&self.store.pool)
+                        .await?;
+                }
+                if admitted.is_err() {
                     log("sso_refused", "recheck_rules");
                     self.revoke_where(same_subject, &[Some(org), Some(&configured.issuer), Some(subject)], false).await?;
                     return Ok(Recheck::Revoked);
@@ -666,6 +702,9 @@ fn login_json(login: &Login, link: Option<(String, bool)>) -> Value {
         "subject": {"email": login.email, "name": login.name, "groups": login.groups},
         "person": link.map(|(p, _)| p),
         "state": state,
+        "account": login.account,
+        "email": login.email.as_ref().filter(|_| login.email_verified),
+        "name": login.name,
     })
 }
 /// The login token from `Authorization: ScribyraSSO <token>`, if well formed.
@@ -725,17 +764,32 @@ async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Re
         .append_pair("nonce", &nonce)
         .append_pair("code_challenge", &idp_challenge)
         .append_pair("code_challenge_method", "S256");
-    {
-        let mut flows = s.flows.lock().unwrap();
-        let now = Instant::now();
-        flows.retain(|_, f| f.until > now);
-        if flows.len() >= MAX_FLOWS || flows.values().filter(|f| f.provider == request.provider).count() >= MAX_FLOWS_PER_PROVIDER {
-            return error(StatusCode::SERVICE_UNAVAILABLE, "too many sign-ins in progress");
+    // In PostgreSQL, so the provider's redirect may reach any replica.
+    let stored = async {
+        let mut tx = s.store.pool.begin().await?;
+        sqlx::query("DELETE FROM sso_flows WHERE expires <= now()").execute(&mut *tx).await?;
+        sqlx::query("LOCK TABLE sso_flows IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
+        let (all, provider): (i64, i64) = sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE provider = $1) FROM sso_flows").bind(&request.provider).fetch_one(&mut *tx).await?;
+        if all as usize >= MAX_FLOWS || provider as usize >= MAX_FLOWS_PER_PROVIDER {
+            return Ok(false);
         }
-        flows.insert(
-            state,
-            Flow { provider: request.provider, return_to: request.return_to, challenge: request.challenge, nonce, verifier, until: now + Duration::from_secs(FLOW_SECONDS) },
-        );
+        sqlx::query("INSERT INTO sso_flows (state_hash, provider, return_to, challenge, nonce, verifier, expires) VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7))")
+            .bind(sha256_hex(state.as_bytes()))
+            .bind(&request.provider)
+            .bind(&request.return_to)
+            .bind(&request.challenge)
+            .bind(&nonce)
+            .bind(&verifier)
+            .bind(FLOW_SECONDS as f64)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(true)
+    };
+    match stored.await {
+        Ok(true) => {}
+        Ok(false) => return error(StatusCode::SERVICE_UNAVAILABLE, "too many sign-ins in progress"),
+        Err(e) => return internal(e),
     }
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({"url": url.as_str()}))).into_response()
 }
@@ -756,12 +810,24 @@ fn fail(return_to: &str, code: &'static str) -> Response {
 }
 async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, String>>) -> Response {
     // Single use: the state is consumed whatever happens next.
-    let flow = query.get("state").and_then(|state| s.flows.lock().unwrap().remove(state));
-    let Some(flow) = flow else {
-        log("sso_refused", "state");
-        return error(StatusCode::BAD_REQUEST, "unknown or expired sign-in");
+    let flow = match query.get("state") {
+        Some(state) => sqlx::query_as::<_, (String, String, String, String, String, bool)>(
+            "DELETE FROM sso_flows WHERE state_hash = $1 RETURNING provider, return_to, challenge, nonce, verifier, expires > now()",
+        )
+        .bind(sha256_hex(state.as_bytes()))
+        .fetch_optional(&s.store.pool)
+        .await,
+        None => Ok(None),
     };
-    if flow.until <= Instant::now() {
+    let flow = match flow {
+        Ok(Some((provider, return_to, challenge, nonce, verifier, live))) => Flow { provider, return_to, challenge, nonce, verifier, live },
+        Ok(None) => {
+            log("sso_refused", "state");
+            return error(StatusCode::BAD_REQUEST, "unknown or expired sign-in");
+        }
+        Err(e) => return internal(e),
+    };
+    if !flow.live {
         return fail(&flow.return_to, "expired");
     }
     let (Some((deployment, configured)), Some(org)) = (s.configured(&flow.provider), s.org.clone()) else {
@@ -821,25 +887,29 @@ async fn callback(State(s): State<Shared>, Query(query): Query<HashMap<String, S
     }
     let refresh_token = tokens.get("refresh_token").and_then(Value::as_str).filter(|t| t.len() <= 8192).map(str::to_owned);
     let grant = random_hex();
-    {
-        let mut grants = s.grants.lock().unwrap();
-        let now = Instant::now();
-        grants.retain(|_, g| g.until > now);
-        if grants.len() >= MAX_GRANTS {
-            drop(grants);
-            return fail(&flow.return_to, "unavailable");
+    let stored = async {
+        let mut tx = s.store.pool.begin().await?;
+        sqlx::query("DELETE FROM sso_grants WHERE expires <= now()").execute(&mut *tx).await?;
+        let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sso_grants").fetch_one(&mut *tx).await?;
+        if count as usize >= MAX_GRANTS {
+            return Ok(false);
         }
-        grants.insert(
-            grant.clone(),
-            Grant {
-                provider: flow.provider.clone(),
-                challenge: flow.challenge,
-                identity,
-                refresh_token,
-                session_seconds: configured.session_hours as i64 * 3600,
-                until: now + Duration::from_secs(GRANT_SECONDS),
-            },
-        );
+        sqlx::query("INSERT INTO sso_grants (code_hash, provider, challenge, identity, refresh_token, session_seconds, expires) VALUES ($1, $2, $3, $4::jsonb, $5, $6, now() + make_interval(secs => $7))")
+            .bind(sha256_hex(grant.as_bytes()))
+            .bind(&flow.provider)
+            .bind(&flow.challenge)
+            .bind(identity_json(&identity).to_string())
+            .bind(&refresh_token)
+            .bind(configured.session_hours as i64 * 3600)
+            .bind(GRANT_SECONDS as f64)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(true)
+    };
+    match stored.await {
+        Ok(true) => {}
+        Ok(false) | Err(_) => return fail(&flow.return_to, "unavailable"),
     }
     log("sso_callback", "ok");
     redirect(format!("{}/#scribyra-sso={grant}&org={org}", flow.return_to))
@@ -853,22 +923,64 @@ struct RedeemRequest {
 }
 async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> Response {
     // Single use: a redeem attempt consumes the grant even when the verifier is wrong.
-    let grant = s.grants.lock().unwrap().remove(&request.code);
-    let Some(grant) = grant.filter(|g| g.until > Instant::now()) else {
-        return error(StatusCode::UNAUTHORIZED, "unknown or expired grant");
+    let grant = sqlx::query_as::<_, (String, String, String, Option<String>, i64)>(
+        "DELETE FROM sso_grants WHERE code_hash = $1 AND expires > now() RETURNING provider, challenge, identity::text, refresh_token, session_seconds",
+    )
+    .bind(sha256_hex(request.code.as_bytes()))
+    .fetch_optional(&s.store.pool)
+    .await;
+    let grant = match grant {
+        Ok(Some((provider, challenge, identity, refresh_token, session_seconds))) => match identity_from_json(&identity) {
+            Some(identity) => Grant { provider, challenge, identity, refresh_token, session_seconds },
+            None => return internal(()),
+        },
+        Ok(None) => return error(StatusCode::UNAUTHORIZED, "unknown or expired grant"),
+        Err(e) => return internal(e),
     };
+    // Expired grants are not returned: the row only matches while unexpired.
     let Some(verifier) = decode_hex(&request.verifier).filter(|v| v.len() == 32) else {
         return error(StatusCode::UNAUTHORIZED, "wrong verifier");
     };
     if !bool::from(sha256_hex(&verifier).as_bytes().ct_eq(grant.challenge.as_bytes())) {
         return error(StatusCode::UNAUTHORIZED, "wrong verifier");
     }
-    let (Some((_, configured)), Some(org)) = (s.configured(&grant.provider), s.org.clone()) else { return error(StatusCode::UNAUTHORIZED, "unknown or expired grant") };
+    let (Some((deployment, configured)), Some(org)) = (s.configured(&grant.provider), s.org.clone()) else { return error(StatusCode::UNAUTHORIZED, "unknown or expired grant") };
     let token = random_hex();
     let id = &grant.identity;
+    let Ok(role) = admit(deployment, configured, &id.subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest) else {
+        return error(StatusCode::FORBIDDEN, "this account cannot sign in here");
+    };
+    // The account: made at the first sign-in, refreshed at every one. A sign-in the provider
+    // admits again clears a block from a refused refresh token; a disabled account stays out.
+    let account = sqlx::query_as::<_, (String, String)>(
+        "INSERT INTO accounts (account, provider, issuer, subject, email, email_verified, name, role, guest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+         ON CONFLICT (provider, subject) DO UPDATE SET issuer = EXCLUDED.issuer, email = EXCLUDED.email, email_verified = EXCLUDED.email_verified,
+           name = EXCLUDED.name, role = EXCLUDED.role, guest = EXCLUDED.guest, last_seen = now(),
+           state = CASE WHEN accounts.state = 'blocked' THEN 'active' ELSE accounts.state END
+         RETURNING account, state",
+    )
+    .bind(random_hex())
+    .bind(&grant.provider)
+    .bind(&configured.issuer)
+    .bind(&id.subject)
+    .bind(&id.email)
+    .bind(id.email_verified)
+    .bind(&id.name)
+    .bind(role.as_str())
+    .bind(id.guest)
+    .fetch_one(&s.store.pool)
+    .await;
+    let account = match account {
+        Ok((account, state)) if state == "active" => account,
+        Ok(_) => {
+            log("sso_refused", "account_disabled");
+            return error(StatusCode::FORBIDDEN, "this account is disabled");
+        }
+        Err(e) => return internal(e),
+    };
     let inserted = sqlx::query(
-        "INSERT INTO sso_logins (token_hash, org, provider, issuer, subject, email, email_verified, name, groups, guest, sid, refresh_token, expires)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, now() + make_interval(secs => $13))",
+        "INSERT INTO sso_logins (token_hash, org, provider, issuer, subject, email, email_verified, name, groups, guest, sid, refresh_token, expires, account)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, $11, $12, now() + make_interval(secs => $13), $14)",
     )
     .bind(sha256_hex(token.as_bytes()))
     .bind(&org)
@@ -883,9 +995,16 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     .bind(&id.sid)
     .bind(&grant.refresh_token)
     .bind(grant.session_seconds as f64)
+    .bind(&account)
     .execute(&s.store.pool)
     .await;
     if let Err(e) = inserted {
+        return internal(e);
+    }
+    // Server-readable deployments: pending invitations to this verified email become shares.
+    if deployment.encryption == crate::config::Encryption::Server
+        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account).await
+    {
         return internal(e);
     }
     let login = match s.login(&token).await {
@@ -956,15 +1075,23 @@ async fn backchannel(State(s): State<Shared>, Form(form): Form<HashMap<String, S
         }
         let Ok(verified) = s.verify(&endpoints, token).await else { return refuse() };
         let Ok(logout) = jose::check_logout_token(&verified.claims, &expect(configured, None)) else { return refuse() };
-        {
-            let mut jtis = s.logout_jtis.lock().unwrap();
-            let now = Instant::now();
-            jtis.retain(|_, until| *until > now);
-            let key = format!("{}\n{}", configured.id, logout.jti);
-            if jtis.contains_key(&key) || jtis.len() >= MAX_LOGOUT_JTIS {
-                return refuse();
+        // Each logout token is used once, on whichever replica it reaches first.
+        let fresh = async {
+            let mut tx = s.store.pool.begin().await?;
+            sqlx::query("DELETE FROM sso_logout_jtis WHERE expires <= now()").execute(&mut *tx).await?;
+            let count: i64 = sqlx::query_scalar("SELECT count(*) FROM sso_logout_jtis").fetch_one(&mut *tx).await?;
+            if count as usize >= MAX_LOGOUT_JTIS {
+                return Ok(false);
             }
-            jtis.insert(key, now + Duration::from_secs(900));
+            let inserted = sqlx::query("INSERT INTO sso_logout_jtis (key, expires) VALUES ($1, now() + interval '15 minutes') ON CONFLICT DO NOTHING")
+                .bind(sha256_hex(format!("{}\n{}", configured.id, logout.jti).as_bytes()))
+                .execute(&mut *tx)
+                .await?;
+            tx.commit().await?;
+            Ok::<_, sqlx::Error>(inserted.rows_affected() == 1)
+        };
+        if !matches!(fresh.await, Ok(true)) {
+            return refuse();
         }
         let revoked = s
             .revoke_where(

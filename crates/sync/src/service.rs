@@ -17,6 +17,7 @@ use axum::{
     routing::get,
 };
 use futures_util::{SinkExt, StreamExt};
+use std::future::IntoFuture;
 use scribyra_core::{
     blob,
     telemetry::{self, Operation},
@@ -38,6 +39,8 @@ pub struct Service {
     pub store: Arc<Store>,
     /// Single sign-on; the organisation module reads logins and revocations from here.
     pub sso: Arc<crate::sso::Sso>,
+    /// Server-readable projects (their routes answer 404 unless the deployment is one).
+    pub server_projects: Arc<crate::server_projects::Sr>,
     rooms: Mutex<HashMap<String, Room>>,
     http: Arc<Semaphore>,
     disk: Arc<Semaphore>,
@@ -172,7 +175,7 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
         Ok(source) => source,
         Err(status) => return status.into_response(),
     };
-    let health = request.uri().path() == "/health";
+    let health = matches!(request.uri().path(), "/health" | "/healthz");
     if !source_allow(&s, source, health) {
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
@@ -195,7 +198,7 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
         }
     }
     // Uploads have their own authenticated capacity; liveness never waits for a transfer.
-    let _permit = if request.method() != Method::PUT && request.uri().path() != "/health" {
+    let _permit = if request.method() != Method::PUT && !health {
         let Ok(permit) = s.http.clone().try_acquire_owned() else {
             return StatusCode::SERVICE_UNAVAILABLE.into_response();
         };
@@ -216,8 +219,8 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
     // The heads long poll waits up to its own bound before it answers; every other request
     // gets the ordinary deadline. Cutting the long poll short would answer every idle poll 408.
     let path = request.uri().path();
-    let deadline = if request.method() == Method::GET && path.starts_with("/v1/orgs/") && path.ends_with("/heads") {
-        Duration::from_secs(crate::org::MAX_HEADS_WAIT_SECS + 15)
+    let deadline = if request.method() == Method::GET && (path.starts_with("/v1/orgs/") && path.ends_with("/heads") || path == "/v1/sr/heads") {
+        Duration::from_secs(crate::org::MAX_HEADS_WAIT_SECS.max(crate::server_projects::MAX_HEADS_WAIT_SECS) + 15)
     } else {
         Duration::from_secs(15)
     };
@@ -498,12 +501,15 @@ async fn session(mut socket: WebSocket, s: Shared) {
     observation.success();
 }
 /// Build the shared service state for an opened store.
-pub fn state(store: Store) -> Shared {
+pub fn state(store: Store) -> Result<Shared, store::Error> {
     let config = store.config.clone();
     let (shutdown, _) = watch::channel(false);
     let store = Arc::new(store);
-    Arc::new(Service {
-        sso: crate::sso::Sso::new(store.clone()),
+    let sso = crate::sso::Sso::new(store.clone());
+    let server_projects = crate::server_projects::Sr::new(store.clone(), sso.clone(), shutdown.subscribe())?;
+    Ok(Arc::new(Service {
+        sso,
+        server_projects,
         store,
         rooms: Mutex::new(HashMap::new()),
         http: Arc::new(Semaphore::new(config.http_concurrency)),
@@ -539,7 +545,7 @@ pub fn state(store: Store) -> Shared {
         health: Mutex::new(HashMap::new()),
         shutdown,
         config,
-    })
+    }))
 }
 /// All routes behind the admission guard and CORS policy.
 pub fn router(s: Shared) -> Router {
@@ -551,7 +557,9 @@ pub fn router(s: Shared) -> Router {
         .collect::<Vec<_>>();
     Router::new()
         .route("/health", get(|| async { "{\"live\":true}" }))
+        .route("/healthz", get(|| async { "{\"live\":true}" }))
         .route("/ready", get(ready))
+        .route("/readyz", get(ready))
         .route(
             "/v1",
             get(|| async {
@@ -568,6 +576,7 @@ pub fn router(s: Shared) -> Router {
         .with_state(s.clone())
         .merge(crate::org::routes(crate::org::Orgs::new(s.store.clone(), s.sso.clone())))
         .merge(crate::sso::routes(s.sso.clone()))
+        .merge(crate::server_projects::routes(s.server_projects.clone()))
         .layer(middleware::from_fn_with_state(s, guard))
         // Outermost, so the guard's refusals (429, 503, 403) reach the page as statuses rather
         // than as opaque network errors, and preflights are answered without spending the
@@ -576,16 +585,16 @@ pub fn router(s: Shared) -> Router {
         .layer(
             CorsLayer::new()
                 .allow_origin(origins)
-                .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::POST, Method::OPTIONS])
-                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION])
-                .expose_headers([header::HeaderName::from_static("scribyra-log-head")])
+                .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::HeaderName::from_static("scribyra-client"), header::HeaderName::from_static("scribyra-client-seq")])
+                .expose_headers(["scribyra-log-head", "scribyra-log-floor", "scribyra-snapshot-seq"].map(header::HeaderName::from_static))
                 .max_age(Duration::from_secs(3600)),
         )
 }
 /// Serve until SIGTERM/SIGINT. Exits the process if the database ownership lock is lost.
 pub async fn serve(store: Store) -> Result<(), store::Error> {
     telemetry::native::initialize(telemetry::Runtime::SyncService);
-    let s = state(store);
+    let s = state(store)?;
     let config = s.config.clone();
     let app = router(s.clone());
     let listener = tokio::net::TcpListener::bind(config.bind).await?;
@@ -618,20 +627,38 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
         tcp: listener,
         slots: Arc::new(Semaphore::new(config.tcp_connections)),
     };
-    axum::serve(
+    // SIGTERM: the guard refuses new requests, long polls end at once, and in-flight requests get
+    // `shutdown_grace_seconds` to finish before the process exits (0) regardless.
+    let grace = Duration::from_secs(config.shutdown_grace_seconds);
+    let mut stopping = drain.shutdown.subscribe();
+    let server = axum::serve(
         listener,
         app.into_make_service_with_connect_info::<listener::Connection>(),
     )
     .with_graceful_shutdown(signal)
-    .await?;
+    .into_future();
+    let started = tokio::select! {
+        result = server => { result?; None }
+        started = async {
+            let _ = stopping.wait_for(|stop| *stop).await;
+            let started = Instant::now();
+            tokio::time::sleep(grace).await;
+            started
+        } => Some(started),
+    };
+    if started.is_some() {
+        println!("{{\"event\":\"drain_timeout\"}}");
+        return Ok(());
+    }
     // Upgraded sockets are detached from HTTP serving; let their close frames drain.
     let _ = tokio::time::timeout(
-        Duration::from_secs(5),
+        grace.min(Duration::from_secs(5)),
         drain
             .sockets
             .clone()
             .acquire_many_owned(config.connections as u32),
     )
     .await;
+    println!("{{\"event\":\"stopped\"}}");
     Ok(())
 }

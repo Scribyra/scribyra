@@ -7,6 +7,7 @@
 //! test process exits (normally, by panic or by signal).
 #![allow(dead_code)]
 pub mod orgs;
+pub mod sr;
 pub mod sso;
 use scribyra_sync::blobs::S3Settings;
 use std::{
@@ -461,6 +462,12 @@ impl Service {
                 .status();
             child.wait().unwrap();
         }
+    }
+    /// SIGTERM; returns the exit status.
+    pub fn terminate(&mut self) -> std::process::ExitStatus {
+        let mut child = self.child.take().expect("running");
+        let _ = Command::new("kill").args(["-TERM", &child.id().to_string()]).status();
+        child.wait().unwrap()
     }
     /// SIGKILL and wait.
     pub fn kill(&mut self) {

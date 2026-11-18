@@ -354,7 +354,7 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     config.check_files().unwrap();
     let store = Store::open(config.clone()).await.unwrap();
     let org = store.org.clone().unwrap();
-    let s = service::state(store);
+    let s = service::state(store).unwrap();
     let app = service::router(s.clone());
     let tcp = tokio::net::TcpListener::bind(config.bind).await.unwrap();
     tokio::spawn(axum::serve(listener::Listener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(64)) }, app.into_make_service_with_connect_info::<listener::Connection>()).into_future());
