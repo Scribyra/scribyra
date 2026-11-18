@@ -739,3 +739,30 @@ fn a_floor_that_moves_during_a_read_answers_410_not_500() {
     postgres().psql(&sr.db(), &format!("UPDATE sr_projects SET floor_seq = 0 WHERE project = '{p}'"));
     assert_eq!(ana.log(&p, 0).status, 500);
 }
+
+#[test]
+fn signing_out_ends_the_sessions_heads_polls() {
+    // Review L6: a revoked session kept its heads poll (and its view of the projects' heads) for
+    // up to 25 seconds. A revocation now notifies the account's polls, which check the session.
+    let sr = start(Blobs::Fs);
+    let (ana, other) = (sr.api(&sr.login("alice")), sr.api(&sr.login("alice")));
+    ana.create("Watched");
+    let version = ana.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let poll = |api: &Api| {
+        let (api, version) = (api.clone(), version.clone());
+        std::thread::spawn(move || {
+            let t = std::time::Instant::now();
+            (api.heads(Some(&version), 20).status, t.elapsed())
+        })
+    };
+    let (mine, theirs) = (poll(&ana), poll(&other));
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(sr.env.client().logout(&ana.token).status, 200);
+    let (status, took) = mine.join().unwrap();
+    assert_eq!(status, 401);
+    assert!(took < std::time::Duration::from_secs(5), "{took:?}");
+    // The same person's other session keeps waiting.
+    let (status, took) = theirs.join().unwrap();
+    assert_eq!(status, 200);
+    assert!(took >= std::time::Duration::from_secs(19), "{took:?}");
+}

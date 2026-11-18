@@ -1655,7 +1655,20 @@ async fn heads(State(sr): State<Shared>, Query(q): Query<HeadsQuery>, headers: H
     let (id, wake) = sr.polls.lock().unwrap().register(&caller.account);
     let _registered = PollGuard(&sr, id);
     let mut shutdown = sr.shutdown.clone();
+    let mut woken = false;
     loop {
+        // A revocation notifies the account's polls: each checks that its session still holds
+        // (review L6).
+        if std::mem::take(&mut woken) {
+            match crate::sso::bearer(&headers).map(|t| sr.sso.login(t)) {
+                Some(login) => match login.await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => return error(StatusCode::UNAUTHORIZED, "sign in required"),
+                    Err(e) => return internal(e),
+                },
+                None => return error(StatusCode::UNAUTHORIZED, "sign in required"),
+            }
+        }
         let (version, heads) = match sr.heads_now(projects, &caller).await {
             Ok(v) => v,
             Err(r) => return r,
@@ -1677,7 +1690,7 @@ async fn heads(State(sr): State<Shared>, Query(q): Query<HeadsQuery>, headers: H
             continue;
         }
         tokio::select! {
-            _ = wake.notified() => {}
+            _ = wake.notified() => woken = true,
             _ = shutdown.changed() => {}
             _ = tokio::time::sleep_until(deadline) => {}
         }

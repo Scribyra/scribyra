@@ -597,6 +597,11 @@ impl Sso {
             if block {
                 sqlx::query("UPDATE accounts SET state = 'blocked' WHERE issuer = $1 AND subject = $2 AND state = 'active'").bind(&issuer).bind(&subject).execute(&mut *tx).await?;
             }
+            // The account's heads polls check their sessions at once (review L6).
+            let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE issuer = $1 AND subject = $2").bind(&issuer).bind(&subject).fetch_all(&mut *tx).await?;
+            for account in accounts {
+                crate::server_projects::notify_account(&mut tx, &account).await?;
+            }
             if let Some(person) = person {
                 fired.push((org, person));
             }
