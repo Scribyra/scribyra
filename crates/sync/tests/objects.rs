@@ -152,13 +152,16 @@ fn future_migrations_and_bad_configuration_are_refused() {
         "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) \
          VALUES (9999, 'future', true, '\\x00', 0)",
     );
-    assert!(s.start().is_err());
+    // A newer build's additional migration is served (review L8: additive within a minor
+    // series, design section 10); a changed applied migration is still refused.
+    s.start().unwrap();
+    assert!(s.logs.lock().unwrap().contains("\"schema_ahead\""));
+    s.stop();
     postgres().psql(
         s.database_url(),
-        "DELETE FROM _sqlx_migrations WHERE version = 9999",
+        "DELETE FROM _sqlx_migrations WHERE version = 9999; UPDATE _sqlx_migrations SET checksum = '\\x00' WHERE version = 1",
     );
-    s.start().unwrap();
-    s.stop();
+    assert!(s.start().is_err());
     for bad in [
         json!({"database_connections": 0}),
         json!({"database_url_file": s.dir.join("url")}), // both URL forms at once
