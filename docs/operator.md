@@ -318,7 +318,10 @@ first, deliberately.
   that CA for the admin API.
 - **Compile workers**: `hostUsers: false`, memory-backed size-limited scratch, optional gVisor.
   bubblewrap inside the worker needs user namespaces, which `RuntimeDefault` seccomp may refuse on
-  some runtimes; a `Localhost` profile may be needed (untested; slice 15).
+  some runtimes, and the sandbox runner (design section 6) wants the pod's own cgroup writable
+  to make one cgroup per job, which container runtimes mount read-only for unprivileged pods. A
+  `Localhost` seccomp profile and a runtime or node setting for a delegated cgroup may be needed;
+  both are open until the worker runs on a real cluster (slice 11).
 - **Forwarded addresses**: the service trusts no forwarded headers by default, so its per-source
   rate limits see the ingress controller's address. `trusted_proxies` takes addresses, not
   ranges, which does not fit pod IPs; it is left empty until the service accepts a range.
