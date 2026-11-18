@@ -239,6 +239,11 @@ fn unchanged_content_reuses_the_stored_pdf() {
     // The same files, engine and TeX Live: the stored PDF, no new job.
     let again = ana.compile(&p, None);
     assert_eq!((again.status, again.json()["job"].as_str(), again.json()["cached"].as_bool()), (200, Some(first.as_str()), Some(true)));
+    // Review L5: the PDF route serves exactly the job a cached answer names, or 404.
+    let named = ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={first}"), None);
+    assert_eq!((named.status, named.header("scribyra-compile-job")), (200, Some(first.as_str())));
+    let other = ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={}", random_hex(32)), None);
+    assert_eq!((other.status, other.json()["error"].as_str()), (404, Some("that compile's PDF is not kept")));
     // An entry that does not change the files (a name change) still hits the cache.
     assert_eq!(ana.append(&p, "a", 3, &doc.set_meta("name", "Renamed")).status, 201);
     assert_eq!(ana.compile(&p, None).json()["cached"], true);
@@ -252,6 +257,8 @@ fn unchanged_content_reuses_the_stored_pdf() {
     assert_eq!((status["job"]["state"].as_str(), status["pdf"]["engine"].as_str()), (Some("done"), Some("xelatex")), "{status}: {}", String::from_utf8_lossy(&ana.call("GET", &format!("/v1/sr/projects/{p}/compile/log"), None).body));
     // Only the newest successful PDF and log are kept; the first job's blobs are removed.
     assert_eq!(postgres().psql(&sr.db(), &format!("SELECT pdf_blob IS NULL AND log_blob IS NULL FROM compiles WHERE job = '{first}'")), "t");
+    assert_eq!(ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={first}"), None).status, 404);
+    assert_eq!(ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={xe}"), None).header("scribyra-compile-job"), Some(xe.as_str()));
     eventually("blob removal", || postgres().psql(&sr.db(), "SELECT count(*) FROM sr_garbage") == "0");
     // So going back to pdflatex compiles again.
     assert_eq!(ana.append(&p, "a", 5, &doc.set_meta("engine", "pdflatex")).status, 201);

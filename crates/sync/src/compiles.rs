@@ -289,20 +289,23 @@ impl Compiles {
         };
         let s = source(&m).map_err(|_| RequestError::NoMain)?;
         let engine = engine_name(s.engine);
+        let mut tx = self.pool().begin().await?;
+        // The project row serialises requests for one project (and against workers finishing).
+        let owner: Option<String> = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
+        let Some(owner) = owner else { return Err(RequestError::NotFound) };
+        // Under the project's lock (which finishing jobs take too): the PDF a cached answer
+        // names is the one `GET …/compile/pdf` serves, and `?job=` asks for exactly it (review
+        // L5: looked up before the lock, it could name a PDF already replaced).
         let cached: Option<String> = sqlx::query_scalar("SELECT job FROM compiles WHERE project = $1 AND state = 'done' AND pdf_blob IS NOT NULL AND content_hash = $2 AND engine = $3 AND texlive = $4 ORDER BY finished DESC LIMIT 1")
             .bind(project)
             .bind(&s.content_hash)
             .bind(engine)
             .bind(&self.texlive)
-            .fetch_optional(self.pool())
+            .fetch_optional(&mut *tx)
             .await?;
         if let Some(job) = cached {
             return Ok(Requested::Cached { job });
         }
-        let mut tx = self.pool().begin().await?;
-        // The project row serialises requests for one project (and against workers finishing).
-        let owner: Option<String> = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
-        let Some(owner) = owner else { return Err(RequestError::NotFound) };
         let same: Option<(String, String)> = sqlx::query_as("SELECT job, state FROM compiles WHERE project = $1 AND state IN ('queued', 'running') AND content_hash = $2 AND engine = $3 AND texlive = $4 ORDER BY queued DESC LIMIT 1")
             .bind(project)
             .bind(&s.content_hash)
@@ -1043,7 +1046,7 @@ async fn status(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LogQuery {
+struct JobQuery {
     #[serde(default)]
     job: Option<String>,
 }
@@ -1070,16 +1073,17 @@ async fn artefact(sr: Shared, p: String, headers: HeaderMap, kind: &'static str,
             h.insert(header::HeaderName::from_static("scribyra-compile-seq"), HeaderValue::from(seq));
             response
         }
+        Ok(None) if job.is_some() => error(StatusCode::NOT_FOUND, if kind == "pdf" { "that compile's PDF is not kept" } else { "that compile's log is not kept" }),
         Ok(None) => error(StatusCode::NOT_FOUND, if kind == "pdf" { "no PDF yet" } else { "no compile log" }),
         Err(e) => internal(e),
     }
 }
-/// `GET …/compile/pdf`: any member; the latest successful PDF.
-async fn pdf(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap) -> Response {
-    artefact(sr, p, headers, "pdf", None).await
+/// `GET …/compile/pdf?job=`: any member; the latest successful PDF, or `job`'s while it is kept.
+async fn pdf(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<JobQuery>, headers: HeaderMap) -> Response {
+    artefact(sr, p, headers, "pdf", q.job).await
 }
 /// `GET …/compile/log?job=`: any member; a kept log.
-async fn log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<LogQuery>, headers: HeaderMap) -> Response {
+async fn log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<JobQuery>, headers: HeaderMap) -> Response {
     artefact(sr, p, headers, "log", q.job).await
 }
 #[derive(Deserialize)]
