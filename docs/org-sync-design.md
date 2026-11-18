@@ -90,7 +90,7 @@ Everything about a deployment is in its one configuration file (`SCRIBYRA_SERVIC
 ```json
 {
   "public_url": "https://scribyra.acme.org",
-  "origins": ["https://app.scribyra.org", "https://scribyra.acme.org"],
+  "origins": ["https://app.scribyra.com", "https://scribyra.acme.org"],
   "database_url_file": "database-url",
   "blob_store": "s3", "s3_endpoint": "https://s3.acme.org", "s3_bucket": "scribyra", "...": "...",
   "service_key_file": "master.key",
@@ -357,7 +357,7 @@ Decided by Paul on 18 November 2026: deployments are cloud native. A **Kubernete
 ### The `Scribyra` resource
 
 ```yaml
-apiVersion: scribyra.org/v1alpha1
+apiVersion: scribyra.com/v1alpha1
 kind: Scribyra
 metadata: {name: acme, namespace: acme}
 spec:
