@@ -165,6 +165,17 @@ pub struct Claimed {
     pub seq: i64,
     pub engine: Engine,
     pub queued_secs: i64,
+    /// This claim's random token (the `worker` column): a job taken back and claimed again,
+    /// even by the same process, gets a new one, so the earlier claim can no longer heartbeat,
+    /// finish or give it back (review H1).
+    pub holder: String,
+}
+impl Claimed {
+    /// The slot this claim's PDF and log are stored under (blob name and associated data): the
+    /// job and the claim, so a lost claim's late finish never touches another claim's blobs.
+    fn slot(&self) -> String {
+        format!("{}-{}", self.job, &self.holder[..16])
+    }
 }
 /// How a job ended, before it is stored.
 #[derive(Debug, Clone)]
@@ -300,15 +311,16 @@ impl Compiles {
         Ok(Requested::Queued { job, replaced: replaced.is_some() })
     }
 
-    /// Takes the oldest queued job whose project has none running.
-    pub async fn claim(&self, worker: &str) -> Result<Option<Claimed>, Error> {
+    /// Takes the oldest queued job whose project has none running, under a new claim token.
+    pub async fn claim(&self) -> Result<Option<Claimed>, Error> {
+        let holder = server_projects::random_hex();
         let row = sqlx::query(
             "UPDATE compiles SET state = 'running', worker = $1, started = now(), heartbeat = now(), attempts = attempts + 1
              WHERE job = (SELECT c.job FROM compiles c WHERE c.state = 'queued' AND NOT EXISTS (SELECT 1 FROM compiles r WHERE r.project = c.project AND r.state = 'running')
                           ORDER BY c.queued LIMIT 1 FOR UPDATE SKIP LOCKED)
              RETURNING job, project, seq, engine, extract(epoch FROM queued)::bigint",
         )
-        .bind(worker)
+        .bind(&holder)
         .fetch_optional(self.pool())
         .await;
         let row = match row {
@@ -318,15 +330,15 @@ impl Compiles {
             Err(e) => return Err(e.into()),
         };
         let Some(r) = row else { return Ok(None) };
-        let claimed = Claimed { job: r.get(0), project: r.get(1), seq: r.get(2), engine: engine_from(r.get::<&str, _>(3)), queued_secs: r.get(4) };
+        let claimed = Claimed { job: r.get(0), project: r.get(1), seq: r.get(2), engine: engine_from(r.get::<&str, _>(3)), queued_secs: r.get(4), holder };
         let mut tx = self.pool().begin().await?;
         server_projects::notify(&mut tx, &claimed.project).await?;
         tx.commit().await?;
         Ok(Some(claimed))
     }
-    /// Reports a running job alive; `false` when the worker no longer holds it.
-    pub async fn heartbeat(&self, job: &str, worker: &str) -> Result<bool, Error> {
-        let n = sqlx::query("UPDATE compiles SET heartbeat = now() WHERE job = $1 AND worker = $2 AND state = 'running'").bind(job).bind(worker).execute(self.pool()).await?.rows_affected();
+    /// Reports a running job alive; `false` when this claim no longer holds it.
+    pub async fn heartbeat(&self, claimed: &Claimed) -> Result<bool, Error> {
+        let n = sqlx::query("UPDATE compiles SET heartbeat = now() WHERE job = $1 AND worker = $2 AND state = 'running'").bind(&claimed.job).bind(&claimed.holder).execute(self.pool()).await?.rows_affected();
         Ok(n == 1)
     }
     /// Takes back running jobs whose worker stopped heartbeating: requeued once, then failed.
@@ -346,10 +358,10 @@ impl Compiles {
         Ok(n)
     }
     /// A worker gives a job back (SIGTERM): requeued without using up its retry.
-    pub async fn requeue(&self, claimed: &Claimed, worker: &str) -> Result<bool, Error> {
-        Ok(self.take_back(&claimed.job, &claimed.project, Some(worker)).await?.is_some())
+    pub async fn requeue(&self, claimed: &Claimed) -> Result<bool, Error> {
+        Ok(self.take_back(&claimed.job, &claimed.project, Some(&claimed.holder)).await?.is_some())
     }
-    /// Expired (`worker` `None`) or handed back by `worker`: back to the queue, `replaced` when a
+    /// Expired (`worker` `None`) or handed back by the claim `worker`: back to the queue, `replaced` when a
     /// newer request is queued already, `failed` after a second lost attempt.
     async fn take_back(&self, job: &str, project: &str, worker: Option<&str>) -> Result<Option<&'static str>, Error> {
         let mut tx = self.pool().begin().await?;
@@ -403,27 +415,28 @@ impl Compiles {
         Ok((job, s.content_hash))
     }
 
-    /// Stores a finished job (sealed PDF and log, sizes, CPU time) if `worker` still holds it,
+    /// Stores a finished job (sealed PDF and log, sizes, CPU time) if this claim still holds it,
     /// drops the blobs of older results, charges the project's quota and wakes the members.
-    /// Over quota the job fails with no PDF. Returns the state written, if any.
-    pub async fn finish(&self, claimed: &Claimed, worker: &str, f: Finished) -> Result<Option<&'static str>, Error> {
+    /// Over quota the job fails with no PDF. Returns the state written, if any. The blobs are
+    /// named after the claim, so only blobs this call wrote are ever removed here, and only once
+    /// the database refused them (review H1).
+    pub async fn finish(&self, claimed: &Claimed, f: Finished) -> Result<Option<&'static str>, Error> {
         let project = &claimed.project;
         let Some(key) = self.projects.project_key(project).await? else { return Ok(None) };
         let mut f = f;
         if f.pdf.as_ref().is_some_and(|p| p.len() + 64 > blob::MAX_BLOB_BYTES) {
             f = Finished { pdf: None, outcome: "limit_output".into(), error: Some("the compile wrote too much output"), ..f };
         }
+        let slot = claimed.slot();
         let mut stored = Vec::new();
-        let sealed = |kind: &str, plain: &[u8]| (format!("sr/{project}/c/{}-{kind}", claimed.job), seal(&key, &item_ad(project, kind, &claimed.job), plain));
+        let sealed = |kind: &str, plain: &[u8]| (format!("sr/{project}/c/{slot}-{kind}"), seal(&key, &item_ad(project, kind, &slot), plain));
         let items = [f.pdf.as_deref().map(|p| sealed("pdf", p)), f.log.as_deref().map(|l| sealed("log", l.as_bytes()))];
         let mut slots = [None, None];
         for (slot, item) in slots.iter_mut().zip(items) {
             if let Some((name, bytes)) = item {
                 let size = bytes.len() as i64;
                 if let Err(e) = self.projects.store.blobs.put(&BlobKey::new(name.clone())?, Bytes::from(bytes)).await {
-                    for name in stored {
-                        self.projects.forget_blob(Some(name)).await;
-                    }
+                    self.forget(stored).await;
                     return Err(e.into());
                 }
                 stored.push(name.clone());
@@ -432,31 +445,39 @@ impl Compiles {
         }
         let [pdf, log] = slots;
         let state = if f.outcome == "success" && pdf.is_some() { "done" } else { "failed" };
-        let written = self.store_result(claimed, worker, &f, state, pdf.clone(), log.clone()).await;
-        match written {
+        match self.store_result(claimed, &f, state, pdf.clone(), log.clone()).await {
             Ok(Some(true)) => Ok(Some(state)),
             Ok(Some(false)) => {
-                for name in stored {
-                    self.projects.forget_blob(Some(name)).await;
-                }
+                self.forget(stored).await;
                 let over = Finished::failed("quota", "the PDF does not fit in the project's storage quota", None);
-                Ok(self.store_result(claimed, worker, &over, "failed", None, None).await?.map(|_| "failed"))
+                Ok(self.store_result(claimed, &over, "failed", None, None).await?.map(|_| "failed"))
             }
-            Ok(None) | Err(_) => {
-                for name in stored {
-                    self.projects.forget_blob(Some(name)).await;
+            Ok(None) => {
+                self.forget(stored).await;
+                Ok(None)
+            }
+            // The commit may have gone through: remove the blobs only if no row names them.
+            Err(e) => {
+                let named: Result<bool, sqlx::Error> = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM compiles WHERE pdf_blob = ANY($1) OR log_blob = ANY($1))").bind(&stored).fetch_one(self.pool()).await;
+                if let Ok(false) = named {
+                    self.forget(stored).await;
                 }
-                written.map(|_| None)
+                Err(e)
             }
         }
     }
+    async fn forget(&self, names: Vec<String>) {
+        for name in names {
+            self.projects.forget_blob(Some(name)).await;
+        }
+    }
     /// `Some(false)`: over quota, nothing written. `None`: the job is no longer this worker's.
-    async fn store_result(&self, claimed: &Claimed, worker: &str, f: &Finished, state: &str, pdf: Option<(String, i64)>, log: Option<(String, i64)>) -> Result<Option<bool>, Error> {
+    async fn store_result(&self, claimed: &Claimed, f: &Finished, state: &str, pdf: Option<(String, i64)>, log: Option<(String, i64)>) -> Result<Option<bool>, Error> {
         let project = &claimed.project;
         let mut tx = self.pool().begin().await?;
         let row: Option<(String, i64)> = sqlx::query_as("SELECT owner, bytes FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
         let Some((owner, project_bytes)) = row else { return Ok(None) };
-        let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM compiles WHERE job = $1 AND state = 'running' AND worker = $2 FOR UPDATE").bind(&claimed.job).bind(worker).fetch_optional(&mut *tx).await?;
+        let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM compiles WHERE job = $1 AND state = 'running' AND worker = $2 FOR UPDATE").bind(&claimed.job).bind(&claimed.holder).fetch_optional(&mut *tx).await?;
         if held.is_none() {
             return Ok(None);
         }
@@ -557,9 +578,12 @@ impl Compiles {
         let Some(r) = row else { return Ok(None) };
         let (id, seq, blob_key, size, error): (String, i64, Option<String>, Option<i64>, Option<String>) = (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4));
         let Some(blob_key) = blob_key else { return Ok(Some((id, seq, error.unwrap_or_default().into_bytes()))) };
+        // The slot is in the blob's name: `sr/<project>/c/<slot>-<kind>` (`<job>` for results
+        // stored before claims had tokens, `<job>-<claim>` since).
+        let slot = blob_key.strip_prefix(&format!("sr/{project}/c/")).and_then(|r| r.strip_suffix(&format!("-{kind}"))).ok_or("a compile result has an unexpected name")?.to_owned();
         let key = self.projects.project_key(project).await?.ok_or("the project key does not open")?;
         let sealed = self.projects.read_body(None, Some(blob_key), size.unwrap_or(0)).await?;
-        let plain = open(&key, &item_ad(project, kind, &id), &sealed).ok_or("a compile result does not open")?;
+        let plain = open(&key, &item_ad(project, kind, &slot), &sealed).ok_or("a compile result does not open")?;
         Ok(Some((id, seq, plain)))
     }
 }
@@ -586,13 +610,63 @@ pub fn runner(config: &Config) -> std::io::Result<Arc<Bubblewrap>> {
 pub struct Worker {
     compiles: Arc<Compiles>,
     runner: Arc<dyn Runner>,
-    id: String,
     heartbeat: Duration,
+    /// Without a heartbeat that went through for this long a job counts as lost: the reaper may
+    /// take it back once `compile_heartbeat_timeout_seconds` pass, so the worker stops first.
+    lost_after: Duration,
+}
+/// What heartbeats said while a job ran.
+enum Beat {
+    Held,
+    /// Taken back, or no heartbeat went through for `lost_after`.
+    Lost,
+}
+/// One job's heartbeats: every `heartbeat` through every phase (prepare, run, store).
+struct Pulse {
+    tick: tokio::time::Interval,
+    last_ok: Instant,
 }
 impl Worker {
     pub fn new(compiles: Arc<Compiles>, runner: Arc<dyn Runner>) -> Arc<Worker> {
-        let heartbeat = Duration::from_secs(compiles.projects.store.config.compile_heartbeat_seconds);
-        Arc::new(Worker { compiles, runner, id: server_projects::random_hex(), heartbeat })
+        let config = &compiles.projects.store.config;
+        let heartbeat = Duration::from_secs(config.compile_heartbeat_seconds);
+        let lost_after = Duration::from_secs(config.compile_heartbeat_timeout_seconds).saturating_sub(heartbeat).max(heartbeat);
+        Arc::new(Worker { compiles, runner, heartbeat, lost_after })
+    }
+    fn pulse(&self) -> Pulse {
+        let mut tick = tokio::time::interval(self.heartbeat);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.reset();
+        Pulse { tick, last_ok: Instant::now() }
+    }
+    /// Waits for the next tick and heartbeats once. Errors count as lost once none went through
+    /// for `lost_after` (review H1: they were ignored, so a worker cut off from the database
+    /// kept compiling a job the reaper had handed to someone else).
+    async fn beat(&self, claimed: &Claimed, pulse: &mut Pulse) -> Beat {
+        pulse.tick.tick().await;
+        // A database that does not answer counts as an error, not as a wait.
+        match tokio::time::timeout(self.heartbeat, self.compiles.heartbeat(claimed)).await.unwrap_or_else(|_| Err("heartbeat timed out".into())) {
+            Ok(true) => {
+                pulse.last_ok = Instant::now();
+                Beat::Held
+            }
+            Ok(false) => Beat::Lost,
+            Err(_) if pulse.last_ok.elapsed() >= self.lost_after => Beat::Lost,
+            Err(_) => {
+                println!("{}", json!({"event": "compile_heartbeat_failed"}));
+                Beat::Held
+            }
+        }
+    }
+    /// Drives `work` while heartbeating; `None` (and `work` dropped) once the job is lost.
+    async fn alive<T>(&self, claimed: &Claimed, pulse: &mut Pulse, work: impl std::future::Future<Output = T>) -> Option<T> {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                out = &mut work => return Some(out),
+                beat = self.beat(claimed, pulse) => if let Beat::Lost = beat { return None },
+            }
+        }
     }
     /// Takes and runs jobs until `shutdown`; then lets running jobs finish for up to `grace`
     /// and gives back (requeues) those that do not.
@@ -614,7 +688,7 @@ impl Worker {
                     println!("{}", json!({"event": "compile_reap_failed"}));
                 }
             }
-            match self.compiles.claim(&self.id).await {
+            match self.compiles.claim().await {
                 Ok(Some(claimed)) => {
                     tasks.spawn(self.clone().execute(claimed, permit, aborted.clone()));
                     continue;
@@ -655,18 +729,19 @@ impl Worker {
     async fn execute(self: Arc<Self>, claimed: Claimed, _slot: tokio::sync::OwnedSemaphorePermit, mut aborted: watch::Receiver<bool>) {
         let started = Instant::now();
         metrics::global().running(1);
-        let finished = match self.compiles.prepare(&claimed).await {
-            Err(f) => Some(f),
-            Ok((job, hash)) => {
+        let mut pulse = self.pulse();
+        let finished = match self.alive(&claimed, &mut pulse, self.compiles.prepare(&claimed)).await {
+            None => None,
+            Some(Err(f)) => Some(f),
+            Some(Ok((job, hash))) => {
                 let mut running = scribyra_compile::spawn(self.runner.clone(), job, limits(&self.compiles.limits));
-                let mut tick = tokio::time::interval(self.heartbeat);
-                tick.tick().await;
                 loop {
                     tokio::select! {
                         outcome = &mut running => break Some(Finished::from_outcome(outcome, hash)),
-                        _ = tick.tick() => {
-                            if matches!(self.compiles.heartbeat(&claimed.job, &self.id).await, Ok(false)) {
-                                // Taken back after a missed heartbeat: someone else owns it now.
+                        beat = self.beat(&claimed, &mut pulse) => {
+                            if let Beat::Lost = beat {
+                                // Taken back after a missed heartbeat (someone else may own it
+                                // now), or cut off from the database for too long.
                                 running.cancel();
                                 let _ = (&mut running).await;
                                 break None;
@@ -675,7 +750,7 @@ impl Worker {
                         _ = async { aborted.wait_for(|a| *a).await.is_ok() } => {
                             running.cancel();
                             let _ = (&mut running).await;
-                            let requeued = self.compiles.requeue(&claimed, &self.id).await.unwrap_or(false);
+                            let requeued = self.compiles.requeue(&claimed).await.unwrap_or(false);
                             println!("{}", json!({"event": "compile_requeued", "requeued": requeued}));
                             metrics::global().compile_job("requeued", started.elapsed().as_millis() as u64, 0);
                             metrics::global().running(-1);
@@ -686,9 +761,23 @@ impl Worker {
             }
         };
         metrics::global().running(-1);
-        let Some(finished) = finished else { return };
+        let Some(finished) = finished else {
+            println!("{}", json!({"event": "compile_discarded"}));
+            return;
+        };
         let (outcome, cpu_ms) = (finished.outcome.clone(), finished.cpu_ms);
-        let state = self.compiles.finish(&claimed, &self.id, finished).await;
+        // Storing keeps heartbeating (uploads take time) but is never cut short: whether the
+        // claim still holds the job is decided under the project's lock when the row is written.
+        let state = {
+            let store = self.compiles.finish(&claimed, finished);
+            tokio::pin!(store);
+            loop {
+                tokio::select! {
+                    state = &mut store => break state,
+                    _ = self.beat(&claimed, &mut pulse) => {}
+                }
+            }
+        };
         let wall_ms = started.elapsed().as_millis() as u64;
         metrics::global().compile_job(&outcome, wall_ms, cpu_ms);
         match state {

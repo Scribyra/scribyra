@@ -407,3 +407,116 @@ fn metrics_expose_the_queue_length_and_requests_without_content() {
     // The API listener does not serve them.
     assert_eq!(status_of(&format!("{}/metrics", sr.url())), 404);
 }
+
+/// The library side of `sr`'s deployment (its service stopped first, so no maintenance races the
+/// test): a runtime and the queue, for steps HTTP cannot time (claims, reaps, late finishes).
+fn library(sr: &mut Sr) -> (tokio::runtime::Runtime, std::sync::Arc<scribyra_sync::compiles::Compiles>) {
+    let config: scribyra_sync::config::Config = serde_json::from_value(sr.env.service.config.clone()).unwrap();
+    sr.env.service.stop();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let compiles = runtime.block_on(async {
+        let store = std::sync::Arc::new(scribyra_sync::store::Store::open(config).await.unwrap());
+        let projects = scribyra_sync::server_projects::Projects::new(store).unwrap().unwrap();
+        scribyra_sync::compiles::Compiles::new(projects).unwrap()
+    });
+    (runtime, compiles)
+}
+fn finished(pdf: &[u8]) -> scribyra_sync::compiles::Finished {
+    scribyra_sync::compiles::Finished { outcome: "success".into(), error: None, content_hash: None, cpu_ms: 1, passes: 1, pdf: Some(pdf.to_vec()), log: Some("log".into()) }
+}
+
+#[test]
+fn a_lost_claims_late_finish_never_touches_the_result_of_the_claim_that_took_over() {
+    // Review H1: blob names were fixed per job, so worker A (lost) overwrote and then deleted the
+    // PDF of worker B, which had taken the job over: the status listed a PDF the route could not
+    // serve. And one process reclaiming its own lost job could heartbeat and finish both runs.
+    for blobs in BOTH {
+        let mut sr = start(blobs, "server", false, json!({}), json!({}));
+        let ana = sr.api(&sr.login("alice"));
+        let (p, _) = paper(&ana, "Taken over", &hello("x"));
+        let job = ana.compile(&p, None).json()["job"].as_str().unwrap().to_owned();
+        let db = sr.db();
+        let (runtime, compiles) = library(&mut sr);
+        runtime.block_on(async {
+            let a = compiles.claim().await.unwrap().unwrap();
+            assert_eq!(a.job, job);
+            postgres().psql(&db, "UPDATE compiles SET heartbeat = now() - interval '1 hour'");
+            assert_eq!(compiles.reap().await.unwrap(), 1);
+            let b = compiles.claim().await.unwrap().unwrap();
+            assert_eq!(b.job, job);
+            assert!(!compiles.heartbeat(&a).await.unwrap(), "{blobs:?}: the lost claim still heartbeats");
+            assert!(compiles.heartbeat(&b).await.unwrap());
+            assert_eq!(compiles.finish(&b, finished(b"%PDF-B")).await.unwrap(), Some("done"));
+            // A finishes late: discarded, and B's PDF and log are still served.
+            assert_eq!(compiles.finish(&a, finished(b"%PDF-A")).await.unwrap(), None);
+            assert!(!compiles.requeue(&a).await.unwrap());
+            let (served, _, pdf) = compiles.artefact(&p, "pdf", None).await.unwrap().unwrap();
+            assert_eq!((served.as_str(), pdf.as_slice()), (job.as_str(), b"%PDF-B".as_slice()), "{blobs:?}");
+            assert_eq!(compiles.artefact(&p, "log", None).await.unwrap().unwrap().2, b"log");
+        });
+        // Only B's two blobs exist: A's were removed once its result was refused.
+        let names = postgres().psql(&db, "SELECT pdf_blob || ' ' || log_blob FROM compiles");
+        assert!(names.contains(&format!("{job}-")), "{names}");
+        if blobs == Blobs::Fs {
+            let files: Vec<_> = walk(&sr.env.service.dir.join("data")).into_iter().filter(|f| f.to_string_lossy().contains("/c/")).collect();
+            assert_eq!(files.len(), 2, "{blobs:?}: {files:?}");
+        }
+    }
+}
+
+/// A runner that compiles nothing: it waits to be cancelled (up to a minute), counting runs.
+struct Waiting {
+    runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl scribyra_compile::Runner for Waiting {
+    fn run(&self, _: &scribyra_compile::Job, _: &scribyra_compile::Limits, cancel: &scribyra_compile::Cancel) -> scribyra_compile::Outcome {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.runs.fetch_add(1, SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !cancel.is_cancelled() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if cancel.is_cancelled() {
+            self.cancelled.fetch_add(1, SeqCst);
+        }
+        scribyra_compile::Outcome { status: scribyra_compile::Status::Cancelled, pdf: None, log: String::new(), cpu_ms: 0, passes: 0 }
+    }
+    fn texlive_id(&self) -> &str {
+        "waiting"
+    }
+}
+
+#[test]
+fn a_worker_whose_heartbeats_keep_failing_stops_the_job() {
+    // Review H1: heartbeat errors were ignored, so a worker cut off from the database compiled on
+    // while the job could be handed to another worker. Here every heartbeat (and the reaper's
+    // take-back) fails; the worker must cancel the sandbox once no heartbeat went through for
+    // the heartbeat timeout less one interval (2 s here).
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let (p, _) = paper(&ana, "Cut off", &hello("x"));
+    assert_eq!(ana.compile(&p, None).status, 202);
+    let db = sr.db();
+    let (runtime, compiles) = library(&mut sr);
+    postgres().psql(
+        &db,
+        "CREATE FUNCTION scribyra_test_down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'unreachable'; END $$;
+         CREATE TRIGGER scribyra_test_down BEFORE UPDATE ON compiles FOR EACH ROW WHEN (OLD.state = 'running' AND NEW.state IN ('running', 'queued')) EXECUTE FUNCTION scribyra_test_down();",
+    );
+    let (runs, cancelled) = (std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+    let runner = std::sync::Arc::new(Waiting { runs: runs.clone(), cancelled: cancelled.clone() });
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let worker = runtime.spawn(scribyra_sync::compiles::Worker::new(compiles, runner).run(shutdown, Duration::from_secs(1)));
+    eventually("the job running", || runs.load(std::sync::atomic::Ordering::SeqCst) == 1);
+    let t = Instant::now();
+    while cancelled.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(t.elapsed() < Duration::from_secs(10), "the sandbox kept running without heartbeats");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(t.elapsed() >= Duration::from_millis(1500), "stopped before the timeout: {:?}", t.elapsed());
+    // Nothing was stored for the abandoned run.
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM compiles WHERE outcome IS NOT NULL"), "0");
+    stop.send_replace(true);
+    runtime.block_on(worker).unwrap();
+}
