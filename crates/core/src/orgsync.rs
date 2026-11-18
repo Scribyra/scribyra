@@ -208,7 +208,7 @@ pub fn valid_agreement_key(public: &str) -> bool {
 }
 
 // ---------------------------------------------------------------------------
-// Identifiers, setup codes and recovery codes
+// Identifiers and recovery codes
 
 /// UUID version 8 from a canonical JSON value (same construction as D's author IDs).
 pub fn derived_uuid(value: &Value) -> Result<String> {

@@ -36,6 +36,12 @@ async function settled(engine,id,state='backed-up'){
  for(let i=0;i<400;i++){if(accepted.includes(engine.status(id)?.state))return;await new Promise(r=>setTimeout(r,25));}
  assert.fail(`backup did not reach ${state}: ${JSON.stringify(engine.status(id))}`);
 }
+/** Settled with a status message matching `pattern`: the live follower may start another sync
+ * right after the one a test awaited, so a status read at one moment can be "Backing up…". */
+async function settledSaying(engine,id,pattern){
+ for(let i=0;i<400;i++){const s=engine.status(id);if(['backed-up','synced'].includes(s?.state)&&pattern.test(s.message))return;await new Promise(r=>setTimeout(r,25));}
+ assert.match(engine.status(id)?.message??'',pattern);
+}
 
 test('a project with comments, reviews and history backs up encrypted and restores from the kit and its person’s sign-in',async()=>{
  const s=await orgService();let engine,restoredEngine;
@@ -453,7 +459,7 @@ test('removing an editor rotates the key: new entries use an epoch the removed d
   await engine.push(p.id);await settled(engine,p.id);
   local=await storage.loadProject(p.id);
   try{assert.match(textOf(local),/BEN_AFTER/);assert.doesNotMatch(textOf(local),/CAT_INJECTED/);}finally{local.destroy();}
-  assert.match(engine.status(p.id).message,/2 changes from removed devices/);
+  await settledSaying(engine,p.id,/2 changes from removed devices/);
  }finally{engine?.close();await erase();await s.close();}
 });
 
@@ -514,7 +520,7 @@ test('a removed member’s writes injected before the rotation are held, then re
   assert.deepEqual(event.body.cuts,{[cat.device]:1});
   let local=await storage.loadProject(p.id);
   try{assert.match(textOf(local),/CAT_BEFORE/);assert.doesNotMatch(textOf(local),/CAT_AFTER_REMOVAL/);}finally{local.destroy();}
-  assert.match(engine.status(p.id).message,/1 change from removed devices/);
+  await settledSaying(engine,p.id,/1 change from removed devices/);
   // A rotation that cuts back further than what this browser accepted is a disagreement: stop.
   const cat2=await rawMember(s,'dan',engine);await engine.grant(project,cat2.person,'editor');
   const k2=await cat2.key(project,2);
