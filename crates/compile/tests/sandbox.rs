@@ -435,3 +435,21 @@ fn cpu_is_metered_and_bounded_per_job() {
   assert_eq!(r.killed, Some(Status::LimitExceeded(Limit::Cpu)), "{r:?}");
   assert!(r.cpu_ms < 4000 && t.elapsed() < Duration::from_secs(10), "{:?} {r:?}", t.elapsed());
 }
+
+#[test]
+fn outputs_are_read_back_without_following_symlinks() {
+  // Review L2: code running as the engine (as after an engine bug; LuaTeX's own lfs.link is
+  // refused without shell escape) replaces the outputs the driver reads back with symlinks.
+  let engine = "for f in main.pdf main.log main.blg; do rm -f $f; ln -s $BASH $f; done; exit 0";
+  let script = format!("printf '%s\\n' '{engine}' > /work/engine.sh; printf '#!%s\\nexec \"%s\" /work/engine.sh\\n' \"$BASH\" \"$BASH\" > /work/fake; chmod +x /work/fake; \
+    \"$BASH\" -c \"$DRIVER\" driver 3 4 5 /work/fake main.tex 2 bibtex 32 128 16384 3>/work/report 4>/work/pdf 5>/work/log; \
+    echo pdf=$(stat -c %s /work/pdf) log=$(stat -c %s /work/log); echo report=$(</work/report)");
+  let t = Instant::now();
+  let r = raw(&format!("DRIVER={}\n{script}", shell_quote(scribyra_compile::DRIVER)), &[("main.tex", HELLO)], &Limits { wall_seconds: 20, ..limits() });
+  let k = kv(&r.stdout.replace(' ', "\n"));
+  assert!(r.killed.is_none() && t.elapsed() < Duration::from_secs(15), "{r:?}");
+  assert_eq!((k.get("pdf").map(String::as_str), k.get("log").map(String::as_str)), (Some("0"), Some("0")), "{r:?}");
+  assert!(r.stdout.contains("tex-error"), "{r:?}");
+}
+
+fn shell_quote(s: &str) -> String { format!("'{}'", s.replace('\'', "'\\''")) }

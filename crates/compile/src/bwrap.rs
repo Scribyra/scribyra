@@ -19,7 +19,7 @@ use std::process::{Command, Stdio};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
-const DRIVER: &str = include_str!("driver.sh");
+use crate::DRIVER;
 const RAW: &str = r#"ulimit -u "$1" -n "$2" -f "$3" -c 0 || exit 99; eval "$4""#;
 const STDERR_CAP: usize = 64 << 10;
 
@@ -75,7 +75,7 @@ impl Bubblewrap {
     closure.dedup();
     let find = |want: &[&str], prefer: &str| closure.iter().filter(|p| want.iter().all(|b| p.join("bin").join(b).is_file())).min_by_key(|p| !p.to_string_lossy().contains(prefer) as u8 * 2 + p.to_string_lossy().contains("interactive") as u8).cloned();
     let bash = find(&["bash"], "-bash-").ok_or_else(|| bad("the TeX Live closure has no bash".into()))?.join("bin/bash");
-    let coreutils = find(&["cat", "stat", "tail", "rm"], "-coreutils-").ok_or_else(|| bad("the TeX Live closure has no coreutils".into()))?;
+    let coreutils = find(&["cat", "stat", "tail", "rm", "dd"], "-coreutils-").ok_or_else(|| bad("the TeX Live closure has no coreutils".into()))?;
     let id = texlive.file_name().unwrap().to_string_lossy().into_owned();
     Ok(Bubblewrap { bwrap, texlive, closure, bash, coreutils, id, conf: Conf::Unset })
   }

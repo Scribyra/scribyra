@@ -13,6 +13,10 @@ pub mod seccomp;
 pub use bwrap::{store_closure, Bubblewrap, RawOutcome};
 pub use cgroup::Confinement;
 
+/// The in-sandbox driver script (for tests that run it under the raw hook).
+#[doc(hidden)]
+pub const DRIVER: &str = include_str!("driver.sh");
+
 use std::collections::BTreeSet;
 use std::future::Future;
 use std::pin::Pin;

@@ -9,10 +9,14 @@ ulimit -u "$8" -n "$9" -f "${10}" -c 0 || { echo "limit-setup" >&"$S"; exit 99; 
 job=${main##*/}; job=${job%.tex}
 say() { echo "$*" >&"$S"; }
 full() { local a; a=$(stat -f -c %a /work 2>/dev/null) && (( a < 2 )); }
-logtail() { [[ -f $job.log ]] && tail -c 65536 "$job.log" 2>/dev/null; }
+# Job code could have replaced an output with a symlink: read only regular files, through
+# O_NOFOLLOW (dd iflag=nofollow), so a swap after the check fails instead of being followed.
+reg() { [[ -f $1 && ! -L $1 ]]; }
+rd() { dd if="$1" iflag=nofollow bs=64K status=none 2>/dev/null; }
+logtail() { reg "$job.log" && rd "$job.log" | tail -c 65536; }
 send() {
-  { [[ -f $job.log ]] && cat "$job.log"
-    for x in blg; do [[ -f $job.$x ]] && { printf '\n--- %s.%s ---\n' "$job" "$x"; cat "$job.$x"; }; done; } >&"$L" 2>/dev/null
+  { reg "$job.log" && rd "$job.log"
+    for x in blg; do reg "$job.$x" && { printf '\n--- %s.%s ---\n' "$job" "$x"; rd "$job.$x"; }; done; } >&"$L" 2>/dev/null
 }
 # 0: carry on; 1: stop (the reason has been said).
 check() {
@@ -36,12 +40,12 @@ flags=(-no-shell-escape -interaction=nonstopmode -halt-on-error)
 rm -f -- "$job.pdf" "$job.xdv" "$job.log"
 i=0 bibdone=0
 while (( i < passes )); do
-  i=$((i + 1)); before=; [[ -f $job.aux ]] && before=$(<"$job.aux")
+  i=$((i + 1)); before=; reg "$job.aux" && before=$(rd "$job.aux")
   say "pass $i"; run "$eng" "${flags[@]}" "$main"; check $? || { send; exit 0; }
-  t=$(logtail); after=; [[ -f $job.aux ]] && after=$(<"$job.aux"); again=0
+  t=$(logtail); after=; reg "$job.aux" && after=$(rd "$job.aux"); again=0
   if (( !bibdone )) && [[ $bib == bibtex && $after == *'\bibdata{'* ]]; then
     bibdone=1 again=1; say "bibtex"; run bibtex "$job"; rc=$?; (( rc > 2 )) && { check $rc; send; exit 0; }
-  elif (( !bibdone )) && [[ $bib == biber && -f $job.bcf ]]; then
+  elif (( !bibdone )) && [[ $bib == biber ]] && reg "$job.bcf"; then
     bibdone=1 again=1; say "biber"; run biber "$job"; rc=$?; (( rc > 2 )) && { check $rc; send; exit 0; }
   fi
   [[ $t == *'Rerun to get'* || $t == *'Rerun LaTeX'* || $t == *'Please rerun LaTeX'* || $t == *'Label(s) may have changed'* ]] && again=1
@@ -50,5 +54,5 @@ while (( i < passes )); do
 done
 if [[ $eng == xelatex ]]; then run xdvipdfmx -q -o "$job.pdf" "$job.xdv"; check $? || { send; exit 0; }; fi
 full && { say "limit scratch"; send; exit 0; }
-[[ -s $job.pdf ]] || { say "tex-error"; send; exit 0; }
-cat -- "$job.pdf" >&"$P" 2>/dev/null; send; say "done"
+reg "$job.pdf" && [[ -s $job.pdf ]] || { say "tex-error"; send; exit 0; }
+rd "$job.pdf" >&"$P"; send; say "done"
