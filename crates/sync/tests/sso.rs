@@ -273,11 +273,13 @@ fn scopes_and_several_providers() {
     let query: std::collections::HashMap<String, String> = url::Url::parse(&started.url).unwrap().query_pairs().into_owned().collect();
     assert_eq!(query["scope"], "openid email profile");
     let login = partner.login("alice");
-    assert_eq!((login["provider"].as_str(), login["role"].as_str()), (Some("partner"), Some("admin")));
+    // `test:alice@example.org` is an administrator at `test` only: the same email at another
+    // provider is someone else as far as the admins list knows (review M1).
+    assert_eq!((login["provider"].as_str(), login["role"].as_str()), (Some("partner"), Some("member")));
     // The same email at two providers is two accounts: each its own subject at its issuer.
     let first = c.login("alice");
     assert_eq!(postgres().psql(service.database_url(), "SELECT count(DISTINCT issuer) FROM sso_logins WHERE subject = 'sub-alice'"), "2");
-    assert_eq!(first["provider"], "test");
+    assert_eq!((first["provider"].as_str(), first["role"].as_str()), (Some("test"), Some("admin")));
 }
 
 #[test]
@@ -296,12 +298,20 @@ fn guests_admin_groups_and_member_groups_decide_who_signs_in_and_as_what() {
     assert_eq!(c.sign_in("bob").0, Outcome::Error("not_member".into()));
     assert_eq!(c.sign_in("dave").0, Outcome::Error("not_member".into()));
     // The admins list names people whatever their groups: by verified email or issuer#subject.
-    let listed = Env::start("RS256", users.clone(), json!({}), json!({"admins": ["bob@other.org"], "provider": provider}));
+    let listed = Env::start("RS256", users.clone(), json!({}), json!({"admins": ["test:bob@other.org"], "provider": provider}));
     let c = listed.client();
     assert_eq!(c.login("bob")["role"], "admin");
+    // A plain email is matched only through a provider whose email_domains include it (review M1):
+    // erin's verified example.org address makes her an administrator at the provider that vouches
+    // for example.org, not at one that would accept any email.
+    let mut vouching = provider.clone();
+    vouching["email_domains"] = json!(["example.org", "other.org"]);
+    let domains = Env::start("RS256", users.clone(), json!({}), json!({"admins": ["erin@example.org"], "provider": vouching}));
+    assert_eq!(domains.client().login("erin")["role"], "admin");
+    assert_eq!(scribyra_sync::sso::admit(&serde_json::from_value(deployment(&domains.idp, json!({"admins": ["erin@example.org"], "provider": vouching}))).unwrap(), &serde_json::from_value(json!({"id": "other", "label": "Other", "issuer": "https://other.example", "client_id": "x", "client_secret_file": "/x"})).unwrap(), "s", Some("erin@example.org"), true, &[], false), Ok(scribyra_sync::sso::Role::Member));
     assert_eq!(c.login("erin")["role"], "member");
     // Guests "shared": a guest signs in as a guest, never as an administrator.
-    let shared = Env::start("RS256", users, json!({}), json!({"guests": "shared", "admins": ["gus@partner.example"], "provider": provider}));
+    let shared = Env::start("RS256", users, json!({}), json!({"guests": "shared", "admins": ["test:gus@partner.example"], "provider": provider}));
     let c = shared.client();
     assert_eq!(c.login("gus")["role"], "guest");
     // Nothing about the refusals reaches the logs but their codes.

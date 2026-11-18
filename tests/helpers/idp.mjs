@@ -37,7 +37,7 @@ export async function idp({publicUrl,users,shortcuts=false}){
  * provider, `deployment` to the deployment object, the rest to the service configuration.
  * `close()` stops both.
  */
-export async function orgService({users=people(['ana','ben','cat','dan','eve','fay']),admins=['ana@acme.test'],shortcuts=true,deployment={},provider:rules={},...overrides}={}){
+export async function orgService({users=people(['ana','ben','cat','dan','eve','fay']),admins=['acme:ana@acme.test'],shortcuts=true,deployment={},provider:rules={},...overrides}={}){
  const port=await freePort(),publicUrl=`http://127.0.0.1:${port}`;
  const provider=await idp({publicUrl,users,shortcuts});
  let s;

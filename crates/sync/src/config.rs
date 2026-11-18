@@ -592,12 +592,18 @@ fn claim_name(text: &str) -> bool {
 fn domain_name(text: &str) -> bool {
     text.len() <= 253 && text.contains('.') && !text.starts_with(['.', '-']) && !text.ends_with(['.', '-']) && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
 }
-/// An `admins` entry: a lowercase email, or `issuer#subject`.
-fn admin_entry(text: &str) -> bool {
-    match text.split_once('#') {
-        Some((issuer, subject)) => crate::sso::secure_url(issuer) && short_text(subject, 255),
-        None => text.len() <= 254 && text.split_once('@').is_some_and(|(local, domain)| !local.is_empty() && !domain.contains('@') && domain_name(domain) && !local.chars().any(|c| c.is_whitespace() || c.is_control()) && text == text.to_lowercase()),
+/// An `admins` entry: a lowercase email, `provider:email`, or `issuer#subject`.
+fn admin_entry(text: &str, providers: &[Provider]) -> bool {
+    if let Some((issuer, subject)) = text.split_once('#') {
+        return crate::sso::secure_url(issuer) && short_text(subject, 255);
     }
+    // A plain email must be vouched for by a provider's email_domains; otherwise any provider
+    // could make an administrator by claiming it, so it has to name its provider.
+    let (text, vouched) = match text.split_once(':') {
+        Some((id, email)) => (email, providers.iter().any(|p| p.id == id)),
+        None => (text, text.rsplit_once('@').is_some_and(|(_, domain)| providers.iter().any(|p| p.email_domains.iter().any(|d| d == domain)))),
+    };
+    vouched && text.len() <= 254 && text.split_once('@').is_some_and(|(local, domain)| !local.is_empty() && !domain.contains('@') && domain_name(domain) && !local.chars().any(|c| c.is_whitespace() || c.is_control()) && text == text.to_lowercase())
 }
 impl Deployment {
     /// Field and cross-field rules; the error names the field.
@@ -648,8 +654,8 @@ impl Deployment {
                 return Err("deployment.providers[].scopes must be at most 16 scope names");
             }
         }
-        if self.admins.len() > 256 || !self.admins.iter().all(|a| admin_entry(a)) {
-            return Err("deployment.admins must list lowercase emails or issuer#subject");
+        if self.admins.len() > 256 || !self.admins.iter().all(|a| admin_entry(a, &self.providers)) {
+            return Err("deployment.admins must list provider:email (a configured provider), an email in a provider's email_domains, or issuer#subject, all lowercase");
         }
         let q = &self.quotas;
         if q.deployment_bytes == 0 || q.project_bytes == 0 || q.member_bytes == 0 || q.project_bytes > q.deployment_bytes || q.member_bytes > q.deployment_bytes {
@@ -730,7 +736,13 @@ mod tests {
         assert!(refused(json!({"audit_retention_days": 3651})).contains("audit_retention_days"));
         config(deployment(json!({"audit_retention_days": 30}))).unwrap();
         assert!(refused(json!({"admins": ["not an email"]})).contains("deployment.admins"));
-        config(deployment(json!({"admins": ["it-admin@acme.org", "https://login.acme.org/realms/lab#f81d4fae"]}))).unwrap();
+        config(deployment(json!({"admins": ["acme:it-admin@acme.org", "https://login.acme.org/realms/lab#f81d4fae"]}))).unwrap();
+        // A plain email needs a provider whose email_domains vouch for it (review M1).
+        assert!(refused(json!({"admins": ["it-admin@acme.org"]})).contains("deployment.admins"));
+        assert!(refused(json!({"admins": ["other:it-admin@acme.org"]})).contains("deployment.admins"));
+        let mut vouching = provider();
+        vouching["email_domains"] = json!(["acme.org"]);
+        config(deployment(json!({"admins": ["it-admin@acme.org"], "providers": [vouching]}))).unwrap();
         assert!(refused(json!({"admins": ["ftp://login.acme.org#x"]})).contains("deployment.admins"));
         // Server compile needs server-readable encryption and a TeX Live tree.
         assert!(refused(json!({"compile": "server"})).contains("needs texlive"));

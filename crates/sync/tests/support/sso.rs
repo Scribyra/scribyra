@@ -159,7 +159,7 @@ pub fn people() -> Value {
 /// `provider` object is merged into the provider.
 pub fn deployment(idp: &Idp, extra: Value) -> Value {
     let mut provider = json!({"id": "test", "label": "Test account", "issuer": idp.issuer, "client_id": CLIENT_ID, "client_secret_file": idp.secret_file()});
-    let mut deployment = json!({"name": "Test Lab", "encryption": "e2ee", "admins": ["alice@example.org"]});
+    let mut deployment = json!({"name": "Test Lab", "encryption": "e2ee", "admins": ["test:alice@example.org"]});
     for (k, v) in extra.as_object().unwrap() {
         if k == "provider" {
             for (pk, pv) in v.as_object().unwrap() {

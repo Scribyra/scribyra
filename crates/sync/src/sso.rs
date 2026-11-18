@@ -110,9 +110,22 @@ impl From<sqlx::Error> for LinkError {
     }
 }
 
+/// Whether an `admins` entry names this verified (lowercased) email at this provider: a plain
+/// email only through a provider whose `email_domains` vouch for its domain (otherwise any
+/// provider could claim it), `provider:email` through that provider only.
+fn admin_email_matches(entry: &str, provider: &Configured, email: &str) -> bool {
+    if entry.contains('#') {
+        return false;
+    }
+    match entry.split_once(':') {
+        Some((id, listed)) => id == provider.id && listed == email,
+        None => entry == email && email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain)),
+    }
+}
 /// The deployment role of an identity, or the code of the rule that refuses it: guests when the
 /// deployment admits none, and people outside `member_groups` when the provider names some.
-/// Administrators are the `admins` list (a verified email or `issuer#subject`) and members of
+/// Administrators are the `admins` list (a verified email at a provider whose `email_domains`
+/// include its domain, `provider:email`, or `issuer#subject`) and members of
 /// `admin_groups`; a guest account is never an administrator.
 pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, email: Option<&str>, email_verified: bool, groups: &[String], guest: bool) -> Result<Role, &'static str> {
     if guest {
@@ -123,7 +136,7 @@ pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, emai
     }
     let pair = format!("{}#{subject}", provider.issuer);
     let email = email.filter(|_| email_verified).map(str::to_lowercase);
-    let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref() == Some(a.as_str()));
+    let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)));
     let admin = listed || groups.iter().any(|g| provider.admin_groups.contains(g));
     if !admin && !provider.member_groups.is_empty() && !groups.iter().any(|g| provider.member_groups.contains(g)) {
         return Err("not_member");
