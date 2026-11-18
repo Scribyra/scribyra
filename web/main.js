@@ -1,6 +1,8 @@
 import {directShare} from './direct-share.js';
 import {orgBackup,orgConnected,orgJoining} from './org-backup.js';
 import {orgDialog} from './org-dialog.js';
+import {orgServer,orgServerConnected,serverSignInPending,forgetServerSignIn} from './org-server.js';
+import {orgServerDialog} from './org-server-dialog.js';
 import {parseInvite,profileIdentity,requireDirectSupport,deleteProfileIdentity} from './direct-identity.js';
 import {identityAuthorId,earlierRecords} from './direct-provenance.js';
 import {directEnabled,setDirectEnabled,setDirectKeyPresent,legacyAuthorIds,addLegacyAuthorId} from './direct-state.js';
@@ -50,7 +52,7 @@ import { defaultKeymap, indentWithTab } from '@codemirror/commands';
 import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle, bracketMatching, indentUnit } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
-import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
+import { yCollab, yUndoManagerKeymap, ySyncAnnotation } from 'y-codemirror.next';
 import { projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
 import * as storage from './storage.js';
 import { readBrowserFiles, readDirectory, readDroppedFiles } from './import-files.js';
@@ -101,7 +103,7 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // providers stay reachable only behind this test-only switch; production never
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
-const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', remoteStatus: '', remoteDetail: '', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
+const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', remoteStatus: '', remoteDetail: '', editingPaused: '', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
 const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
@@ -178,10 +180,26 @@ async function pickFiles(accept, multiple = false, directory = false) {
 }
 async function refreshProjects() {
   allProjects = await storage.listProjects();
-  state.projects = allProjects.filter(p => p.name.toLowerCase().includes(state.filter.toLowerCase())).map(p => ({ ...p, backup: orgEngine?.status(p.id)?.label||'', date: new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })); emit();
+  state.projects = allProjects.filter(p => p.name.toLowerCase().includes(state.filter.toLowerCase())).map(p => ({ ...p, backup: orgEngine?.status(p.id)?.label||srEngine?.status(p.id)?.label||'', date: new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })); emit();
 }
 // Remote backup exists only after the person connects a service (off means off).
-let orgEngine=null,orgPanel=null,orgRefresh=0;
+let orgEngine=null,orgPanel=null,orgRefresh=0,srEngine=null;
+const refreshSoon=()=>{orgPanel?.render();if(!orgRefresh)orgRefresh=setTimeout(()=>{orgRefresh=0;if(!state.current)void refreshProjects().catch(()=>{});},300);};
+/** The open project's organisation state: its sync label, and in an online-only deployment whether editing is paused. */
+function remoteState(id){
+  const status=orgEngine?.status(id)||srEngine?.status(id),paused=srEngine?.editingPaused(id)||'';
+  state.remoteStatus=paused||status?.label||'';state.remoteDetail=paused||status?.message||'';
+  if(paused!==state.editingPaused){state.editingPaused=paused;if(editor){editor.destroy();editor=null;mountedFile=null;requestAnimationFrame(mountEditor);}}
+}
+// A server-readable deployment's engine (web/org-server.js), made only once the person signs in there.
+function serverEngine(){
+  srEngine??=orgServer({onChange:localId=>{if(localId===projectId&&state.current){remoteState(localId);emit();}refreshSoon();},
+    onRemote:localId=>{if(localId===projectId)void tabSession?.refresh({force:true});else if(!state.current)void refreshProjects().catch(()=>{});},
+    onAccount:refreshSoon,
+    // Online-only: local copies are deleted; an open one is closed first (its unsent edits cannot be kept).
+    beforeErase:async ids=>{if(state.current&&ids.includes(projectId)){await leaveProject({save:false});state.current=false;notice('Signed out. This organisation keeps projects online only, so they were removed from this device.');}}});
+  return srEngine;
+}
 function remoteBackup(){
   orgEngine??=orgBackup({onChange:localId=>{
     if(localId===projectId){const status=orgEngine.status(localId);state.remoteStatus=status?.label||'';state.remoteDetail=status?.message||'';emit();}
@@ -197,16 +215,22 @@ function remoteBackup(){
 // the module is initialised (the return from a sign-in can arrive before that).
 const wasmReady=init();
 if(orgConnected()||orgJoining())void wasmReady.then(()=>remoteBackup().start()).catch(error=>notice('Remote backup could not start: '+error.message));
+if(orgServerConnected())void wasmReady.then(()=>serverEngine().start()).then(()=>refreshProjects()).catch(error=>notice('Syncing with your organisation could not start: '+error.message));
 // The return from the organisation's sign-in arrives in the fragment (never sent to the app's host).
-function openOrgPanel(prefill={}){orgPanel?.close();orgPanel=orgDialog({engine:remoteBackup(),anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});}
+function openOrgPanel(prefill={}){
+  orgPanel?.close();
+  if(prefill.server||orgServerConnected()&&!orgConnected())orgPanel=orgServerDialog({engine:serverEngine(),anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onChanged:()=>{void refreshProjects();},onOpen:id=>openProject(id)});
+  else orgPanel=orgDialog({engine:remoteBackup(),server:serverEngine,anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
+}
 const SIGN_IN_ERRORS={guest:'Guest accounts can’t use this organisation’s Scribyra.',not_member:'Your account is not in a group that may use this organisation’s Scribyra. Ask your administrator.'};
 function takeOrgFragment(){
   const hash=location.hash;
   const kind=['#scribyra-sso=','#scribyra-sso-error='].find(prefix=>hash.startsWith(prefix));
   if(!kind)return;
   history.replaceState(null,'',location.pathname+location.search);
-  if(kind==='#scribyra-sso-error=')return void notice(SIGN_IN_ERRORS[hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')]||'Signing in with your organisation did not work ('+hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')+'). Try again.');
-  const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code});
+  const server=serverSignInPending();
+  if(kind==='#scribyra-sso-error='){forgetServerSignIn();return void notice(SIGN_IN_ERRORS[hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')]||'Signing in with your organisation did not work ('+hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')+'). Try again.');}
+  const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code,server});
 }
 window.addEventListener('hashchange',()=>void wasmReady.then(takeOrgFragment,()=>{}));
 void wasmReady.then(takeOrgFragment,()=>{});
@@ -342,10 +366,10 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   try { doc = transientDoc || await storage.loadProject(id); } catch (e) { state.current = false; await refreshProjects(); throw e; }
   directAttempt?.signal.throwIfAborted();
   // A project shared through an organisation offers only the modes of the person's role on it.
-  const roleModes=transientDoc||!orgEngine?.connected?null:await orgEngine.allowedModes(id).catch(()=>null);
+  const roleModes=transientDoc?null:(srEngine?.connected?await srEngine.allowedModes(id).catch(()=>null):null)??(orgEngine?.connected?await orgEngine.allowedModes(id).catch(()=>null):null);
   transientProject=!!transientDoc;
   leavingProject=false;projectId = id; revision = 0;localEdits=savedEdits=0;historyPointAt=Date.now();const target=doc;commands=projectCommands({doc,projectId,isActive:()=>doc===target,beforeMutation:uiCommandGuard(()=>collaboration?.review.state.mode)});
-  state.upgradeAvailable=false;state.reviewDraftPending=false;state.current = true; consentDiagnostics?.dismiss(); state.active = ''; state.selected = '';  state.log = '';liveLog.stop();state.buildIssues=[]; state.showLog = false; state.showIssues = false; state.status = 'Ready to compile'; state.saveStatus = transientProject?'In memory · accept TeX link to save':'Saved locally';{const remote=orgEngine?.status(id);state.remoteStatus=remote?.label||'';state.remoteDetail=remote?.message||'';}
+  state.upgradeAvailable=false;state.reviewDraftPending=false;state.current = true; consentDiagnostics?.dismiss(); state.active = ''; state.selected = '';  state.log = '';liveLog.stop();state.buildIssues=[]; state.showLog = false; state.showIssues = false; state.status = 'Ready to compile'; state.saveStatus = transientProject?'In memory · accept TeX link to save':'Saved locally';state.editingPaused=srEngine?.editingPaused(id)||'';remoteState(id);
   agentOwner=localAgentOwner(transientProject?{getItem:key=>localStorage.getItem(key),setItem:()=>{}}:localStorage);
   collaboration=mountCollaboration({doc:target,projectId,allowedModes:()=>roleModes,signedMessages:()=>!!state.directActive,legacyAuthorIds,trustLabels:()=>directEnabled()||!!state.directActive,requestDecision:command=>direct.requestDecision(command),canPersistDrafts:()=>!transientProject,canUnload:()=>!!state.upgradeReload,onDraftPending:pending=>{if(doc===target){state.reviewDraftPending=pending;emit();}},author:{...agentOwner,kind:'human'},commands,flushSave,storage,selection:()=>({fileId:mountedFile,...(editor?collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to)||{start:editor.state.selection.main.from,end:editor.state.selection.main.to}:{})}),validateCommentSelection:()=>{if(editor)collaboration?.review.sourceRange(editor.state.selection.main.from,editor.state.selection.main.to,true);},activate:activateFile,captureSelection,remount:()=>{editor?.destroy();editor=null;mountedFile=null;mountEditor();},confirm:(title,message)=>modal(title,message),compile:options=>{texLinks.assertAllowed();return builds.run({...options,projectId:id,revision:commands.revision(),isActive:()=>doc===target&&!leavingProject});},onState:patch=>{if(doc===target){Object.assign(state,patch);emit();}},managers:undoManagers,remote:[LOCAL_DURABLE],isActive:()=>doc===target&&!leavingProject});
   direct=directShare({doc:target,initialAttempt:directAttempt,author:{...agentOwner,kind:'human'},initialInvite:initialDirectInvite,notify:notice,
@@ -434,6 +458,8 @@ function mountEditor() {
     }},...(collaboration?.review.state.mode!=='editing'?[]:yUndoManagerKeymap), ...defaultKeymap, ...searchKeymap, indentWithTab]), StreamLanguage.define(stex), syntaxHighlighting(accessibleHighlight), bracketMatching(), highlightSelectionMatches(), editorSearch(),
     ...(collaboration?.review.state.mode==='reviewing'?[]:[yCollab(text, sync?.awareness || null, { undoManager: collaboration?.review.state.mode==='viewing'?false:undo })]),
     EditorView.contentAttributes.of({ 'aria-label': 'LaTeX source', spellcheck: 'false' }),
+    // Online-only deployment without a recent answer from its server: read only until it answers.
+    ...(state.editingPaused?[EditorState.readOnly.of(true),EditorView.contentAttributes.of({'aria-readonly':'true'}),EditorView.domEventHandlers({beforeinput(event){event.preventDefault();return true;}}),EditorState.transactionFilter.of(tr=>tr.docChanged&&!tr.annotation(ySyncAnnotation)?[]:tr)]:[]),
     EditorView.theme({ '&': { color: 'var(--text)', backgroundColor: 'var(--surface)' }, '.cm-activeLine': { backgroundColor: 'var(--subtle)' }, '.cm-cursor': { borderLeftColor: 'var(--text)' } }),
   ] }) });
   editor.scrollDOM.tabIndex=0;editor.scrollDOM.setAttribute('role','region');editor.scrollDOM.setAttribute('aria-label','LaTeX source scroll area');
@@ -578,6 +604,7 @@ function sharedSettings(seen,chosen,title){
   return command;
 }
 function treeEditBlocked() {
+  if(state.editingPaused)return state.editingPaused;
   const mode=collaboration?.review.state.mode;
   try{assertUiMutation(mode);return '';}catch{return mode==='viewing'?'Viewing is read only. Switch to Editing to change project files.':'Reviewing records suggestions. Switch to Editing to change project files.';}
 }

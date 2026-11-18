@@ -5,13 +5,14 @@
 // up and share projects, manage members and devices.
 import {openDialog} from './menu.js';
 import {STATUS_TEXT,MODE_TEXT} from './org-backup.js';
+import {MODE_TEXT as SERVER_MODE_TEXT,forgetServerSignIn} from './org-server.js';
 import './org-dialog.css';
 
 const element=(tag,text,cls)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(cls)node.className=cls;return node;};
 const ROLE_LABEL={owner:'Owner',admin:'Admin',member:'Member',editor:'Editor',reviewer:'Reviewer',viewer:'Viewer'};
 const POLL_MS=3000;
 
-export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>{},onChanged=()=>{}}){
+export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestored=()=>{},onChanged=()=>{}}){
  let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,drawing=null,redraw=false,offered=null,about=null,providers=null;
  const close=()=>session?.close('now');
  function button(label,fn,cls='secondary'){
@@ -41,7 +42,7 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
   const url=URL.createObjectURL(new Blob([text],{type:'text/plain'})),a=element('a');a.href=url;a.download='scribyra-recovery-kit.txt';
   document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
  }
- async function sso(service,provider,purpose='connect'){const url=await engine.ssoBegin({service,provider,purpose});location.assign(url);}
+ async function sso(service,provider,purpose='connect'){forgetServerSignIn();const url=await engine.ssoBegin({service,provider,purpose});location.assign(url);}
  /** One "Sign in with …" button per provider of a deployment. */
  const signInButtons=(service,list,purpose,again='')=>list.map(p=>button(`Sign in with ${p.label}${again}`,()=>sso(service,p.id,purpose),'primary'));
 
@@ -111,8 +112,9 @@ export function orgDialog({engine,anchor,listProjects,prefill={},onRestored=()=>
    actions(button('Continue',async()=>{offered=await engine.deployment(address.input.value);},'primary')));
   body.append(connect);
   if(offered){
-   const choose=section(offered.name,element('p',MODE_TEXT[offered.encryption]||'','org-help org-mode'));
-   if(offered.encryption!=='e2ee')choose.append(element('p',`${offered.name} keeps projects on its server. This version of Scribyra connects only to end-to-end encrypted deployments.`,'org-help'));
+   const readable=offered.encryption==='server',choose=section(offered.name,element('p',readable?SERVER_MODE_TEXT(offered.name):MODE_TEXT[offered.encryption]||'','org-help org-mode'));
+   // A server-readable deployment signs in through its own engine (web/org-server.js).
+   if(readable)choose.append(actions(...offered.providers.map(p=>button(`Sign in with ${p.label}`,async()=>{location.assign(await server().ssoBegin({service:offered.service,provider:p.id}));},'primary'))));
    else choose.append(actions(...signInButtons(offered.service,offered.providers,'connect')));
    body.append(choose);
   }

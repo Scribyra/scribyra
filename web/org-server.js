@@ -34,6 +34,8 @@ const readSession=key=>{try{const store=globalThis.sessionStorage;return JSON.pa
 const writeSession=(key,value)=>{try{const store=globalThis.sessionStorage,text=value?JSON.stringify(value):null;if(store){if(text)store.setItem(key,text);else store.removeItem(key);}else if(text)memory.set(key,text);else memory.delete(key);}catch{}};
 /** A sign-in to a server-readable deployment was started in this tab and its return is due. */
 export function serverSignInPending(){const flow=readSession(SSO_FLOW);return !!flow&&Date.now()-flow.started<15*60*1000;}
+/** Drops a server-readable sign-in this tab started (another sign-in, or a refused one, replaces it). */
+export function forgetServerSignIn(){writeSession(SSO_FLOW,null);}
 
 const DB='scribyra-org-server';
 const database=()=>openDB(DB,1,{upgrade(db){
@@ -526,6 +528,11 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   async projects(){
    await load();const links=await db.getAll('links'),byProject=new Map(links.map(l=>[l.project,l]));
    const list=signedIn()?(await client.list()).projects:[];
+   // The list is as fresh as the heads poll: roles and names it shows take effect here too.
+   if(signedIn()){
+    remote={...remote};for(const p of list)remote[p.id]={...remote[p.id],role:p.role,name:p.name,head:remote[p.id]?.head??p.head};
+    for(const l of links){const p=list.find(x=>x.id===l.project);if(p&&(p.role!==l.role||p.name!==l.name)){Object.assign(l,{role:p.role,name:p.name});await db.put('links',l);}}
+   }
    const out=list.map(p=>({project:p.id,name:p.name,role:p.role,owner:p.owner,head:p.head,localId:byProject.get(p.id)?.localId||null}));
    const seen=new Set(out.map(p=>p.project));
    for(const l of links)if(!seen.has(l.project))out.push({project:l.project,name:l.name,role:l.created?null:'owner',owner:null,localId:l.localId,gone:l.created&&signedIn()});
