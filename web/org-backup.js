@@ -887,7 +887,10 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
      polling=new AbortController();
      const heads=await authed(()=>client.heads(connection.org,since,since===undefined?0:25,polling.signal));
      if(closed)break;
-     const moved=since!==undefined&&heads.version!==since;
+     // The first answer counts as a move: keys published between this browser's last exchange
+     // and that answer bumped a version it never saw (a new device's first keys arriving just
+     // after it was admitted), so they are collected now rather than never.
+     const moved=since===undefined||heads.version!==since;
      failures=0;since=heads.version;live=true;
      if(heads.events>connection.state.count){await refreshMembership();await exchangeKeys().catch(()=>{});}
      // Something moved: keys may have arrived for this device, or others may be waiting for them.
