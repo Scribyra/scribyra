@@ -189,6 +189,9 @@ sys_('mount', 0, 0, 0, 0, 0)
 sys_('perf_event_open', 0, 0, -1, -1, 0)
 sys_('bpf', 0, 0, 0)
 sys_('clone', 0x10000000 | 17, 0, 0, 0, 0)
+sys_('memfd_create', 0, 0)
+for k in nr:
+    if k.startswith('x_'): sys_(k, 0, 0, 0, 0, 0)  # not on the allow list
 for fam in ['AF_INET', 'AF_INET6', 'AF_NETLINK', 'AF_PACKET', 'AF_UNIX']:
     try:
         socket.socket(getattr(socket, fam), socket.SOCK_DGRAM if fam != 'AF_PACKET' else socket.SOCK_RAW).close(); print(f"socket.{fam}=ok")
@@ -211,14 +214,16 @@ print("root=" + ' '.join(sorted(os.listdir('/'))))
 fn seccomp_rlimits_network_and_filesystem_inside_the_sandbox() {
   let (py, _) = python();
   let m = marker("probe");
-  let nrs: Vec<String> = seccomp::denied().iter().map(|(n, nr)| format!("{n}:{nr}")).chain([format!("clone:{}", libc_clone())]).collect();
+  let nrs: Vec<String> = seccomp::denied().iter().map(|(n, nr)| format!("{n}:{nr}")).chain([format!("clone:{}", libc_clone())]).chain(unlisted().iter().map(|(n, nr)| format!("x_{n}:{nr}"))).collect();
   let l = limits();
   let o = raw(&format!("{} probe.py {} {m}; echo tcp; exec 3<>/dev/tcp/1.1.1.1/80 && echo TCP-OK", py.display(), nrs.join(",")), &[("probe.py", PROBE)], &l);
   let r = kv(&o.stdout);
   assert_eq!(o.code, Some(1), "stdout:\n{}\nstderr:\n{}", o.stdout, o.stderr);
   for s in ["unshare", "ptrace", "personality", "keyctl", "io_uring_setup", "setns", "mount", "perf_event_open", "bpf", "clone"] {
-    assert_eq!(r.get(&format!("sys.{s}")).map(String::as_str), Some("Operation not permitted"), "{s}: {}", o.stdout);
+    assert_eq!(r.get(&format!("sys.{s}")).map(String::as_str), Some("Operation not permitted"), "{s}: {}\n{}", o.stdout, o.stderr);
   }
+  assert_eq!(r["sys.memfd_create"], "Operation not permitted");
+  for (n, _) in unlisted() { assert_eq!(r[&format!("sys.x_{n}")], "Function not implemented", "{n}"); }
   for f in ["AF_INET", "AF_INET6", "AF_NETLINK", "AF_PACKET"] { assert_eq!(r[&format!("socket.{f}")], "Operation not permitted", "{f}"); }
   assert_eq!(r["socket.AF_UNIX"], "ok");
   assert_eq!(r["fork"], "7", "plain fork works");
@@ -237,6 +242,14 @@ fn seccomp_rlimits_network_and_filesystem_inside_the_sandbox() {
   assert!(r["pids"].split(' ').count() <= 4, "a private PID namespace: {}", r["pids"]);
   assert_eq!(r["root"], "dev nix proc work");
   assert_no_trace(&m);
+}
+
+/// Calls the review found allowed by a deny list on kernel 7.0 (x86_64 numbers); the allow list
+/// must refuse them. (`uretprobe` is left out: the kernel exempts it from seccomp by design
+/// and kills a caller outside a uretprobe trampoline with SIGILL.)
+fn unlisted() -> Vec<(&'static str, i64)> {
+  if !cfg!(target_arch = "x86_64") { return vec![]; }
+  vec![("modify_ldt", 154), ("mbind", 237), ("migrate_pages", 256), ("move_pages", 279), ("statmount", 457), ("listmount", 458), ("open_tree_attr", 467), ("file_setattr", 469)]
 }
 
 fn libc_clone() -> i64 { if cfg!(target_arch = "x86_64") { 56 } else { 220 } }
