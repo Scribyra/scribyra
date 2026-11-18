@@ -75,6 +75,11 @@ fn random_bytes<const N: usize>() -> [u8; N] {
 fn random_hex() -> String {
     orgsync::hex(&random_bytes::<32>())
 }
+/// The ID of the project an account creates with the request ID `key`:
+/// SHA-256 of `scribyra-sr-project/1\n<account>\n<key>`, in hex.
+pub fn project_id(account: &str, key: &str) -> String {
+    blob::hash(format!("scribyra-sr-project/1\n{account}\n{key}").as_bytes())
+}
 fn is_id(text: &str) -> bool {
     blob::valid_hash(text)
 }
@@ -243,8 +248,9 @@ impl Projects {
         }
     }
 
-    /// Creates an empty project owned by `owner`. With `id`, a repeat by the same owner is
-    /// `Ok(false)` (the project exists); someone else's ID is `Err(Conflict)`.
+    /// Creates an empty project owned by `owner`. A repeat by the same owner is `Ok(false)` (the
+    /// project exists); an ID someone else holds is `Err(Conflict)` (with IDs derived from the
+    /// owner, only by a SHA-256 collision).
     pub async fn create(&self, id: &str, owner: &str, name: &str) -> Result<bool, AppendError> {
         let key = random_bytes::<32>();
         let mut tx = self.pool().begin().await?;
@@ -1088,10 +1094,15 @@ async fn create(State(sr): State<Shared>, headers: HeaderMap, body: Body) -> Res
         },
         None => None,
     };
-    let id = request.id.clone().unwrap_or_else(random_hex);
+    // With `id`, the project's ID is derived from the caller's account and it, so a retry finds
+    // the project it created and nobody can learn, by trying an ID, that someone else's project
+    // has it (review L5). The app can compute it before the request.
+    let id = match &request.id {
+        Some(key) => project_id(&caller.account, key),
+        None => random_hex(),
+    };
     let created = match projects.create(&id, &caller.account, request.name.trim()).await {
         Ok(created) => created,
-        Err(AppendError::Conflict) => return error(StatusCode::CONFLICT, "this project ID is taken"),
         Err(e) => return internal(e),
     };
     let mut seq = None;

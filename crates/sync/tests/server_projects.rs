@@ -75,19 +75,30 @@ fn creating_with_an_initial_state_and_an_id_is_idempotent() {
     doc.add_text("f1", "main.tex", None, "hello");
     use yrs::ReadTxn;
     let state = yrs::Transact::transact(&doc.doc).encode_state_as_update_v1(&yrs::StateVector::default());
-    let id = random_hex(32);
-    let body = json!({"id": id, "name": "Imported", "state": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &state), "client": "browser-a", "clientSeq": 1});
+    let key = random_hex(32);
+    let body = json!({"id": key, "name": "Imported", "state": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &state), "client": "browser-a", "clientSeq": 1});
     let first = ana.call("POST", "/v1/sr/projects", Some(body.clone()));
     assert_eq!((first.status, first.json()["seq"].as_i64(), first.json()["project"]["head"].as_i64()), (201, Some(1), Some(1)));
+    // The project's ID is derived from the account and the request's `id`, so the app can
+    // compute it before the request and a retry finds the same project.
+    let id = first.json()["project"]["id"].as_str().unwrap().to_owned();
+    let me = sr.env.client().me(&ana.token).json()["account"].as_str().unwrap().to_owned();
+    assert_eq!(id, sha256(format!("scribyra-sr-project/1\n{me}\n{key}").as_bytes()));
     let again = ana.call("POST", "/v1/sr/projects", Some(body.clone()));
-    assert_eq!((again.status, again.json()["seq"].as_i64()), (200, Some(1)));
+    assert_eq!((again.status, again.json()["seq"].as_i64(), again.json()["project"]["id"].as_str()), (200, Some(1), Some(id.as_str())));
     assert_eq!(text_of(&[ana.log(&id, 0).frames()[0].1.clone()], "f1"), "hello");
-    // Another person cannot claim the ID; a state that is not Yjs is refused.
+    // Review L5: another person sending the same `id` used to get 409, learning that the
+    // project exists. They now get a project of their own, whatever anyone else did.
     let ben = sr.api(&sr.login("ben"));
-    assert_eq!(ben.call("POST", "/v1/sr/projects", Some(body)).status, 409);
+    let theirs = ben.call("POST", "/v1/sr/projects", Some(body));
+    assert_eq!(theirs.status, 201);
+    assert_ne!(theirs.json()["project"]["id"].as_str(), Some(id.as_str()));
+    assert_eq!(ben.log(&id, 0).status, 404);
+    assert_eq!(ana.details(&id).json()["head"], 1);
+    // A state that is not Yjs is refused.
     assert_eq!(ben.call("POST", "/v1/sr/projects", Some(json!({"name": "x", "state": "bm90IGEgWWpzIHVwZGF0ZQ=="}))).status, 400);
     assert_eq!(ben.call("POST", "/v1/sr/projects", Some(json!({"name": " "}))).status, 400);
-    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "1");
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "2");
 }
 
 #[test]
