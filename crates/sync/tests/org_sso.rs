@@ -4,7 +4,7 @@
 //! closes their sessions. Real binary, PostgreSQL and the repository's test provider.
 mod support;
 use scribyra_core::orgsync as core;
-use serde_json::json;
+use serde_json::{Value, json};
 use support::{orgs::*, sso::*, *};
 
 /// A route called with an organisation session token, with a login token instead, or with nothing.
@@ -175,4 +175,26 @@ fn joins_link_identities_device_requests_and_blocking() {
     assert_eq!(client.login("alice")["state"], "linked");
     // Others are unaffected.
     assert_eq!(send("GET", &events, Some(&org.token(&owner.seed)), "", b"").status, 200);
+}
+
+#[test]
+fn unverified_emails_are_never_shown_as_identities() {
+    // Review H1: a provider may send any `email` with `email_verified: false`; it must not appear
+    // as the person's identity to the administrator who approves them, or anywhere else.
+    let mut users = people();
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-mimic", "username": "mimic", "password": "pw-mimic", "email": "ceo@example.org", "email_verified": false, "name": "Not the CEO"}));
+    let env = Env::start("RS256", users, json!({}), json!({}));
+    let client = env.client();
+    let mut org = Org::create(&env, "alice");
+    let owner = org.owner.clone();
+    let token = org.token(&owner.seed);
+    let mimic = Device::new();
+    assert_eq!(org.request(&client, "mimic", &mimic).status, 201);
+    let people = send("GET", &org.url(&format!("/v1/orgs/{}/people", org.id)), Some(&token), "", b"").json();
+    let entry = &people["people"][org.person(&mimic)];
+    assert_eq!((entry["email"].clone(), entry["provider"].as_str(), entry["providerLabel"].as_str()), (Value::Null, Some("test"), Some("Test account")));
+    assert_eq!(people["people"][org.owner_person.clone()]["email"], "alice@example.org");
+    assert_eq!(postgres().psql(env.service.database_url(), "SELECT count(*) FROM sso_links WHERE email = 'ceo@example.org'"), "0");
+    let me = client.me(&org.logins[&org.person(&mimic)]).json();
+    assert_eq!(me["email"], Value::Null);
 }

@@ -371,7 +371,7 @@ impl Sso {
                 .bind(&login.issuer)
                 .bind(&login.subject)
                 .bind(person)
-                .bind(&login.email)
+                .bind(login.email.as_ref().filter(|_| login.email_verified))
                 .execute(&mut *tx)
                 .await?;
             // A concurrent link of the same subject or person won the race.

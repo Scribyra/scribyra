@@ -1166,7 +1166,7 @@ async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, head
     if !core::ed25519_verify(&request.device, &proof, &request.proof) {
         return error(StatusCode::FORBIDDEN, "the new device did not prove possession of its key");
     }
-    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "mac": request.mac, "via": "sso", "email": login.email});
+    let stored = serde_json::json!({"device": request.device, "agreement": request.agreement, "proof": request.proof, "mac": request.mac, "via": "sso", "email": login.email.as_ref().filter(|_| login.email_verified), "provider": login.provider});
     let result = async {
         let mut tx = o.store.pool.begin().await?;
         sqlx::query("DELETE FROM device_links WHERE org = $1 AND expires < now()").bind(&org).execute(&mut *tx).await?;
@@ -1227,9 +1227,10 @@ async fn list_links(State(o): State<Shared>, Path(org): Path<String>, headers: H
     }
 }
 
-/// The member directory: the email the identity provider vouched for, by person (the service
-/// knows it from the sign-in it linked; names in the log are sealed). An administrator's app shows
-/// it beside a join request, and members see whom they share with. Device sessions only.
+/// The member directory: the email the identity provider vouched for (verified emails only;
+/// `null` otherwise) and which configured provider it came from (an equal email at two providers
+/// is two accounts), by person (names in the log are sealed). An administrator's app shows it
+/// beside a join request, and members see whom they share with. Device sessions only.
 async fn identities(State(o): State<Shared>, Path(org): Path<String>, headers: HeaderMap) -> Response {
     let session = match o.session(&headers) {
         Ok(s) => s,
@@ -1252,8 +1253,23 @@ async fn identities(State(o): State<Shared>, Path(org): Path<String>, headers: H
             return error(StatusCode::FORBIDDEN, "only a device can read the directory");
         }
     }
-    match sqlx::query("SELECT person, email FROM sso_links WHERE org = $1").bind(&org).fetch_all(&o.store.pool).await {
-        Ok(rows) => Json(serde_json::json!({"people": rows.iter().map(|r| (r.get::<String, _>(0), serde_json::json!({"email": r.get::<Option<String>, _>(1)}))).collect::<serde_json::Map<_, _>>()})).into_response(),
+    let rows = sqlx::query(
+        "SELECT l.person, CASE WHEN a.email_verified THEN a.email END, a.provider FROM sso_links l
+         LEFT JOIN accounts a ON a.issuer = l.issuer AND a.subject = l.subject WHERE l.org = $1 ORDER BY a.last_seen",
+    )
+    .bind(&org)
+    .fetch_all(&o.store.pool)
+    .await;
+    let deployment = o.store.config.deployment.as_ref();
+    match rows {
+        Ok(rows) => {
+            let people = rows.iter().map(|r| {
+                let provider: Option<String> = r.get(2);
+                let label = provider.as_deref().and_then(|p| deployment?.provider(p)).map(|p| p.label.clone());
+                (r.get::<String, _>(0), serde_json::json!({"email": r.get::<Option<String>, _>(1), "provider": provider, "providerLabel": label}))
+            });
+            Json(serde_json::json!({"people": people.collect::<serde_json::Map<_, _>>()})).into_response()
+        }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
