@@ -1,0 +1,12 @@
+[package]
+name = "scribyra-compile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Sandboxed TeX Live runner for server compiles (bubblewrap, seccomp, rlimits)"
+
+[dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "time"] }
