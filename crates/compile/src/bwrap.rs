@@ -7,6 +7,7 @@
 //! (`driver.sh`) runs the passes and hands back the PDF and log over pipes, which are read
 //! with size bounds.
 
+use crate::cgroup::{Cgroups, Confinement, Usage};
 use crate::{seccomp, Bibliography, Cancel, Engine, Job, JobError, Limit, Limits, Outcome, Runner, Status};
 use std::ffi::{CString, OsString};
 use std::fs::File;
@@ -22,7 +23,9 @@ const DRIVER: &str = include_str!("driver.sh");
 const RAW: &str = r#"ulimit -u "$1" -n "$2" -f "$3" -c 0 || exit 99; eval "$4""#;
 const STDERR_CAP: usize = 64 << 10;
 
-pub struct Bubblewrap { bwrap: PathBuf, texlive: PathBuf, closure: Vec<PathBuf>, bash: PathBuf, coreutils: PathBuf, id: String }
+pub struct Bubblewrap { bwrap: PathBuf, texlive: PathBuf, closure: Vec<PathBuf>, bash: PathBuf, coreutils: PathBuf, id: String, conf: Conf }
+
+enum Conf { Unset, Cgroups(Cgroups), Unconfined }
 
 /// What a raw sandboxed command did (the test hook, [`Bubblewrap::run_raw`]).
 #[derive(Debug)]
@@ -31,8 +34,10 @@ pub struct RawOutcome {
   pub code: Option<i32>,
   pub stdout: String,
   pub stderr: String,
-  /// `LimitExceeded(Wall)` or `Cancelled` when the runner killed it.
+  /// `LimitExceeded(Wall | Cpu)` or `Cancelled` when the runner killed it.
   pub killed: Option<Status>,
+  /// `Memory` after an OOM kill in the job's cgroup, `Processes` when `pids.max` refused a fork.
+  pub limit: Option<Limit>,
   pub cpu_ms: u64,
 }
 
@@ -72,19 +77,37 @@ impl Bubblewrap {
     let bash = find(&["bash"], "-bash-").ok_or_else(|| bad("the TeX Live closure has no bash".into()))?.join("bin/bash");
     let coreutils = find(&["cat", "stat", "tail", "rm"], "-coreutils-").ok_or_else(|| bad("the TeX Live closure has no coreutils".into()))?;
     let id = texlive.file_name().unwrap().to_string_lossy().into_owned();
-    Ok(Bubblewrap { bwrap, texlive, closure, bash, coreutils, id })
+    Ok(Bubblewrap { bwrap, texlive, closure, bash, coreutils, id, conf: Conf::Unset })
   }
 
   /// `SCRIBYRA_BWRAP`, `SCRIBYRA_TEXLIVE` and optionally `SCRIBYRA_TEXLIVE_CLOSURE` (a file of
-  /// store paths, one per line), as the development shell and worker image set them.
+  /// store paths, one per line), as the development shell and worker image set them, confined
+  /// as [`Confinement::from_env`] says.
   pub fn from_env() -> io::Result<Bubblewrap> {
     let var = |k: &str| std::env::var_os(k).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{k} is not set")));
     let (bwrap, texlive) = (var("SCRIBYRA_BWRAP")?, var("SCRIBYRA_TEXLIVE")?);
-    match std::env::var_os("SCRIBYRA_TEXLIVE_CLOSURE") {
-      Some(f) => Bubblewrap::with_closure(bwrap, texlive, std::fs::read_to_string(f)?.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect()),
-      None => Bubblewrap::new(bwrap, texlive),
-    }
+    let b = match std::env::var_os("SCRIBYRA_TEXLIVE_CLOSURE") {
+      Some(f) => Bubblewrap::with_closure(bwrap, texlive, std::fs::read_to_string(f)?.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect())?,
+      None => Bubblewrap::new(bwrap, texlive)?,
+    };
+    b.confine(Confinement::from_env())
   }
+
+  /// Sets up job-wide limits. Until this succeeds every job fails with `SandboxFailure`.
+  pub fn confine(mut self, c: Confinement) -> io::Result<Bubblewrap> {
+    let cat = self.coreutils.join("bin/cat");
+    self.conf = match c {
+      Confinement::Cgroup(d) => Conf::Cgroups(Cgroups::delegated(d)?),
+      Confinement::SystemdUser => Conf::Cgroups(Cgroups::systemd_user(&cat)?),
+      Confinement::UnconfinedMemory => Conf::Unconfined,
+      Confinement::Auto => Conf::Cgroups(Cgroups::systemd_user(&cat).map_err(|e| io::Error::other(format!(
+        "no cgroup for compile jobs: set SCRIBYRA_COMPILE_CGROUP to a delegated cgroup v2 directory, run with a systemd user manager, or (development only) SCRIBYRA_COMPILE_UNCONFINED_MEMORY=1 ({e})")))?),
+    };
+    Ok(self)
+  }
+
+  /// Whether jobs run in their own cgroup (memory, processes and CPU bounded per job).
+  pub fn is_confined(&self) -> bool { matches!(self.conf, Conf::Cgroups(_)) }
 
   pub fn closure(&self) -> &[PathBuf] { &self.closure }
   pub fn has_biber(&self) -> bool { self.texlive.join("bin/biber").exists() }
@@ -100,13 +123,19 @@ impl Bubblewrap {
       [self.bash.as_os_str(), "-c".as_ref(), RAW.as_ref(), "raw".as_ref(), l[0].as_ref(), l[1].as_ref(), l[2].as_ref(), script.as_ref()].iter().map(|s| s.to_os_string()).collect()
     };
     let r = self.sandbox(files, extra_ro, ("p", 0), 0, limits, cancel, 1 << 20, inner)?;
-    Ok(RawOutcome { code: r.code, stdout: lossy(&r.stdout.0), stderr: lossy(&r.stderr.0), killed: r.killed, cpu_ms: r.cpu_ms })
+    let limit = r.usage.and_then(|u| if u.oom_kills > 0 { Some(Limit::Memory) } else if u.pids_max_hits > 0 { Some(Limit::Processes) } else { None });
+    Ok(RawOutcome { code: r.code, stdout: lossy(&r.stdout.0), stderr: lossy(&r.stderr.0), killed: r.killed, limit, cpu_ms: r.cpu_ms })
   }
 
   /// Starts bwrap and waits for it under the wall clock. `inner` builds the command run inside
   /// from the descriptor numbers of `pipes` extra capture pipes (handed to the sandbox).
   #[allow(clippy::too_many_arguments)]
   fn sandbox(&self, files: &[(String, Vec<u8>)], extra_ro: &[PathBuf], (openin, epoch): (&str, u64), pipes: usize, limits: &Limits, cancel: &Cancel, stdout_cap: usize, inner: impl FnOnce(&[RawFd]) -> Vec<OsString>) -> io::Result<Ran> {
+    let cg = match &self.conf {
+      Conf::Cgroups(c) => Some(c.job(limits)?),
+      Conf::Unconfined => None,
+      Conf::Unset => return Err(io::Error::other("the runner has no job confinement (Bubblewrap::confine)")),
+    };
     let mut pass: Vec<RawFd> = vec![];
     let mut keep: Vec<OwnedFd> = vec![];
     let mut a: Vec<OsString> = vec![];
@@ -161,9 +190,12 @@ impl Bubblewrap {
     let mut cmd = Command::new(&self.bwrap);
     cmd.args(&a).env_clear().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let pass_c = pass.clone();
-    // SAFETY: only async-signal-safe calls (fcntl, setrlimit) between fork and exec.
+    let procs = cg.as_ref().map(|c| c.procs_fd());
+    // SAFETY: only async-signal-safe calls (write, fcntl, setrlimit) between fork and exec.
     unsafe {
       cmd.pre_exec(move || {
+        // Into the job's cgroup before bwrap exists, so every process of the job is counted.
+        if let Some(fd) = procs { if libc::write(fd, b"0".as_ptr().cast(), 1) != 1 { return Err(io::Error::last_os_error()); } }
         for &fd in &pass_c { if libc::fcntl(fd, libc::F_SETFD, 0) < 0 { return Err(io::Error::last_os_error()); } }
         for &(r, soft, hard) in &rl { if libc::setrlimit(r, &libc::rlimit { rlim_cur: soft, rlim_max: hard }) < 0 { return Err(io::Error::last_os_error()); } }
         Ok(())
@@ -179,21 +211,28 @@ impl Bubblewrap {
     let deadline = Instant::now() + Duration::from_secs(limits.wall_seconds);
     let (mut status, mut ru): (libc::c_int, libc::rusage) = (0, unsafe { std::mem::zeroed() });
     let mut killed = None;
+    let budget = limits.cpu_seconds.saturating_mul(1_000_000);
+    let mut tick = 0u32;
     loop {
       let flags = if killed.is_some() { 0 } else { libc::WNOHANG };
       let r = unsafe { libc::wait4(pid, &mut status, flags, &mut ru) };
       if r == pid { break; }
       if r < 0 && io::Error::last_os_error().kind() != io::ErrorKind::Interrupted { return Err(io::Error::last_os_error()); }
       if killed.is_none() {
-        let why = if cancel.is_cancelled() { Some(Status::Cancelled) } else if Instant::now() >= deadline { Some(Status::LimitExceeded(Limit::Wall)) } else { None };
-        // bwrap is the group leader; --die-with-parent and the PID namespace take the rest.
-        if let Some(w) = why { unsafe { libc::kill(-pid, libc::SIGKILL); libc::kill(pid, libc::SIGKILL); } killed = Some(w); continue; }
+        tick = tick.wrapping_add(1);
+        let why = if cancel.is_cancelled() { Some(Status::Cancelled) } else if Instant::now() >= deadline { Some(Status::LimitExceeded(Limit::Wall)) }
+          else if tick % 10 == 0 && cg.as_ref().is_some_and(|c| c.cpu_usec() > budget) { Some(Status::LimitExceeded(Limit::Cpu)) } else { None };
+        // cgroup.kill takes every process of the job; without a cgroup, bwrap is the group
+        // leader and --die-with-parent and the PID namespace take the rest.
+        if let Some(w) = why { if let Some(c) = &cg { c.kill() } unsafe { libc::kill(-pid, libc::SIGKILL); libc::kill(pid, libc::SIGKILL); } killed = Some(w); continue; }
         std::thread::sleep(Duration::from_millis(5));
       }
     }
     let code = if libc::WIFEXITED(status) { Some(libc::WEXITSTATUS(status)) } else if libc::WIFSIGNALED(status) { Some(128 + libc::WTERMSIG(status)) } else { None };
-    let cpu_ms = |t: libc::timeval| t.tv_sec as u64 * 1000 + t.tv_usec as u64 / 1000;
-    Ok(Ran { code, cpu_ms: cpu_ms(ru.ru_utime) + cpu_ms(ru.ru_stime), killed, stdout: out.join().unwrap(), stderr: err.join().unwrap(), pipes: caps.into_iter().map(|h| h.join().unwrap()).collect() })
+    let usage = cg.map(|c| c.finish());
+    let ms = |t: libc::timeval| t.tv_sec as u64 * 1000 + t.tv_usec as u64 / 1000;
+    let cpu_ms = usage.map_or(ms(ru.ru_utime) + ms(ru.ru_stime), |u| u.cpu_usec / 1000);
+    Ok(Ran { code, cpu_ms, usage, killed, stdout: out.join().unwrap(), stderr: err.join().unwrap(), pipes: caps.into_iter().map(|h| h.join().unwrap()).collect() })
   }
 }
 
@@ -206,7 +245,7 @@ fn pipe_caps(l: &Limits, n: usize) -> Vec<usize> {
 /// reads to the end regardless.
 type Captured = (Vec<u8>, u64);
 
-struct Ran { code: Option<i32>, cpu_ms: u64, killed: Option<Status>, stdout: Captured, stderr: Captured, pipes: Vec<Captured> }
+struct Ran { code: Option<i32>, cpu_ms: u64, usage: Option<Usage>, killed: Option<Status>, stdout: Captured, stderr: Captured, pipes: Vec<Captured> }
 
 fn read_bounded(mut r: impl Read + Send + 'static, cap: usize, tail: bool) -> JoinHandle<Captured> {
   std::thread::spawn(move || {
@@ -237,7 +276,7 @@ fn memfd(name: &str, bytes: &[u8]) -> io::Result<OwnedFd> {
   Ok(f.into())
 }
 
-fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
+pub(crate) fn pipe() -> io::Result<(OwnedFd, OwnedFd)> {
   let mut fds = [0; 2];
   if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 { return Err(io::Error::last_os_error()); }
   Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
@@ -283,8 +322,16 @@ impl Runner for Bubblewrap {
     let mut log = if *log_seen > log_bytes.len() as u64 { format!("[log truncated to its last {} bytes of {log_seen}]\n{}", log_bytes.len(), lossy(log_bytes)) } else { lossy(log_bytes) };
     let (pdf, pdf_seen) = &ran.pipes[1];
     let last = report.lines().rev().find(|l| *l == "done" || *l == "tex-error" || l.starts_with("limit")).unwrap_or("");
+    // The report only classifies; the runner's own kills and the cgroup's events come first,
+    // and success needs a PDF the runner received itself.
+    let usage = ran.usage.unwrap_or_default();
     let status = match (&ran.killed, last) {
-      (Some(k), _) => { log.push_str(&format!("\n[stopped: {}]\n", if *k == Status::Cancelled { "cancelled".into() } else { format!("wall-clock limit of {} s", limits.wall_seconds) })); k.clone() }
+      (Some(k), _) => {
+        let why = match k { Status::Cancelled => "cancelled".into(), Status::LimitExceeded(Limit::Cpu) => format!("CPU budget of {} s", limits.cpu_seconds), _ => format!("wall-clock limit of {} s", limits.wall_seconds) };
+        log.push_str(&format!("\n[stopped: {why}]\n"));
+        k.clone()
+      }
+      _ if usage.oom_kills > 0 => { log.push_str(&format!("\n[stopped: memory limit of {} MiB]\n", limits.memory_mib)); Status::LimitExceeded(Limit::Memory) }
       (_, "done") if *pdf_seen > limits.output_mib << 20 => Status::LimitExceeded(Limit::Output),
       (_, "done") if pdf.starts_with(b"%PDF-") => Status::Success,
       (_, "tex-error") => Status::TexError,
@@ -292,13 +339,17 @@ impl Runner for Bubblewrap {
       (_, "limit memory") => Status::LimitExceeded(Limit::Memory),
       (_, "limit output") => Status::LimitExceeded(Limit::Output),
       (_, "limit scratch") => Status::LimitExceeded(Limit::Scratch),
+      _ if usage.pids_max_hits > 0 => Status::LimitExceeded(Limit::Processes),
       _ => {
         log.push_str(&format!("\n[sandbox failure: exit {:?}, report {:?}]\n{}", ran.code, report, lossy(&ran.stderr.0)));
         Status::SandboxFailure
       }
     };
     let pdf = (status == Status::Success).then(|| ran.pipes.into_iter().nth(1).unwrap().0);
-    Outcome { status, pdf, log, cpu_ms: ran.cpu_ms + children_cpu_ms(&report), passes }
+    // With a cgroup, CPU time comes from cpu.stat (orphans included); the driver's own figure
+    // is only a fallback for unconfined development runs.
+    let cpu_ms = if ran.usage.is_some() { ran.cpu_ms } else { ran.cpu_ms + children_cpu_ms(&report) };
+    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)) }
   }
 }
 

@@ -390,3 +390,48 @@ fn job_code_cannot_forge_the_driver_report() {
   let r = raw("exec 9>/work/report; \"$BASH\" -c \"echo forged >/proc/$$/fd/9\" 2>&1; echo report=$(</work/report)", &[], &limits());
   assert_eq!(kv(&r.stdout)["report"], "", "{r:?}");
 }
+
+#[test]
+fn jobs_run_in_their_own_cgroup() {
+  assert!(runner().is_confined(), "the dev shell's runner uses a cgroup (systemd user scope)");
+  // Without confinement nothing runs, unless unconfined memory is chosen explicitly.
+  let b = || Bubblewrap::with_closure(std::env::var_os("SCRIBYRA_BWRAP").unwrap(), std::env::var_os("SCRIBYRA_TEXLIVE").unwrap(), runner().closure().to_vec()).unwrap();
+  let j = job(Engine::Pdflatex, &[("main.tex", HELLO)]);
+  let o = b().run(&j, &limits(), &Cancel::new());
+  assert_eq!(o.status, Status::SandboxFailure, "{}", o.log);
+  assert!(o.log.contains("no job confinement"), "{}", o.log);
+  let loose = b().confine(Confinement::UnconfinedMemory).unwrap();
+  assert!(!loose.is_confined());
+  assert_pdf(&loose.run(&j, &limits(), &Cancel::new()));
+}
+
+#[test]
+fn memory_is_bounded_per_job_not_per_process() {
+  // Review H1: four children of 80 MiB each stayed under a 128 MiB RLIMIT_AS apiece.
+  let (py, _) = python();
+  let l = Limits { memory_mib: 128, wall_seconds: 30, ..limits() };
+  let script = format!("{} -c \"import os, time\nfor _ in range(4):\n  if os.fork() == 0:\n    x = b'x' * (80 << 20); time.sleep(20); os._exit(0)\ntime.sleep(20)\"; echo survived", py.display());
+  let t = Instant::now();
+  let r = raw(&script, &[], &l);
+  assert_eq!(r.limit, Some(Limit::Memory), "{r:?}");
+  assert!(!r.stdout.contains("survived") && t.elapsed() < Duration::from_secs(15), "{r:?}");
+  // Shared memory counts too: files in the scratch tmpfs (each under the file-size limit) and
+  // memfds (refused outright).
+  let r = raw("for i in $(seq 1 20); do head -c 15M /dev/zero > /work/f$i || break; done; echo survived", &[], &Limits { memory_mib: 128, scratch_mib: 512, ..limits() });
+  assert_eq!(r.limit, Some(Limit::Memory), "{r:?}");
+  assert!(!r.stdout.contains("survived"), "{r:?}");
+  let r = raw(&format!("{} -c \"import os; os.memfd_create('x')\" 2>&1 | tail -1", py.display()), &[], &limits());
+  assert!(r.stdout.contains("PermissionError"), "{r:?}");
+}
+
+#[test]
+fn cpu_is_metered_and_bounded_per_job() {
+  // Review M1: an orphan's CPU time escaped the metering.
+  let r = raw("\"$BASH\" -c 'while :; do :; done' & sleep 3; echo parent-done", &[], &Limits { wall_seconds: 30, ..limits() });
+  assert!(r.stdout.contains("parent-done") && r.cpu_ms >= 1500, "{r:?}");
+  // And four busy processes share one budget instead of one RLIMIT_CPU each.
+  let t = Instant::now();
+  let r = raw("for i in 1 2 3 4; do \"$BASH\" -c 'while :; do :; done' & done; wait", &[], &Limits { cpu_seconds: 2, wall_seconds: 30, ..limits() });
+  assert_eq!(r.killed, Some(Status::LimitExceeded(Limit::Cpu)), "{r:?}");
+  assert!(r.cpu_ms < 4000 && t.elapsed() < Duration::from_secs(10), "{:?} {r:?}", t.elapsed());
+}

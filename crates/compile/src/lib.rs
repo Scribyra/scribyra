@@ -7,9 +7,11 @@
 //! own thread as a future that cancels the job when dropped.
 
 mod bwrap;
+mod cgroup;
 pub mod seccomp;
 
 pub use bwrap::{store_closure, Bubblewrap, RawOutcome};
+pub use cgroup::Confinement;
 
 use std::collections::BTreeSet;
 use std::future::Future;
@@ -18,9 +20,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll, Waker};
 
-/// Per-job resource limits. `cpu_seconds` and `memory_mib` bind each process (TeX, BibTeX),
-/// `wall_seconds` the whole job, `output_mib` every file the job writes and the PDF read back,
-/// `scratch_mib` everything the job writes together (its tmpfs).
+/// Per-job resource limits. `cpu_seconds` and `memory_mib` bind each process (rlimits) and,
+/// in the job's cgroup ([`Confinement`]), the whole job: CPU summed over all its processes,
+/// memory including the scratch tmpfs. `processes` likewise. `wall_seconds` binds the whole
+/// job, `output_mib` every file the job writes and the PDF read back, `scratch_mib` everything
+/// the job writes together (its tmpfs).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Limits {
   pub cpu_seconds: u64,
@@ -57,7 +61,7 @@ impl Engine {
 pub enum Bibliography { None, Bibtex, Biber }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Limit { Cpu, Wall, Memory, Output, Scratch }
+pub enum Limit { Cpu, Wall, Memory, Output, Scratch, Processes }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
