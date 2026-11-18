@@ -195,7 +195,7 @@ impl Bubblewrap {
     unsafe {
       cmd.pre_exec(move || {
         // Into the job's cgroup before bwrap exists, so every process of the job is counted.
-        if let Some(fd) = procs { if libc::write(fd, b"0".as_ptr().cast(), 1) != 1 { return Err(io::Error::last_os_error()); } }
+        if let Some(fd) = procs && libc::write(fd, b"0".as_ptr().cast(), 1) != 1 { return Err(io::Error::last_os_error()); }
         for &fd in &pass_c { if libc::fcntl(fd, libc::F_SETFD, 0) < 0 { return Err(io::Error::last_os_error()); } }
         for &(r, soft, hard) in &rl { if libc::setrlimit(r, &libc::rlimit { rlim_cur: soft, rlim_max: hard }) < 0 { return Err(io::Error::last_os_error()); } }
         Ok(())
@@ -221,10 +221,15 @@ impl Bubblewrap {
       if killed.is_none() {
         tick = tick.wrapping_add(1);
         let why = if cancel.is_cancelled() { Some(Status::Cancelled) } else if Instant::now() >= deadline { Some(Status::LimitExceeded(Limit::Wall)) }
-          else if tick % 10 == 0 && cg.as_ref().is_some_and(|c| c.cpu_usec() > budget) { Some(Status::LimitExceeded(Limit::Cpu)) } else { None };
+          else if tick.is_multiple_of(10) && cg.as_ref().is_some_and(|c| c.cpu_usec() > budget) { Some(Status::LimitExceeded(Limit::Cpu)) } else { None };
         // cgroup.kill takes every process of the job; without a cgroup, bwrap is the group
         // leader and --die-with-parent and the PID namespace take the rest.
-        if let Some(w) = why { if let Some(c) = &cg { c.kill() } unsafe { libc::kill(-pid, libc::SIGKILL); libc::kill(pid, libc::SIGKILL); } killed = Some(w); continue; }
+        if let Some(w) = why {
+          if let Some(c) = &cg { c.kill(); }
+          unsafe { libc::kill(-pid, libc::SIGKILL); libc::kill(pid, libc::SIGKILL); }
+          killed = Some(w);
+          continue;
+        }
         std::thread::sleep(Duration::from_millis(5));
       }
     }
