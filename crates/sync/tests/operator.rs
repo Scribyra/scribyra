@@ -1,5 +1,6 @@
 //! The contract a Kubernetes operator relies on: `scribyra-sync migrate` as its own command,
-//! `migrate_on_start: false` replicas that refuse a schema behind or ahead of them, `/healthz` and
+//! `migrate_on_start: false` replicas that refuse a schema behind them but serve one a newer build
+//! extended (migrations are additive within a minor series), `/healthz` and
 //! `/readyz`, settings from environment variables (nested deployment fields too), and SIGTERM
 //! ending long polls and exiting 0 within the grace period.
 mod support;
@@ -24,18 +25,30 @@ fn migrations_run_as_a_separate_command_and_replicas_check_the_schema() {
     for path in ["/health", "/healthz", "/ready", "/readyz"] {
         assert_eq!(status(&format!("{}{path}", s.url)), 200, "{path}");
     }
-    // A schema from a newer build: readiness fails at once, and a new replica refuses to start.
+    // A schema a newer build migrated (review L8): within a minor series migrations are additive
+    // (design section 10), so replicas of this build stay ready while the newer one rolls out,
+    // and one that restarts meanwhile starts, with or without migrate_on_start. Only `migrate`
+    // from this older build refuses it (it would be a downgrade).
     postgres().psql(s.database_url(), "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (99990001, 'future', true, '\\x00', 0)");
-    assert_eq!(status(&format!("{}/readyz", s.url)), 503);
+    assert_eq!(status(&format!("{}/readyz", s.url)), 200);
     assert_eq!(status(&format!("{}/healthz", s.url)), 200);
     s.stop();
-    let refused = s.start().expect_err("started on a newer schema");
-    assert!(refused.contains("\"ahead\""), "{refused}");
+    s.start().expect("a replica of this build starts on a schema a newer build extended");
+    assert_eq!(status(&format!("{}/readyz", s.url)), 200);
+    s.stop();
     let (code, _) = s.run(&["migrate"]);
     assert_ne!(code, 0, "migrate must refuse a newer schema");
-    // migrate_on_start (the default) refuses it too.
     s.reconfigure(json!({"migrate_on_start": true}));
-    assert!(s.start().is_err());
+    s.start().expect("migrate_on_start leaves a newer schema alone");
+    // A schema that lacks one of this build's migrations is still refused.
+    postgres().psql(s.database_url(), "DELETE FROM _sqlx_migrations WHERE version = 99990001");
+    let latest = postgres().psql(s.database_url(), "SELECT max(version) FROM _sqlx_migrations");
+    postgres().psql(s.database_url(), &format!("UPDATE _sqlx_migrations SET success = false WHERE version = {latest}"));
+    assert_eq!(status(&format!("{}/readyz", s.url)), 503);
+    s.stop();
+    s.reconfigure(json!({"migrate_on_start": false}));
+    let refused = s.start().expect_err("started on a schema behind this build");
+    assert!(refused.contains("\"behind\""), "{refused}");
 }
 
 #[test]
