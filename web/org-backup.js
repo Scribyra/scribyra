@@ -62,8 +62,10 @@ const keyContext=(org,project,epoch)=>`scribyra-org-key/1\n${org}\n${project}\n$
 const kitContext=org=>`scribyra-org-kit/1\n${org}`;
 const agreementContext=(org,device)=>`scribyra-org-agreement/1\n${org}\n${device}`;
 const SSO_FLOW='scribyra:sso-flow',SSO_LOGIN='scribyra:sso-login';
-// The sign-in in progress and the tab's login live in sessionStorage (a reopened tab resumes; the
-// next tab signs in again); where there is none (Node), in memory.
+// The sign-in in progress and the tab's login live in sessionStorage (where there is none, Node,
+// in memory). The connected browser's login token is also kept with its connection in IndexedDB
+// (`saveConnection`), so a reopened tab or browser resumes, as design section 3 allows: a bearer
+// token the service stores only hashed and revokes on sign-out, never a cookie.
 const memory=new Map();
 const readSession=key=>{try{const store=globalThis.sessionStorage;return JSON.parse((store?store.getItem(key):memory.get(key))||'null');}catch{return null;}};
 const writeSession=(key,value)=>{try{const store=globalThis.sessionStorage,text=value?JSON.stringify(value):null;if(store){if(text)store.setItem(key,text);else store.removeItem(key);}else if(text)memory.set(key,text);else memory.delete(key);}catch{}};
