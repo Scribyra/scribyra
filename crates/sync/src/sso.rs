@@ -122,8 +122,13 @@ fn admin_email_matches(entry: &str, provider: &Configured, email: &str) -> bool 
     }
     match entry.split_once(':') {
         Some((id, listed)) => id == provider.id && listed == email,
-        None => entry == email && email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain)),
+        None => entry == email && vouches(provider, email),
     }
+}
+/// Whether this provider's `email_domains` include the (normalised) email's domain: only then
+/// does a plain email name its accounts there (admins, invitations).
+pub fn vouches(provider: &Configured, email: &str) -> bool {
+    email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain))
 }
 /// The deployment role of an identity, or the code of the rule that refuses it: guests when the
 /// deployment admits none, and people outside `member_groups` when the provider names some.
@@ -1049,7 +1054,7 @@ async fn redeem(State(s): State<Shared>, Json(request): Json<RedeemRequest>) -> 
     }
     // Server-readable deployments: pending invitations to this verified email become shares.
     if deployment.encryption == crate::config::Encryption::Server
-        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account).await
+        && let Err(e) = crate::server_projects::accept_invitations(&s.store.pool, &account, deployment).await
     {
         return internal(e);
     }

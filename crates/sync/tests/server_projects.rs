@@ -541,3 +541,43 @@ fn hostile_yjs_updates_are_refused_and_the_service_survives() {
     assert_eq!(ana.append(&p, "good", 2, &Project::new().add_text("f1", "a.tex", None, "x")).status, 201);
     assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM sr_projects"), "1");
 }
+
+#[test]
+fn invitations_count_an_email_only_at_a_provider_that_vouches_for_it() {
+    // Review H2: with several providers, any one asserting a verified email used to get that
+    // email's shares at once and accept its pending invitations. Now a plain email counts only
+    // at a provider whose `email_domains` include its domain, unless the inviter names the
+    // provider (`provider:email`).
+    let mut users = users();
+    for (name, email) in [("imposter", "victim@example.org"), ("early", "early@example.org"), ("victim", "victim@example.org")] {
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name}));
+    }
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": {"email_domains": ["example.org"]}, "more_providers": [{"id": "partner", "label": "Partner account", "email_domains": []}]}));
+    let partner = Client { base: sr.url(), provider: "partner".into(), idp: &sr.env.idp };
+    let ana = sr.api(&sr.login("alice"));
+    let p = ana.create("Vouched");
+    // A pending invitation is not accepted by another provider's account with that email ...
+    assert_eq!(ana.invite(&p, "victim@example.org", "editor").json()["status"], "pending");
+    let imposter = sr.api(partner.login("imposter")["token"].as_str().unwrap());
+    assert_eq!(imposter.call("GET", "/v1/sr/projects", None).json()["projects"], json!([]));
+    assert_eq!(imposter.log(&p, 0).status, 404);
+    // ... but by the vouching provider's.
+    let victim = sr.api(&sr.login("victim"));
+    assert_eq!(victim.details(&p).json()["role"], "editor");
+    // An existing account at a provider that does not vouch is not shared at once either.
+    let early = sr.api(partner.login("early")["token"].as_str().unwrap());
+    assert_eq!(ana.invite(&p, "early@example.org", "viewer").json()["status"], "pending");
+    assert_eq!(early.log(&p, 0).status, 404);
+    // Naming the provider shares with that provider's account.
+    let named = ana.invite(&p, "partner:early@example.org", "viewer");
+    assert_eq!((named.status, named.json()["status"].as_str()), (201, Some("shared")));
+    assert_eq!(early.details(&p).json()["role"], "viewer");
+    // Members and invitations show the provider; a domain nobody vouches for must name one.
+    let details = ana.details(&p).json();
+    let providers: Vec<(&str, &str)> = details["members"].as_array().unwrap().iter().map(|m| (m["email"].as_str().unwrap(), m["provider"].as_str().unwrap())).collect();
+    assert_eq!(providers, vec![("alice@example.org", "test"), ("victim@example.org", "test"), ("early@example.org", "partner")]);
+    assert_eq!(ana.invite(&p, "gus@partner.org", "viewer").status, 400);
+    let pending = ana.invite(&p, "partner:gus@partner.org", "viewer").json();
+    assert_eq!((pending["status"].as_str(), pending["invitation"]["provider"].as_str()), (Some("pending"), Some("partner")));
+    assert_eq!(ana.invite(&p, "nowhere:gus@partner.org", "viewer").status, 400);
+}

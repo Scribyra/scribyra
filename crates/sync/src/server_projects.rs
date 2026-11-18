@@ -666,18 +666,24 @@ async fn notify(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str) -
 }
 
 /// Turns pending, unexpired invitations to the account's verified email into shares (called at
-/// every sign-in of a server-readable deployment). An unverified email matches nothing.
-pub async fn accept_invitations(pool: &PgPool, account: &str) -> Result<(), sqlx::Error> {
+/// every sign-in of a server-readable deployment). An unverified email matches nothing, and an
+/// invitation counts only for the provider it names or, naming none, for a provider whose
+/// `email_domains` vouch for the email (review H2).
+pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate::config::Deployment) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let email: Option<String> = sqlx::query_scalar("SELECT lower(email) FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
-    let Some(email) = email else { return Ok(()) };
+    let row: Option<(String, String)> = sqlx::query_as("SELECT lower(email), provider FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
+    let Some((email, provider)) = row else { return Ok(()) };
+    let vouched = deployment.provider(&provider).is_some_and(|p| crate::sso::vouches(p, &email));
     let accepted: Vec<(String, String, Option<String>)> = sqlx::query_as(
         "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p
          WHERE i.project = p.project AND p.deleted IS NULL AND p.owner <> $2 AND i.state = 'pending' AND i.email = $1 AND i.expires > now()
+           AND (i.provider = $3 OR (i.provider IS NULL AND $4))
          RETURNING i.project, i.role, i.created_by",
     )
     .bind(&email)
     .bind(account)
+    .bind(&provider)
+    .bind(vouched)
     .fetch_all(&mut *tx)
     .await?;
     for (project, role, by) in &accepted {
@@ -762,7 +768,7 @@ impl Sr {
         let pool = &projects.store.pool;
         let row = sqlx::query(
             "SELECT p.name, p.head_seq, p.floor_seq, p.snapshot_seq, p.bytes, (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint,
-                    o.account, o.name, CASE WHEN o.email_verified THEN o.email END
+                    o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider
              FROM sr_projects p JOIN accounts o ON o.account = p.owner WHERE p.project = $1 AND p.deleted IS NULL",
         )
         .bind(project)
@@ -770,25 +776,25 @@ impl Sr {
         .await
         .map_err(internal)?
         .ok_or_else(not_found)?;
-        let owner = json!({"account": row.get::<String, _>(7), "name": row.get::<Option<String>, _>(8), "email": row.get::<Option<String>, _>(9), "role": "owner"});
+        let owner = json!({"account": row.get::<String, _>(7), "name": row.get::<Option<String>, _>(8), "email": row.get::<Option<String>, _>(9), "provider": row.get::<String, _>(10), "role": "owner"});
         let mut members = vec![owner.clone()];
-        let shares = sqlx::query("SELECT a.account, a.name, CASE WHEN a.email_verified THEN a.email END, s.role FROM sr_shares s JOIN accounts a USING (account) WHERE s.project = $1 ORDER BY s.created, a.account")
+        let shares = sqlx::query("SELECT a.account, a.name, CASE WHEN a.email_verified THEN a.email END, s.role, a.provider FROM sr_shares s JOIN accounts a USING (account) WHERE s.project = $1 ORDER BY s.created, a.account")
             .bind(project)
             .fetch_all(pool)
             .await
             .map_err(internal)?;
         for s in shares {
-            members.push(json!({"account": s.get::<String, _>(0), "name": s.get::<Option<String>, _>(1), "email": s.get::<Option<String>, _>(2), "role": s.get::<String, _>(3)}));
+            members.push(json!({"account": s.get::<String, _>(0), "name": s.get::<Option<String>, _>(1), "email": s.get::<Option<String>, _>(2), "provider": s.get::<String, _>(4), "role": s.get::<String, _>(3)}));
         }
         let mut invitations = Vec::new();
         if access.writes() && caller.role != Role::Guest {
-            let rows = sqlx::query("SELECT invitation, email, role, (extract(epoch FROM created) * 1000)::bigint, (extract(epoch FROM expires) * 1000)::bigint FROM sr_invitations WHERE project = $1 AND state = 'pending' AND expires > now() ORDER BY created")
+            let rows = sqlx::query("SELECT invitation, email, role, (extract(epoch FROM created) * 1000)::bigint, (extract(epoch FROM expires) * 1000)::bigint, provider FROM sr_invitations WHERE project = $1 AND state = 'pending' AND expires > now() ORDER BY created")
                 .bind(project)
                 .fetch_all(pool)
                 .await
                 .map_err(internal)?;
             for r in rows {
-                invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
+                invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "provider": r.get::<Option<String>, _>(5), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
             }
         }
         Ok(json!({
@@ -858,7 +864,7 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
     };
     let rows = sqlx::query(
         "SELECT p.project, p.name, CASE WHEN p.owner = $1 THEN 'owner' ELSE s.role END, p.head_seq, p.bytes,
-                (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END
+                (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider
          FROM sr_projects p JOIN accounts o ON o.account = p.owner LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
          WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL) ORDER BY p.updated DESC, p.project",
     )
@@ -873,7 +879,7 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
         .iter()
         .map(|r| {
             json!({"id": r.get::<String, _>(0), "name": r.get::<String, _>(1), "role": r.get::<String, _>(2), "head": r.get::<i64, _>(3), "size": r.get::<i64, _>(4),
-                   "created": r.get::<i64, _>(5), "updated": r.get::<i64, _>(6), "owner": {"account": r.get::<String, _>(7), "name": r.get::<Option<String>, _>(8), "email": r.get::<Option<String>, _>(9)}})
+                   "created": r.get::<i64, _>(5), "updated": r.get::<i64, _>(6), "owner": {"account": r.get::<String, _>(7), "name": r.get::<Option<String>, _>(8), "email": r.get::<Option<String>, _>(9), "provider": r.get::<String, _>(10)}})
         })
         .collect();
     ok_json(StatusCode::OK, json!({"account": caller.account, "role": caller.role.as_str(), "projects": list}))
@@ -1219,9 +1225,12 @@ struct Invite {
     email: String,
     role: String,
 }
-/// Shares at once with every active account whose verified email this is (`200` when the
-/// share existed, `201` when new), or records a pending invitation that the first sign-in with
-/// that verified email accepts (`201`, `status: "pending"`).
+/// Shares at once with every active account whose verified email this is at a provider that
+/// counts for it (`200` when the share existed, `201` when new), or records a pending invitation
+/// that the first such sign-in accepts (`201`, `status: "pending"`). `email` is `provider:email`
+/// (that provider's accounts only) or a plain email: then any provider whose `email_domains`
+/// vouch for its domain, or the deployment's only provider; with several providers and none
+/// vouching, the inviter must name one (`400`). Review H2.
 async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap, Json(request): Json<Invite>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
@@ -1234,15 +1243,39 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
     if let Err(r) = Sr::may_share(&caller, access) {
         return r;
     }
-    let email = request.email.trim().to_lowercase();
+    let Some(deployment) = projects.store.config.deployment.as_ref() else { return internal(()) };
+    let text = request.email.trim();
+    let (named, email) = match text.split_once(':') {
+        Some((id, email)) => match deployment.provider(id) {
+            Some(provider) => (Some(provider), email.to_lowercase()),
+            None => return error(StatusCode::BAD_REQUEST, "unknown provider"),
+        },
+        None => (None, text.to_lowercase()),
+    };
     if !valid_email(&email) || Access::share(&request.role).is_none() {
         return error(StatusCode::BAD_REQUEST, "invalid email or role");
     }
+    // The providers whose accounts this email names, and the one the invitation records.
+    let (providers, recorded): (Vec<String>, Option<String>) = match named {
+        Some(provider) => (vec![provider.id.clone()], Some(provider.id.clone())),
+        None => {
+            let vouching: Vec<String> = deployment.providers.iter().filter(|d| crate::sso::vouches(d, &email)).map(|d| d.id.clone()).collect();
+            match (vouching.is_empty(), deployment.providers.as_slice()) {
+                (false, _) => (vouching, None),
+                (true, [only]) => (vec![only.id.clone()], Some(only.id.clone())),
+                (true, _) => return error(StatusCode::BAD_REQUEST, "no provider vouches for this email's domain: name one as provider:email"),
+            }
+        }
+    };
     let days = projects.store.config.sr_invitation_days as f64;
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
         let owner: String = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(&p).fetch_one(&mut *tx).await?;
-        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE lower(email) = $1 AND email_verified AND state = 'active' ORDER BY account").bind(&email).fetch_all(&mut *tx).await?;
+        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE lower(email) = $1 AND email_verified AND state = 'active' AND provider = ANY($2) ORDER BY account")
+            .bind(&email)
+            .bind(&providers)
+            .fetch_all(&mut *tx)
+            .await?;
         let others: Vec<&String> = accounts.iter().filter(|a| **a != owner).collect();
         let outcome = if !accounts.is_empty() {
             let mut fresh = false;
@@ -1263,8 +1296,8 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
             (if fresh { StatusCode::CREATED } else { StatusCode::OK }, json!({"status": if others.is_empty() { "owner" } else { "shared" }}))
         } else {
             let (id, expires): (String, i64) = sqlx::query_as(
-                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int))
-                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires
+                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires, provider) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int), $7)
+                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires, provider = EXCLUDED.provider
                  RETURNING invitation, (extract(epoch FROM expires) * 1000)::bigint",
             )
             .bind(random_hex())
@@ -1273,9 +1306,10 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
             .bind(&request.role)
             .bind(&caller.account)
             .bind(days as i32)
+            .bind(&recorded)
             .fetch_one(&mut *tx)
             .await?;
-            (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "role": request.role, "expires": expires}}))
+            (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "provider": recorded, "role": request.role, "expires": expires}}))
         };
         notify(&mut tx, &p).await?;
         tx.commit().await?;
