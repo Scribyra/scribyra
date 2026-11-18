@@ -3115,6 +3115,7 @@ dependencies = [
  "rsa",
  "rusqlite",
  "rusty-s3",
+ "scribyra-compile",
  "scribyra-core",
  "serde",
  "serde_json",

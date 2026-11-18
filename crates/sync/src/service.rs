@@ -229,6 +229,8 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
     } else {
         Duration::from_secs(15)
     };
+    // Metrics name the route template only, never the path (it holds IDs).
+    let route = request.extensions().get::<axum::extract::MatchedPath>().map_or("unmatched", |m| m.as_str()).to_owned();
     let mut observation = telemetry::native::global().begin(Operation::SyncHttp, None);
     let response = tokio::time::timeout(deadline, next.run(request))
         .await
@@ -238,6 +240,7 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
     } else {
         observation.error("invalid_request");
     }
+    crate::metrics::global().http(&route, response.status().as_u16());
     // Fixed fields only: no URL, caller-supplied identifier, header or error text.
     println!(
         "{{\"event\":\"http\",\"status\":{}}}",
@@ -592,7 +595,7 @@ pub fn router(s: Shared) -> Router {
                 .allow_origin(origins)
                 .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
                 .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::HeaderName::from_static("scribyra-client"), header::HeaderName::from_static("scribyra-client-seq")])
-                .expose_headers(["scribyra-log-head", "scribyra-log-floor", "scribyra-snapshot-seq"].map(header::HeaderName::from_static))
+                .expose_headers(["scribyra-log-head", "scribyra-log-floor", "scribyra-snapshot-seq", "scribyra-compile-job", "scribyra-compile-seq", "retry-after"].map(header::HeaderName::from_static))
                 .max_age(Duration::from_secs(3600)),
         )
 }
@@ -609,6 +612,23 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
         listener.local_addr()?
     );
     s.sso.spawn_recheck();
+    if let Some(bind) = config.metrics_bind {
+        crate::metrics::serve(bind, Some(s.store.pool.clone())).await?;
+    }
+    // Development: a compile worker in this process (server compile deployments only).
+    let grace = Duration::from_secs(config.shutdown_grace_seconds);
+    let worker = match (&s.server_projects.compiles, config.compile_worker_in_process) {
+        (Some(compiles), true) => {
+            let runner = crate::compiles::runner(&config).inspect_err(|e| println!("{}", serde_json::json!({"event": "compile_runner_unavailable", "reason": e.to_string()})))?;
+            println!("{{\"event\":\"compile_worker_in_process\"}}");
+            Some(tokio::spawn(crate::compiles::Worker::new(compiles.clone(), runner).run(s.shutdown.subscribe(), grace)))
+        }
+        (None, true) => {
+            println!("{{\"event\":\"compile_disabled\"}}");
+            None
+        }
+        _ => None,
+    };
     let owner = s.store.clone();
     tokio::spawn(async move {
         loop {
@@ -634,7 +654,6 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
     };
     // SIGTERM: the guard refuses new requests, long polls end at once, and in-flight requests get
     // `shutdown_grace_seconds` to finish before the process exits (0) regardless.
-    let grace = Duration::from_secs(config.shutdown_grace_seconds);
     let mut stopping = drain.shutdown.subscribe();
     let server = axum::serve(
         listener,
@@ -651,10 +670,18 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
             started
         } => Some(started),
     };
+    // An in-process compile worker gives back what it could not finish within the grace period.
+    let worker_done = async {
+        if let Some(worker) = worker {
+            let _ = tokio::time::timeout(grace + Duration::from_secs(5), worker).await;
+        }
+    };
     if started.is_some() {
+        worker_done.await;
         println!("{{\"event\":\"drain_timeout\"}}");
         return Ok(());
     }
+    worker_done.await;
     // Upgraded sockets are detached from HTTP serving; let their close frames drain.
     let _ = tokio::time::timeout(
         grace.min(Duration::from_secs(5)),

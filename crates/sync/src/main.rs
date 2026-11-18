@@ -1,11 +1,12 @@
 use scribyra_sync::{config::Config, migrate_sqlite, service, store::Store};
 use std::{path::PathBuf, process::ExitCode};
 
-const USAGE: &str = "usage: scribyra-sync [serve] | migrate | verify | migrate-sqlite <old-data-dir>";
+const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | migrate-sqlite <old-data-dir>";
 
 enum Command {
     Serve,
     Migrate,
+    CompileWorker,
     Verify,
     MigrateSqlite(PathBuf),
 }
@@ -14,6 +15,7 @@ fn parse(args: &[String]) -> Option<Command> {
         [] => Some(Command::Serve),
         [cmd] if cmd == "serve" => Some(Command::Serve),
         [cmd] if cmd == scribyra_sync::deploy::COMMAND_MIGRATE => Some(Command::Migrate),
+        [cmd] if cmd == scribyra_sync::deploy::COMMAND_COMPILE_WORKER => Some(Command::CompileWorker),
         [cmd] if cmd == "verify" => Some(Command::Verify),
         [cmd, dir] if cmd == "migrate-sqlite" => Some(Command::MigrateSqlite(dir.into())),
         _ => None,
@@ -42,6 +44,7 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
     let store = Store::open(config).await?;
     match command {
         Command::Serve => service::serve(store).await.map(|()| ExitCode::SUCCESS),
+        Command::CompileWorker => scribyra_sync::compiles::run_worker(store).await.map(|()| ExitCode::SUCCESS),
         Command::Migrate => unreachable!(),
         Command::Verify => {
             let report = store.verify().await?;
