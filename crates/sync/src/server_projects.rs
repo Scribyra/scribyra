@@ -276,15 +276,16 @@ impl Projects {
             .await?
             .ok_or(AppendError::NotFound)?;
         let (head, wrapped, owner, project_bytes): (i64, Option<Vec<u8>>, String, i64) = (row.get(0), row.get(1), row.get(2), row.get(3));
-        let existing: Option<(i64, String)> = sqlx::query_as("SELECT seq, body_hash FROM sr_entries WHERE project = $1 AND client = $2 AND client_seq = $3")
+        let existing: Option<(i64, String, Option<String>)> = sqlx::query_as("SELECT seq, body_hash, account FROM sr_entries WHERE project = $1 AND client = $2 AND client_seq = $3")
             .bind(project)
             .bind(client)
             .bind(client_seq)
             .fetch_optional(&mut *tx)
             .await?;
-        if let Some((seq, hash)) = existing {
+        if let Some((seq, hash, by)) = existing {
             let _ = tx.rollback().await;
-            return if hash == body_hash { Ok(Appended::Repeated(seq)) } else { Err(AppendError::Conflict) };
+            // Only the account that sent it gets the acknowledgement of a repeat.
+            return if hash == body_hash && by.as_deref() == Some(account) { Ok(Appended::Repeated(seq)) } else { Err(AppendError::Conflict) };
         }
         let key = self.data_key(project, wrapped.as_deref()).ok_or(AppendError::Internal)?;
         let seq = head + 1;

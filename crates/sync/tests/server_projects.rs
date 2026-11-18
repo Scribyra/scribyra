@@ -31,6 +31,12 @@ fn appends_are_durable_idempotent_and_gap_free() {
         assert_eq!((ana.append(&p, "browser-a", 1, &first).status, ana.append(&p, "browser-a", 1, &first).json()["seq"].as_i64()), (200, Some(1)));
         let other = doc.type_text("f1", " more");
         assert_eq!(ana.append(&p, "browser-a", 1, &other).status, 409);
+        // Another account repeating the same client slot is refused, even with the same bytes.
+        if blobs == Blobs::Fs {
+            let ben = sr.api(&sr.login("ben"));
+            assert_eq!(ana.invite(&p, "ben@example.org", "editor").status, 201);
+            assert_eq!(ben.append(&p, "browser-a", 1, &first).status, 409);
+        }
         // Malformed requests are refused before anything is stored.
         assert_eq!(ana.append(&p, "browser-a", 2, b"not a yjs update at all").status, 400);
         assert_eq!(request("POST", &format!("{}/v1/sr/projects/{p}/log", sr.url()), Some(&ana.token), &[], other.clone()).status, 400);

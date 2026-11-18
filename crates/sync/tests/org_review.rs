@@ -105,9 +105,20 @@ fn sign_in_state_is_bounded_per_organisation_and_per_key() {
     assert_eq!(events(&tokens[0]), 401);
     let rest: Vec<u16> = tokens[1..].iter().map(|t| events(t)).collect();
     assert_eq!(rest, [200; 8]);
-    // Unanswered challenges are bounded per organisation.
-    let challenge = |id: &str| send("POST", &org.url("/v1/auth/challenge"), None, "application/json", json!({"org": id}).to_string().as_bytes()).status;
-    let statuses: Vec<u16> = (0..70).map(|_| challenge(&org.id)).collect();
-    assert!(statuses[..64].iter().all(|&s| s == 200));
-    assert_eq!(statuses[64..], [503; 6]);
+    // Unanswered challenges are bounded: one client holds eight, and a further one replaces its
+    // oldest rather than refusing anyone (review M2; this used to be a 503 after 64).
+    let challenge = |id: &str| {
+        let reply = send("POST", &org.url("/v1/auth/challenge"), None, "application/json", json!({"org": id}).to_string().as_bytes());
+        assert_eq!(reply.status, 200);
+        reply.json()["challenge"].as_str().unwrap().to_owned()
+    };
+    let issued: Vec<String> = (0..70).map(|_| challenge(&org.id)).collect();
+    let attempt = |c: &str| {
+        let body = json!({"org": org.id, "key": org.owner.key, "challenge": c, "sig": "00".repeat(64), "sso": random_hex(32)});
+        send("POST", &org.url("/v1/auth/session"), None, "application/json", body.to_string().as_bytes()).json()["error"].as_str().map(str::to_owned)
+    };
+    assert_eq!(attempt(&issued[0]).as_deref(), Some("unknown challenge"));
+    assert_eq!(attempt(&issued[61]).as_deref(), Some("unknown challenge"));
+    assert_eq!(attempt(&issued[62]).as_deref(), Some("invalid signature"));
+    assert_eq!(attempt(&issued[69]).as_deref(), Some("invalid signature"));
 }
