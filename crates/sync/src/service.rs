@@ -34,6 +34,10 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, broadcast, watch};
 use tower_http::cors::CorsLayer;
 
 pub type Shared = Arc<Service>;
+/// The client address of a request (the peer, or the one a trusted proxy names), for handlers
+/// that bound per-source state.
+#[derive(Clone, Copy, Debug)]
+pub struct Source(pub IpAddr);
 pub struct Service {
     pub config: Config,
     pub store: Arc<Store>,
@@ -175,6 +179,7 @@ async fn guard(State(s): State<Shared>, mut request: Request<Body>, next: Next) 
         Ok(source) => source,
         Err(status) => return status.into_response(),
     };
+    request.extensions_mut().insert(Source(source));
     let health = matches!(request.uri().path(), "/health" | "/healthz");
     if !source_allow(&s, source, health) {
         return StatusCode::TOO_MANY_REQUESTS.into_response();

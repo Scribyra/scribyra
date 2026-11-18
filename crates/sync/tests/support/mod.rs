@@ -550,3 +550,26 @@ pub fn partial_put(service: &Service, bytes: &[u8], sent: usize) -> TcpStream {
     socket.flush().unwrap();
     socket
 }
+
+/// POST a JSON body from a chosen loopback source address (for example `127.0.0.7`), so tests can
+/// act as several clients; returns (status, body). The service sees the address as the peer.
+pub fn post_from(source: &str, url: &str, body: &serde_json::Value) -> (u16, serde_json::Value) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let url = url::Url::parse(url).unwrap();
+    let target: std::net::SocketAddr = format!("{}:{}", url.host_str().unwrap(), url.port().unwrap()).parse().unwrap();
+    let body = body.to_string();
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    let raw = runtime.block_on(async {
+        let socket = tokio::net::TcpSocket::new_v4().unwrap();
+        socket.bind(format!("{source}:0").parse().unwrap()).unwrap();
+        let mut stream = socket.connect(target).await.unwrap();
+        let request = format!("POST {} HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", url.path(), target, body.len());
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut out = Vec::new();
+        stream.read_to_end(&mut out).await.unwrap();
+        String::from_utf8_lossy(&out).into_owned()
+    });
+    let status = raw.split(' ').nth(1).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let json = raw.split_once("\r\n\r\n").and_then(|(_, b)| serde_json::from_str(b).ok()).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}

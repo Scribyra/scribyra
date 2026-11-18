@@ -28,7 +28,9 @@ use std::{
 const CHALLENGE_SECONDS: u64 = 60;
 const SESSION_SECONDS: u64 = 12 * 3600;
 const MAX_CHALLENGES: usize = 4096;
-const MAX_CHALLENGES_PER_ORG: usize = 64;
+const MAX_CHALLENGES_PER_ORG: usize = 1024;
+/// Open challenges per client address; a further one replaces that address's oldest.
+const MAX_CHALLENGES_PER_SOURCE: usize = 8;
 const MAX_SESSIONS_PER_KEY: usize = 8;
 const MAX_CACHED_ORGS: usize = 1024;
 const MAX_WRAPS_PER_ORG: i64 = 100_000;
@@ -43,7 +45,8 @@ pub struct Orgs {
     public_url: Option<String>,
     /// The deployment's organisation, when the deployment is end to end encrypted.
     org: Option<String>,
-    challenges: Mutex<HashMap<String, (String, Instant)>>,
+    /// Open challenges: (org, client address, expiry).
+    challenges: Mutex<HashMap<String, (String, Option<std::net::IpAddr>, Instant)>>,
     sessions: Mutex<HashMap<String, Session>>,
     states: Mutex<HashMap<String, Arc<tokio::sync::Mutex<Option<OrgState>>>>>,
     /// Per-organisation change counter for the long-poll heads notice.
@@ -240,7 +243,8 @@ impl Orgs {
 struct ChallengeRequest {
     org: String,
 }
-async fn challenge(State(o): State<Shared>, Json(request): Json<ChallengeRequest>) -> Response {
+async fn challenge(State(o): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, Json(request): Json<ChallengeRequest>) -> Response {
+    let source = source.map(|axum::Extension(crate::service::Source(ip))| ip);
     if !core::is_hex(&request.org, 32) {
         return error(StatusCode::BAD_REQUEST, "invalid organisation");
     }
@@ -250,11 +254,22 @@ async fn challenge(State(o): State<Shared>, Json(request): Json<ChallengeRequest
     let challenge = random_hex();
     let mut challenges = o.challenges.lock().unwrap();
     let now = Instant::now();
-    challenges.retain(|_, (_, until)| *until > now);
-    if challenges.len() >= MAX_CHALLENGES || challenges.values().filter(|(org, _)| *org == request.org).count() >= MAX_CHALLENGES_PER_ORG {
-        return error(StatusCode::SERVICE_UNAVAILABLE, "too many sign-ins in progress");
+    challenges.retain(|_, (_, _, until)| *until > now);
+    // Nobody is refused for room (review M2): a source past its own few replaces its oldest, and
+    // a full table (or organisation) drops its oldest, so one client cannot lock others out.
+    type Open = (String, Option<std::net::IpAddr>, Instant);
+    let rules: [(usize, Box<dyn Fn(&Open) -> bool>); 3] = [
+        (MAX_CHALLENGES_PER_SOURCE, Box::new(|v: &Open| v.1 == source)),
+        (MAX_CHALLENGES_PER_ORG, Box::new(|v: &Open| v.0 == request.org)),
+        (MAX_CHALLENGES, Box::new(|_: &Open| true)),
+    ];
+    for (limit, applies) in rules {
+        while challenges.values().filter(|v| applies(v)).count() >= limit {
+            let Some(key) = challenges.iter().filter(|(_, v)| applies(v)).min_by_key(|(_, v)| v.2).map(|(k, _)| k.clone()) else { break };
+            challenges.remove(&key);
+        }
     }
-    challenges.insert(challenge.clone(), (request.org, now + Duration::from_secs(CHALLENGE_SECONDS)));
+    challenges.insert(challenge.clone(), (request.org, source, now + Duration::from_secs(CHALLENGE_SECONDS)));
     Json(serde_json::json!({"challenge": challenge})).into_response()
 }
 #[derive(Deserialize)]
@@ -274,7 +289,7 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
     };
     // Single use: the challenge is consumed whether or not the signature verifies.
     let issued = o.challenges.lock().unwrap().remove(&request.challenge);
-    let Some((org, until)) = issued else { return error(StatusCode::UNAUTHORIZED, "unknown challenge") };
+    let Some((org, _, until)) = issued else { return error(StatusCode::UNAUTHORIZED, "unknown challenge") };
     if org != request.org || until <= Instant::now() {
         return error(StatusCode::UNAUTHORIZED, "unknown challenge");
     }

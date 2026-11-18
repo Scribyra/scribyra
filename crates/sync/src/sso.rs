@@ -53,6 +53,8 @@ const FLOW_SECONDS: u64 = 600;
 const GRANT_SECONDS: u64 = 120;
 const MAX_FLOWS: usize = 4096;
 const MAX_FLOWS_PER_PROVIDER: usize = 256;
+/// Sign-ins in progress per client address; a further one replaces that address's oldest.
+const MAX_FLOWS_PER_SOURCE: usize = 8;
 const MAX_GRANTS: usize = 4096;
 const MAX_LOGOUT_JTIS: usize = 4096;
 const DISCOVERY_SECONDS: u64 = 3600;
@@ -745,7 +747,8 @@ struct StartRequest {
     return_to: String,
     challenge: String,
 }
-async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Response {
+async fn start(State(s): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, Json(request): Json<StartRequest>) -> Response {
+    let source = source.map(|axum::Extension(crate::service::Source(ip))| ip.to_string()).unwrap_or_default();
     let Some(public_url) = s.public_url.clone() else {
         return error(StatusCode::NOT_FOUND, "sign-in needs public_url on this service");
     };
@@ -777,16 +780,32 @@ async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Re
         .append_pair("nonce", &nonce)
         .append_pair("code_challenge", &idp_challenge)
         .append_pair("code_challenge_method", "S256");
-    // In PostgreSQL, so the provider's redirect may reach any replica.
+    // In PostgreSQL, so the provider's redirect may reach any replica. Nobody is refused for
+    // room: a source past its own few sign-ins replaces its oldest, and a full table (or
+    // provider) drops its oldest, so one client cannot lock others out (review M2).
     let stored = async {
         let mut tx = s.store.pool.begin().await?;
         sqlx::query("DELETE FROM sso_flows WHERE expires <= now()").execute(&mut *tx).await?;
         sqlx::query("LOCK TABLE sso_flows IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
-        let (all, provider): (i64, i64) = sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE provider = $1) FROM sso_flows").bind(&request.provider).fetch_one(&mut *tx).await?;
-        if all as usize >= MAX_FLOWS || provider as usize >= MAX_FLOWS_PER_PROVIDER {
-            return Ok(false);
+        let (all, provider, mine): (i64, i64, i64) = sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE provider = $1), count(*) FILTER (WHERE source = $2) FROM sso_flows")
+            .bind(&request.provider)
+            .bind(&source)
+            .fetch_one(&mut *tx)
+            .await?;
+        let oldest = |filter: &'static str, value: String, over: i64| {
+            let sql = format!("DELETE FROM sso_flows WHERE state_hash IN (SELECT state_hash FROM sso_flows WHERE {filter} ORDER BY expires LIMIT $2)");
+            (sql, value, over)
+        };
+        for (sql, value, over) in [
+            oldest("source = $1", source.clone(), mine - MAX_FLOWS_PER_SOURCE as i64 + 1),
+            oldest("provider = $1", request.provider.clone(), provider - MAX_FLOWS_PER_PROVIDER as i64 + 1),
+            oldest("$1 = $1", String::new(), all - MAX_FLOWS as i64 + 1),
+        ] {
+            if over > 0 {
+                sqlx::query(&sql).bind(value).bind(over).execute(&mut *tx).await?;
+            }
         }
-        sqlx::query("INSERT INTO sso_flows (state_hash, provider, return_to, challenge, nonce, verifier, expires) VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7))")
+        sqlx::query("INSERT INTO sso_flows (state_hash, provider, return_to, challenge, nonce, verifier, expires, source) VALUES ($1, $2, $3, $4, $5, $6, now() + make_interval(secs => $7), $8)")
             .bind(sha256_hex(state.as_bytes()))
             .bind(&request.provider)
             .bind(&request.return_to)
@@ -794,15 +813,13 @@ async fn start(State(s): State<Shared>, Json(request): Json<StartRequest>) -> Re
             .bind(&nonce)
             .bind(&verifier)
             .bind(FLOW_SECONDS as f64)
+            .bind(&source)
             .execute(&mut *tx)
             .await?;
-        tx.commit().await?;
-        Ok::<_, sqlx::Error>(true)
+        tx.commit().await
     };
-    match stored.await {
-        Ok(true) => {}
-        Ok(false) => return error(StatusCode::SERVICE_UNAVAILABLE, "too many sign-ins in progress"),
-        Err(e) => return internal(e),
+    if let Err(e) = stored.await {
+        return internal(e);
     }
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(json!({"url": url.as_str()}))).into_response()
 }

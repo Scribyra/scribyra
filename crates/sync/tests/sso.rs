@@ -466,3 +466,33 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn one_client_cannot_fill_the_sign_ins_in_progress() {
+    // Review M2: one source starting sign-ins without end used to fill the provider's 256 slots
+    // for ten minutes, so everyone else got 503. Now each source holds a few, replacing its own
+    // oldest, and nobody is refused for room.
+    let env = Env::start("RS256", default_users(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000}), json!({}));
+    let start = |ip: &str| {
+        let verifier = random_bytes(32);
+        let (status, reply) = post_from(ip, &format!("{}/v1/sso/start", env.service.url), &json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}));
+        (status, reply["url"].as_str().map(str::to_owned), verifier)
+    };
+    for _ in 0..300 {
+        assert_eq!(start("127.0.0.66").0, 200);
+    }
+    let (status, url, verifier) = start("127.0.0.7");
+    assert_eq!(status, 200);
+    for _ in 0..300 {
+        assert_eq!(start("127.0.0.66").0, 200);
+    }
+    assert_eq!(postgres().psql(env.service.database_url(), "SELECT count(*) FROM sso_flows WHERE source = '127.0.0.66'"), "8");
+    // The other person's sign-in is still there and completes.
+    let c = env.client();
+    let started = Started { url: url.unwrap(), verifier: verifier.iter().map(|b| format!("{b:02x}")).collect() };
+    let callback = c.authorize(&started, "alice", "pw-alice");
+    let (status, outcome) = c.callback(&callback);
+    assert_eq!(status, 302);
+    let Some(Outcome::Grant { grant, .. }) = outcome else { panic!("{outcome:?}") };
+    assert_eq!(c.redeem(&grant, &started.verifier).status, 200);
+}

@@ -198,3 +198,27 @@ fn unverified_emails_are_never_shown_as_identities() {
     let me = client.me(&org.logins[&org.person(&mimic)]).json();
     assert_eq!(me["email"], Value::Null);
 }
+
+#[test]
+fn one_client_cannot_use_up_the_session_challenges() {
+    // Review M2: 64 open challenges per organisation for a minute let one source lock every
+    // device out. Each source now holds a few, replacing its own oldest.
+    let env = Env::start("RS256", people(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000}), json!({}));
+    let org = Org::create(&env, "alice");
+    let challenge = |ip: &str| {
+        let (status, reply) = post_from(ip, &org.url("/v1/auth/challenge"), &json!({"org": org.id}));
+        assert_eq!(status, 200);
+        reply["challenge"].as_str().unwrap().to_owned()
+    };
+    for _ in 0..200 {
+        challenge("127.0.0.66");
+    }
+    let mine = challenge("127.0.0.7");
+    for _ in 0..200 {
+        challenge("127.0.0.66");
+    }
+    // The other client's challenge is still open: a session attempt reaches the signature check.
+    let attempt = json!({"org": org.id, "key": org.owner.key, "challenge": mine, "sig": "00".repeat(64), "sso": random_hex(32)});
+    let reply = support::sr::request("POST", &org.url("/v1/auth/session"), None, &[("Content-Type", "application/json".into())], attempt.to_string().into_bytes());
+    assert_eq!((reply.status, reply.json()["error"].as_str()), (401, Some("invalid signature")));
+}
