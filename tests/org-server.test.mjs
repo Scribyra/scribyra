@@ -155,5 +155,24 @@ test('an online-only deployment keeps no local copy after sign-out and pauses ed
     assert.deepEqual(await engine.links(),[]);
     const db=await openDB('scribyra-org-server');assert.equal((await db.getAll('outbox')).length,0);db.close();
     assert.equal(await s.sql("SELECT count(*) FROM sso_logins WHERE revoked"),'1');
+
+    // A session the server stops accepting (revoked elsewhere) also takes the local copies.
+    await signIn(engine,s,'ana');
+    const again=await engine.add(id);await settled(engine,again.localId);
+    await s.sql("UPDATE sso_logins SET revoked = true");
+    await engine.sync(again.localId).catch(()=>{});
+    for(let i=0;i<200&&(await engine.links()).length;i++)await new Promise(r=>setTimeout(r,25));
+    assert.deepEqual(await engine.links(),[]);assert.equal((await storage.readCommittedProject(again.localId)).kind,'deleted');
+    assert.equal(engine.info.signedIn,false);
+
+    // Starting without a valid session (it expired while the browser was closed) erases them too.
+    await signIn(engine,s,'ana');
+    const third=await engine.add(id);await settled(engine,third.localId);
+    const stored=await openDB('scribyra-org-server'),{expires}=await stored.get('connection','current');stored.close();
+    engine.close();
+    engine=orgServer({appOrigin:APP_ORIGIN,fetchImpl:fetch,now:()=>expires*1000+1});
+    assert.equal(await engine.start(),true);
+    assert.deepEqual(await engine.links(),[]);assert.equal((await storage.readCommittedProject(third.localId)).kind,'deleted');
+    assert.deepEqual((await storage.listProjects()).filter(p=>p.name==='Online paper').map(p=>p.id),[id]);
   }finally{if(engine)await engine.forget().catch(()=>{});await s.close();}
 });

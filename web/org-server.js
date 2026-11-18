@@ -522,7 +522,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   async forget(){
    await load();if(onlineOnly())await eraseLocal();
    if(connection.token)await orgClient(connection.service,{fetchImpl}).ssoLogout(connection.token).catch(()=>{});
-   api.close();db?.close();db=null;connection=null;client=null;remote=null;await deleteDB(DB);markConnected(false);statuses.clear();closed=false;onAccount();
+   api.close();connection=null;client=null;remote=null;await deleteDB(DB);markConnected(false);statuses.clear();closed=false;onAccount();
   },
   /** Projects this person can open (owned and shared), with this browser's copy if any. */
   async projects(){
@@ -569,7 +569,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   /** The editor modes a person's role allows (an owner edits). */
   async allowedModes(localId){const r=await api.projectRole(localId);return r?ROLE_MODES[r==='owner'?'editor':r]||['viewing']:null;},
   sync,
-  close(){closed=true;stopFollowing();if(hooks){globalThis.removeEventListener?.('offline',hooks.offline);globalThis.removeEventListener?.('online',hooks.online);hooks=null;}clearInterval(ticker);ticker=0;unwatch?.();unwatch=null;for(const t of timers.values())clearTimeout(t.timer);timers.clear();},
+  close(){closed=true;stopFollowing();if(hooks){globalThis.removeEventListener?.('offline',hooks.offline);globalThis.removeEventListener?.('online',hooks.online);hooks=null;}clearInterval(ticker);ticker=0;unwatch?.();unwatch=null;for(const t of timers.values())clearTimeout(t.timer);timers.clear();db?.close();db=null;},
  };
  return api;
 }
