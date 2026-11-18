@@ -61,6 +61,7 @@ fn installation_files_match_the_generator() {
     let install = manifests::Install { namespace: manifests::DEFAULT_NAMESPACE.into(), image: "ghcr.io/scribyra/scribyra-operator:0.1.0".into(), registry: "ghcr.io/scribyra".into() };
     check_file(&root().join("deploy/operator/operator.yaml"), &manifests::yaml(&manifests::objects(&install)));
     check_file(&root().join("deploy/helm/scribyra-operator/crds/scribyra.com_scribyras.yaml"), &manifests::yaml(&[manifests::crd()]));
+    check_file(&root().join("deploy/helm/scribyra-operator/files/clusterrole-rules.yaml"), &serde_yaml::to_string(&manifests::cluster_rules()).unwrap());
 }
 
 #[test]

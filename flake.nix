@@ -7,8 +7,15 @@
     systems = [ "x86_64-linux" "aarch64-linux" "aarch64-darwin" "x86_64-darwin" ];
   in {
     nixosModules.scribyra-sync = import ./nix/service-module.nix;
-    packages = nixpkgs.lib.genAttrs systems (system:
-      import ./nix/service.nix { pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; }; });
+    packages = nixpkgs.lib.genAttrs systems (system: let
+      pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; };
+      operator = import ./nix/operator.nix { inherit pkgs; };
+    in import ./nix/service.nix { inherit pkgs; } // {
+      inherit (operator) operator operator-image garage-image;
+    });
+    # `lib.<system>.webImage <path>` builds the static web app image from a built app.
+    lib = nixpkgs.lib.genAttrs systems (system:
+      { inherit (import ./nix/operator.nix { pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; }; }) webImage; });
     checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: let
       pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; };
     in {
@@ -35,7 +42,7 @@
     # kube-apiserver, kube-controller-manager as plain processes), kubectl, Helm and
     # actionlint. `cargo test -p scribyra-operator` needs nothing else.
     operator = pkgs.mkShell {
-      packages = with pkgs; [ (rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; }) pkg-config openssl git kubernetes etcd kubectl kubernetes-helm actionlint garage ];
+      packages = with pkgs; [ (rust-bin.stable.latest.default.override { targets = [ "wasm32-unknown-unknown" ]; }) pkg-config openssl git kubernetes etcd kubectl kubernetes-helm actionlint garage_1 ];
       SCRIBYRA_ENVTEST_REQUIRED = "1";
     };
     default = pkgs.mkShell {

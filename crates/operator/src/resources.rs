@@ -16,6 +16,8 @@ pub const INSTANCE_LABEL: &str = "scribyra.com/instance";
 pub const COMPONENT_LABEL: &str = "app.kubernetes.io/component";
 pub const CONFIG_HASH: &str = "scribyra.com/config-hash";
 pub const WEB_PORT: u16 = 8080;
+/// Tag of the Garage image; equals `garage_1.version` in the pinned nixpkgs (`nix/operator.nix`,
+/// checked in CI). The operator uses Garage's v1 admin API.
 pub const GARAGE_VERSION: &str = "1.3.1";
 
 /// What the operator knows about its cluster and itself.

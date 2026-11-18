@@ -1,0 +1,20 @@
+# Operator image.
+image:
+  repository: ghcr.io/scribyra/scribyra-operator
+  tag: ""            # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+# Registry prefix of the images the operator deploys (scribyra-sync, scribyra-web,
+# scribyra-worker, scribyra-garage); a Scribyra resource can override each in spec.images.
+registry: ghcr.io/scribyra
+# Watch one namespace instead of the whole cluster (the ClusterRole is still needed for
+# the CRD's resources; see docs/operator.md, "Security model").
+watchNamespace: ""
+logLevel: info
+replicas: 1          # more replicas stand by on the leader lease
+resources:
+  requests: {cpu: 20m, memory: 64Mi}
+  limits: {memory: 256Mi}
+nodeSelector: {}
+tolerations: []
+affinity: {}

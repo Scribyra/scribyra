@@ -1,0 +1,97 @@
+# Kubernetes operator checks on pull requests that touch it (or the service it deploys):
+# unit and snapshot tests, the envtest integration tests (etcd, kube-apiserver and
+# kube-controller-manager as plain processes from the `operator` Nix shell), the Garage
+# bootstrap test, the Helm chart lint, and the operator image build. No cluster, no
+# Docker, no secrets.
+name: operator
+on:
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - crates/operator/**
+      - crates/sync/**
+      - crates/core/**
+      - deploy/operator/**
+      - deploy/helm/**
+      - nix/**
+      - flake.nix
+      - flake.lock
+      - Cargo.toml
+      - Cargo.lock
+      - .github/workflows/operator.yml
+      - .github/workflows/operator-e2e.yml
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: operator-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    env:
+      CARGO_INCREMENTAL: '0'
+      CARGO_PROFILE_DEV_DEBUG: '0'
+      CARGO_TERM_COLOR: never
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            accept-flake-config = false
+
+      - name: Restore cargo cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-operator-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            cargo-operator-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}-
+            cargo-operator-${{ runner.os }}-
+
+      # SCRIBYRA_ENVTEST_REQUIRED (set by the shell) turns missing binaries into a failure.
+      - name: Operator tests (unit, snapshots, envtest, Garage)
+        run: nix develop .#operator -c cargo test -p scribyra-operator --locked
+
+      - name: Service tests touched by the operator contract
+        run: nix develop .#operator -c cargo test -p scribyra-sync --locked --lib
+
+      - name: Helm chart
+        run: |
+          nix develop .#operator -c helm lint deploy/helm/scribyra-operator
+          nix develop .#operator -c helm template scribyra-operator deploy/helm/scribyra-operator --namespace scribyra-system --include-crds > /dev/null
+
+      - name: Workflows
+        run: nix develop .#operator -c actionlint .github/workflows/operator.yml .github/workflows/operator-e2e.yml
+
+      - name: Operator image
+        run: |
+          nix build .#operator-image .#garage-image --print-build-logs
+          ls -l result result-1
+          # The operator's Garage image tag must be the Garage the flake builds.
+          garage="$(nix eval --raw .#garage-image.imageTag)"
+          grep -q "GARAGE_VERSION: &str = \"$garage\";" crates/operator/src/resources.rs
+
+      - name: Save cargo cache
+        if: github.event_name != 'pull_request'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: cargo-operator-${{ runner.os }}-${{ hashFiles('flake.lock', 'Cargo.lock') }}-${{ github.run_id }}
