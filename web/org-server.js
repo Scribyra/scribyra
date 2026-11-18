@@ -63,6 +63,9 @@ const isHash=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value);
 const isId=isHash;
 const fault=message=>Object.assign(Error(message),{fatal:true});
 const writes=role=>role==='owner'||role==='editor';
+/** The ID the service gives a project an account creates with request ID `request` (review L5):
+ * SHA-256 of `scribyra-sr-project/1\n<account>\n<request>`, so a retry finds it. */
+export const srProjectId=(account,request)=>sha256Hex(new TextEncoder().encode(`scribyra-sr-project/1\n${account}\n${request}`));
 
 /**
  * Parses a log page: repeated `u64 seq ‖ u32 length ‖ update` (big-endian). Throws on a
@@ -323,7 +326,10 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   if(!signedIn()){setStatus(localId,'saved',`Sign in with ${connection.label||'your organisation'} to keep syncing.`);return;}
   setStatus(localId,'syncing');
   if(!link.created){
-   await client.create(link.project,link.name.slice(0,200));
+   // A copy added before the service derived IDs: its request ID is the one it stored.
+   if(!link.request){link={...link,request:link.project,project:srProjectId(connection.account,link.project)};await db.put('links',link);}
+   const created=await client.create(link.request,link.name.slice(0,200));
+   if(created?.project?.id!==link.project)throw fault('The server gave this project another ID than expected. Sync paused.');
    await db.put('links',link={...link,created:true});
   }
   link=await pull(link);
@@ -553,7 +559,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
     meta.set('lineageId',lineage);
     const copy=crypto.randomUUID(),saved=await storage.saveProject(copy,doc);
     // The project's identity is durable here before the server hears of it (a retry finds it).
-    const link={localId:copy,project:hex(randomBytes(32)),name,role:'owner',lineage,created:false,seq:0,vector:new Uint8Array([0]),pushedSequence:-1,client:newClient(),clientSeq:0,mine:[]};
+    const request=hex(randomBytes(32)),link={localId:copy,project:srProjectId(connection.account,request),request,name,role:'owner',lineage,created:false,seq:0,vector:new Uint8Array([0]),pushedSequence:-1,client:newClient(),clientSeq:0,mine:[]};
     await db.put('links',link);void saved;
     setStatus(copy,'syncing');
     await sync(copy);
