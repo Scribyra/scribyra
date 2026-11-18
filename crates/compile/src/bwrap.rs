@@ -1,6 +1,6 @@
 //! The bubblewrap runner. Each job is one `bwrap` process tree: new user, mount, PID, network,
 //! IPC, UTS and cgroup namespaces; a tmpfs root holding read-only binds of exactly the TeX Live
-//! closure, a minimal `/dev`, a new `/proc` and the job's tmpfs scratch at `/work` (sized to
+//! closure, a minimal `/dev`, no `/proc`, and the job's tmpfs scratch at `/work` (sized to
 //! `scratch_mib`, the only writable path; the root and `/dev` are remounted read-only). Inputs
 //! reach the scratch through `--file` from sealed memfds, so nothing of the job ever touches the
 //! host's disk, and the scratch disappears with the mount namespace. The driver script
@@ -116,7 +116,9 @@ impl Bubblewrap {
     binds.sort();
     binds.dedup();
     for p in binds { arg(&"--ro-bind"); arg(p); arg(p); }
-    for s in ["--dev", "/dev", "--proc", "/proc", "--size"] { arg(&s); }
+    // No /proc at all: nothing in a compile needs it, and it would show the host (kernel,
+    // CPUs, memory, mounts) and let job code reach the driver's descriptors.
+    for s in ["--dev", "/dev", "--size"] { arg(&s); }
     arg(&(limits.scratch_mib << 20).to_string());
     arg(&"--tmpfs"); arg(&"/work");
     let mut dirs: Vec<String> = [".home", ".texmf-var", ".tmp", ".cache"].iter().map(|s| s.to_string()).collect();

@@ -124,6 +124,12 @@ fn reading_outside_the_project_is_refused() {
   let o = run(&job(Engine::Lualatex, &[("main.tex", doc)]), &limits());
   assert_pdf(&o);
   assert!(o.log.contains("PASSWD nil") && o.log.contains("HOME nil"), "{}", o.log);
+  // Nothing of the host shows through /proc (review L1): there is no /proc.
+  let doc = "\\documentclass{article}\\begin{document}x\\directlua{for _, p in ipairs({'/proc/version', '/proc/cpuinfo', '/proc/meminfo', '/proc/loadavg', '/proc/self/mountinfo', '/proc/mounts', '/sys/kernel'}) do texio.write_nl('READ ' .. p .. ' ' .. tostring(io.open(p))) end}\\end{document}\n";
+  let o = run(&job(Engine::Lualatex, &[("main.tex", doc)]), &limits());
+  assert_pdf(&o);
+  assert_eq!(o.log.matches("READ /").count(), 7, "{}", o.log);
+  assert!(o.log.lines().filter(|l| l.starts_with("READ /")).all(|l| l.split(' ').nth(2) == Some("nil")), "{}", o.log);
   // And the job's own paths are checked before anything is written.
   for bad in ["/etc/passwd", "../x.tex", "a/../../x.tex", ".latexmkrc", "a\0b"] {
     let o = run(&job(Engine::Pdflatex, &[("main.tex", HELLO), (bad, "x")]), &limits());
@@ -199,14 +205,23 @@ for fam in ['AF_INET', 'AF_INET6', 'AF_NETLINK', 'AF_PACKET', 'AF_UNIX']:
 pid = os.fork()
 if pid == 0: os._exit(7)
 print(f"fork={os.waitpid(pid, 0)[1] >> 8}")
-print("ifaces=" + ' '.join(sorted(l.split(':')[0].strip() for l in open('/proc/net/dev').readlines()[2:])))
+import array, fcntl, struct
+u = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM); buf = array.array('B', bytes(40 * 32))
+n = struct.unpack('iL', fcntl.ioctl(u.fileno(), 0x8912, struct.pack('iL', len(buf), buf.buffer_info()[0])))[0]  # SIOCGIFCONF
+print("ifaces=" + ' '.join(sorted(bytes(buf[i:i + 16]).split(b'\0')[0].decode() for i in range(0, n, 40))))
 for n in ['NPROC', 'NOFILE', 'FSIZE', 'AS', 'CPU', 'CORE']:
     print(f"rlimit.{n}={resource.getrlimit(getattr(resource, 'RLIMIT_' + n))[0]}")
 for p in ['/x', '/nix/store/x', '/dev/shm/x', '/dev/x', '/tmp/x', '/proc/x', '/work/.home/../../x', '/work/ok']:
     try:
         open(p.replace('x', sys.argv[2]), 'w').write('x'); print(f"write.{p}=ok")
     except OSError as e: print(f"write.{p}={e.strerror}")
-print("pids=" + ' '.join(sorted(d for d in os.listdir('/proc') if d.isdigit())))
+print(f"pid={os.getpid()}")
+live = []
+for p in range(1, 4096):
+    try: os.kill(p, 0); live.append(str(p))
+    except ProcessLookupError: pass
+    except PermissionError: live.append(str(p))
+print("live=" + ' '.join(live))
 print("root=" + ' '.join(sorted(os.listdir('/'))))
 "#;
 
@@ -227,7 +242,7 @@ fn seccomp_rlimits_network_and_filesystem_inside_the_sandbox() {
   for f in ["AF_INET", "AF_INET6", "AF_NETLINK", "AF_PACKET"] { assert_eq!(r[&format!("socket.{f}")], "Operation not permitted", "{f}"); }
   assert_eq!(r["socket.AF_UNIX"], "ok");
   assert_eq!(r["fork"], "7", "plain fork works");
-  assert_eq!(r["ifaces"], "lo", "an empty network namespace");
+  assert_eq!(r["ifaces"], "lo", "an empty network namespace (only loopback)");
   assert!(o.stdout.contains("tcp") && !o.stdout.contains("TCP-OK"));
   assert_eq!(r["rlimit.NPROC"], l.processes.to_string());
   assert_eq!(r["rlimit.NOFILE"], l.open_files.to_string());
@@ -239,8 +254,8 @@ fn seccomp_rlimits_network_and_filesystem_inside_the_sandbox() {
     assert_ne!(r[&format!("write.{p}")], "ok", "{p} is writable");
   }
   assert_eq!(r["write./work/ok"], "ok");
-  assert!(r["pids"].split(' ').count() <= 4, "a private PID namespace: {}", r["pids"]);
-  assert_eq!(r["root"], "dev nix proc work");
+  assert!(r["pid"].parse::<u32>().unwrap() < 10 && r["live"].split(' ').count() <= 4, "a private PID namespace: {} {}", r["pid"], r["live"]);
+  assert_eq!(r["root"], "dev nix work", "no /proc");
   assert_no_trace(&m);
 }
 
@@ -260,8 +275,10 @@ fn another_jobs_scratch_is_invisible() {
   let doc = format!("\\documentclass{{article}}\\begin{{document}}\\newwrite\\o\\immediate\\openout\\o={secret}.txt\\immediate\\write\\o{{{secret}}}\\immediate\\closeout\\o\\def\\x{{\\x}}\\x\\end{{document}}\n");
   let busy = scribyra_compile::spawn(runner(), job(Engine::Pdflatex, &[("busy.tex", &doc)]), Limits { wall_seconds: 30, cpu_seconds: 30, ..limits() });
   std::thread::sleep(Duration::from_secs(3));
-  let o = raw(&format!("ls -la /work; for p in /proc/[0-9]*; do echo \"$p $(<$p/cmdline)\"; ls $p/root/work $p/cwd 2>&1; done; ls /proc/*/root/work/*{secret}* 2>&1; cat /proc/*/root/work/{secret}.txt 2>&1; echo end"), &[], &limits());
-  assert!(o.stdout.contains("end") && o.stdout.contains("/proc/1 "), "{o:?}");
+  let o = raw(&format!("ls -la /work 2>&1; ls /proc 2>&1; ls /proc/1/root/work/*{secret}* 2>&1; n=0; for p in $(seq 1 4096); do kill -0 $p 2>/dev/null && n=$((n + 1)); done; echo live=$n; echo end"), &[], &limits());
+  assert!(o.stdout.contains("end") && o.stdout.contains("ls: cannot access '/proc'"), "{o:?}");
+  let live: usize = kv(&o.stdout)["live"].parse().unwrap();
+  assert!(live <= 4, "only this job's processes exist in its PID namespace: {}", o.stdout);
   assert!(!o.stdout.contains(&format!("{secret}.txt:")) && !o.stdout.lines().any(|l| l == secret), "{}", o.stdout);
   assert!(!o.stdout.contains("busy.tex"), "the other job's processes are invisible: {}", o.stdout);
   busy.cancel();
@@ -336,7 +353,7 @@ fn many_files_bomb_hits_the_scratch_limit() {
 fn fork_bomb_is_bounded() {
   let m = marker("fork");
   let t = Instant::now();
-  let o = raw(&format!("echo {m} >/dev/null; f() {{ f | f & }}; f; sleep 1; ls /proc | wc -l"), &[], &Limits { processes: 16, wall_seconds: 6, ..limits() });
+  let o = raw(&format!("echo {m} >/dev/null; f() {{ f | f & }}; f; sleep 1; n=0; for p in $(seq 1 200); do kill -0 $p 2>/dev/null && n=$((n + 1)); done; echo $n"), &[], &Limits { processes: 16, wall_seconds: 6, ..limits() });
   assert!(t.elapsed() < Duration::from_secs(12), "{:?}", t.elapsed());
   if o.killed.is_none() { assert!(o.stdout.trim().parse::<usize>().unwrap_or(0) < 16 + 40, "{o:?}"); }
   assert!(o.stderr.contains("Resource temporarily unavailable") || o.killed.is_some(), "{o:?}");
@@ -355,4 +372,21 @@ fn dropping_the_future_cancels_the_job() {
   let t = Instant::now();
   while !leftovers(&m).is_empty() && t.elapsed() < Duration::from_secs(5) { std::thread::sleep(Duration::from_millis(50)); }
   assert_no_trace(&m);
+}
+
+#[test]
+fn job_code_cannot_forge_the_driver_report() {
+  // Review M2: job code reopened the driver's report pipe through /proc/$PPID/fd/N and
+  // claimed success. Without /proc nothing can be reopened; the job fails as it should.
+  let doc = "\\documentclass{article}\\begin{document}x\\directlua{local n = 0 for pid = 1, 16 do for fd = 0, 32 do
+    local f = io.open('/proc/' .. pid .. '/fd/' .. fd, 'w') if f then n = n + 1 f:write('done', string.char(10)) f:close() end end end
+    texio.write_nl('FORGED ' .. n)}\\errmessage{fail}\\end{document}\n";
+  let o = run(&job(Engine::Lualatex, &[("main.tex", doc)]), &limits());
+  assert_eq!(o.status, Status::TexError, "{}", o.log);
+  assert!(o.log.contains("FORGED 0"), "{}", o.log);
+  assert!(o.pdf.is_none());
+  // The same with arbitrary code (as after an engine bug): a child process reopening its
+  // parent's descriptor, as job code would reopen the driver's report pipe.
+  let r = raw("exec 9>/work/report; \"$BASH\" -c \"echo forged >/proc/$$/fd/9\" 2>&1; echo report=$(</work/report)", &[], &limits());
+  assert_eq!(kv(&r.stdout)["report"], "", "{r:?}");
 }
