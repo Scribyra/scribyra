@@ -5,8 +5,7 @@
 //! The configuration keys themselves are the fields of [`crate::config::Config`] (documented
 //! in `docs/service.md`); the operator serialises [`crate::config::Deployment`] directly. Only
 //! what `docs/service.md` did not yet define lives here, so both sides use one definition.
-//! Items marked *not yet served* are names the operator already relies on before the service
-//! implements them (design section 10); the operator tolerates their absence.
+//! The names are stable: the operator depends on them.
 
 /// Environment variable naming the configuration file (documented in `docs/service.md`).
 pub const CONFIG_ENV: &str = "SCRIBYRA_SERVICE_CONFIG";
@@ -44,18 +43,29 @@ pub const READY_PATH: &str = "/ready";
 /// Every API route is under this prefix; anything else on the deployment's domain is the
 /// static web app.
 pub const API_PREFIX: &str = "/v1";
-/// Prometheus metrics on a separate port (*not yet served*, design section 10).
+/// Prometheus metrics on a separate listener (`metrics_bind`; off unless set), served by `serve`
+/// and `compile-worker` alike (design section 10).
 pub const METRICS_PORT: u16 = 9090;
 pub const METRICS_PATH: &str = "/metrics";
-/// Gauge of queued plus running server compiles (*not yet served*; slice 15).
+/// The `metrics_bind` (`SCRIBYRA_SERVICE_METRICS_BIND`) a pod sets so Prometheus can scrape it.
+pub const METRICS_BIND: &str = "0.0.0.0:9090";
+/// Gauge of queued plus running server compiles; scales the compile workers.
 pub const COMPILE_QUEUE_METRIC: &str = "scribyra_compile_queue_length";
 
 /// `scribyra-sync serve`: the API and sync.
 pub const COMMAND_SERVE: &str = "serve";
 /// `scribyra-sync migrate`: apply pending migrations and exit (the operator's upgrade Job).
 pub const COMMAND_MIGRATE: &str = "migrate";
-/// `scribyra-sync compile-worker` (*not yet served*; slice 15).
+/// `scribyra-sync compile-worker`: takes server compile jobs from PostgreSQL and runs them in the
+/// sandbox (design section 6). Needs S3 blobs when `serve` runs in another process.
 pub const COMMAND_COMPILE_WORKER: &str = "compile-worker";
+/// The compile worker's probe port (`compile_worker_bind`), answering [`HEALTHZ_PATH`] and
+/// [`READYZ_PATH`].
+pub const WORKER_PORT: u16 = 8788;
+/// The `compile_worker_bind` (`SCRIBYRA_SERVICE_COMPILE_WORKER_BIND`) a worker pod sets.
+pub const WORKER_BIND: &str = "0.0.0.0:8788";
+pub const HEALTHZ_PATH: &str = "/healthz";
+pub const READYZ_PATH: &str = "/readyz";
 
 /// The user and group the images run as.
 pub const RUN_AS: i64 = 10001;

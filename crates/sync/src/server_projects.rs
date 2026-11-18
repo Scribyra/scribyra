@@ -58,13 +58,13 @@ const MAX_NAME_CHARS: usize = 200;
 const DEPLOYMENT_SCOPE: &str = "sr:deployment";
 const SEAL_OVERHEAD: usize = 24 + 16;
 
-fn error(status: StatusCode, message: &'static str) -> Response {
+pub(crate) fn error(status: StatusCode, message: &'static str) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")], Json(json!({"error": message}))).into_response()
 }
-fn internal<E>(_: E) -> Response {
+pub(crate) fn internal<E>(_: E) -> Response {
     error(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
 }
-fn not_found() -> Response {
+pub(crate) fn not_found() -> Response {
     error(StatusCode::NOT_FOUND, "unknown project")
 }
 fn random_bytes<const N: usize>() -> [u8; N] {
@@ -72,7 +72,7 @@ fn random_bytes<const N: usize>() -> [u8; N] {
     getrandom::fill(&mut bytes).expect("operating system randomness");
     bytes
 }
-fn random_hex() -> String {
+pub(crate) fn random_hex() -> String {
     orgsync::hex(&random_bytes::<32>())
 }
 /// The ID of the project an account creates with the request ID `key`:
@@ -80,10 +80,10 @@ fn random_hex() -> String {
 pub fn project_id(account: &str, key: &str) -> String {
     blob::hash(format!("scribyra-sr-project/1\n{account}\n{key}").as_bytes())
 }
-fn is_id(text: &str) -> bool {
+pub(crate) fn is_id(text: &str) -> bool {
     blob::valid_hash(text)
 }
-fn ok_json(status: StatusCode, body: Value) -> Response {
+pub(crate) fn ok_json(status: StatusCode, body: Value) -> Response {
     (status, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
 
@@ -165,8 +165,15 @@ pub struct Materialised {
     pub name: String,
     /// The main file's path (`meta.mainFile`), if it names an existing file.
     pub main_file: Option<String>,
+    /// `meta.engine` as the document has it (the app writes `pdflatex`, `xelatex` or `lualatex`).
+    pub engine: Option<String>,
     pub files: Vec<File>,
 }
+
+/// Replaying or materialising at a sequence number below the floor (its entries were dropped).
+pub const COMPACTED: &str = "that version of the project was compacted";
+/// Replaying or materialising at a sequence number beyond the head.
+pub const BEYOND_HEAD: &str = "that version of the project does not exist yet";
 
 /// The storage side of server-readable projects: sealing, appends, snapshots, materialisation
 /// and maintenance. Usable without HTTP (tests, and slices 10 and 11).
@@ -234,6 +241,11 @@ impl Projects {
     fn quotas(&self) -> crate::config::Quotas {
         self.store.config.deployment.as_ref().map(|d| d.quotas.clone()).unwrap_or_default()
     }
+    /// A live project's data key (`None` when the project is gone or erased).
+    pub(crate) async fn project_key(&self, project: &str) -> Result<Option<Vec<u8>>, Error> {
+        let wrapped: Option<Option<Vec<u8>>> = sqlx::query_scalar("SELECT data_key_wrapped FROM sr_projects WHERE project = $1 AND deleted IS NULL").bind(project).fetch_optional(self.pool()).await?;
+        Ok(wrapped.and_then(|w| self.data_key(project, w.as_deref())))
+    }
     /// The project's data key, unwrapped (`None` when erased or tampered with).
     fn data_key(&self, project: &str, wrapped: Option<&[u8]>) -> Option<Vec<u8>> {
         open(&self.master, &key_ad(&self.deployment, project), wrapped?)
@@ -241,7 +253,7 @@ impl Projects {
     fn wrap(&self, project: &str, key: &[u8]) -> Vec<u8> {
         seal(&self.master, &key_ad(&self.deployment, project), key)
     }
-    async fn read_body(&self, inline: Option<Vec<u8>>, blob: Option<String>, size: i64) -> Result<Vec<u8>, Error> {
+    pub(crate) async fn read_body(&self, inline: Option<Vec<u8>>, blob: Option<String>, size: i64) -> Result<Vec<u8>, Error> {
         if let Some(bytes) = inline {
             return Ok(bytes);
         }
@@ -257,7 +269,7 @@ impl Projects {
         self.store.blobs.put(&BlobKey::new(key.clone())?, Bytes::from(sealed)).await?;
         Ok((None, Some(key)))
     }
-    async fn forget_blob(&self, key: Option<String>) {
+    pub(crate) async fn forget_blob(&self, key: Option<String>) {
         if let Some(key) = key
             && let Ok(key) = BlobKey::new(key)
         {
@@ -381,8 +393,19 @@ impl Projects {
     /// Replays the latest snapshot and the entries after it into a document that keeps every
     /// tombstone (no garbage collection); returns it with the head it covers.
     pub async fn replay(&self, project: &str) -> Result<(yrs::Doc, i64), Error> {
-        let row = sqlx::query("SELECT head_seq, data_key_wrapped FROM sr_projects WHERE project = $1 AND deleted IS NULL").bind(project).fetch_optional(self.pool()).await?.ok_or("unknown project")?;
-        let (head, wrapped): (i64, Option<Vec<u8>>) = (row.get(0), row.get(1));
+        self.replay_at(project, None).await
+    }
+    /// [`Projects::replay`] up to `upto` (the head when `None`): [`COMPACTED`] below the floor,
+    /// [`BEYOND_HEAD`] past the head.
+    pub async fn replay_at(&self, project: &str, upto: Option<i64>) -> Result<(yrs::Doc, i64), Error> {
+        let row = sqlx::query("SELECT head_seq, data_key_wrapped, floor_seq FROM sr_projects WHERE project = $1 AND deleted IS NULL").bind(project).fetch_optional(self.pool()).await?.ok_or("unknown project")?;
+        let (head, wrapped, floor): (i64, Option<Vec<u8>>, i64) = (row.get(0), row.get(1), row.get(2));
+        let head = match upto {
+            None => head,
+            Some(seq) if seq > head => return Err(BEYOND_HEAD.into()),
+            Some(seq) if seq < floor => return Err(COMPACTED.into()),
+            Some(seq) => seq,
+        };
         let key = self.data_key(project, wrapped.as_deref()).ok_or("the project key does not open")?;
         let doc = yrs::Doc::with_options(Options { skip_gc: true, ..Options::default() });
         let snapshot = sqlx::query("SELECT seq, size, inline_sealed, blob FROM sr_snapshots WHERE project = $1 AND seq <= $2 ORDER BY seq DESC LIMIT 1").bind(project).bind(head).fetch_optional(self.pool()).await?;
@@ -508,14 +531,19 @@ impl Projects {
 
     /// The project's files, texts, asset objects and main file at its head.
     pub async fn materialise(&self, project: &str) -> Result<Materialised, Error> {
-        let (doc, seq) = self.replay(project).await?;
+        self.materialise_at(project, None, true).await
+    }
+    /// [`Projects::materialise`] at `upto` (see [`Projects::replay_at`]); without `bytes`, assets
+    /// carry their hash and size only (no blob is read).
+    pub async fn materialise_at(&self, project: &str, upto: Option<i64>, bytes: bool) -> Result<Materialised, Error> {
+        let (doc, seq) = self.replay_at(project, upto).await?;
         let server_name: String = sqlx::query_scalar("SELECT name FROM sr_projects WHERE project = $1").bind(project).fetch_one(self.pool()).await?;
         let files_map = doc.get_or_insert_map("files");
         let trash_map = doc.get_or_insert_map("trash");
         let meta = doc.get_or_insert_map("meta");
         let assets = doc.get_or_insert_map("assets");
         let mut nodes = Vec::new();
-        let (reserved, main, name, refs) = {
+        let (reserved, main, name, engine, refs) = {
             let txn = doc.transact();
             for (_, value) in files_map.iter(&txn) {
                 let Out::Any(Any::Map(record)) = value else { continue };
@@ -533,7 +561,7 @@ impl Projects {
                 _ => None,
             };
             let refs: Vec<(String, Out)> = assets.iter(&txn).map(|(k, v)| (k.to_owned(), v)).collect();
-            (reserved, string(meta.get(&txn, "mainFile")), string(meta.get(&txn, "name")), refs)
+            (reserved, string(meta.get(&txn, "mainFile")), string(meta.get(&txn, "name")), string(meta.get(&txn, "engine")), refs)
         };
         let nodes = scribyra_core::tree::execute(scribyra_core::tree::Request { nodes, reserved, command: scribyra_core::tree::Command::Inspect })?;
         let mut files = Vec::new();
@@ -552,7 +580,7 @@ impl Projects {
                             Some(Any::BigInt(n)) if *n >= 0 => *n as u64,
                             _ => continue,
                         };
-                        let bytes = self.object(project, &hash).await?;
+                        let bytes = if bytes { self.object(project, &hash).await? } else { None };
                         Content::Asset { hash, size, bytes }
                     }
                     // Projects from before content-addressed assets keep the bytes inline.
@@ -566,7 +594,7 @@ impl Projects {
             files.push(File { id: node.id.clone(), path: node.path.clone(), conflict: node.conflict.clone(), content });
         }
         let main_file = main.and_then(|id| nodes.iter().find(|n| n.id == id && !n.folder).map(|n| n.path.clone()));
-        Ok(Materialised { seq, name: name.filter(|n| !n.trim().is_empty()).unwrap_or(server_name), main_file, files })
+        Ok(Materialised { seq, name: name.filter(|n| !n.trim().is_empty()).unwrap_or(server_name), main_file, engine, files })
     }
 
     /// A stored object's plaintext (checked against its hash), or `None` if it is not stored.
@@ -666,6 +694,7 @@ impl Projects {
             for table in ["sr_entries", "sr_snapshots", "sr_objects"] {
                 sqlx::query(&format!("INSERT INTO sr_garbage (blob) SELECT blob FROM {table} WHERE project = ANY($1) AND blob IS NOT NULL ON CONFLICT DO NOTHING")).bind(&erased).execute(&mut *tx).await?;
             }
+            sqlx::query("INSERT INTO sr_garbage (blob) SELECT b FROM compiles, unnest(ARRAY[pdf_blob, log_blob]) b WHERE project = ANY($1) AND b IS NOT NULL ON CONFLICT DO NOTHING").bind(&erased).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM sr_projects WHERE project = ANY($1)").bind(&erased).execute(&mut *tx).await?;
             tx.commit().await?;
         }
@@ -702,7 +731,7 @@ impl Projects {
     }
 }
 
-async fn notify(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str) -> Result<(), sqlx::Error> {
+pub(crate) async fn notify(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str) -> Result<(), sqlx::Error> {
     sqlx::query("SELECT pg_notify($1, $2)").bind(CHANNEL).bind(project).execute(&mut **tx).await?;
     Ok(())
 }
@@ -853,6 +882,8 @@ impl Polls {
 /// The HTTP side: routes, the heads long poll and the background tasks.
 pub struct Sr {
     projects: Option<Arc<Projects>>,
+    /// Server compile, when the deployment's `compile` is `server` or `both`.
+    pub(crate) compiles: Option<Arc<crate::compiles::Compiles>>,
     sso: Arc<Sso>,
     polls: Mutex<Polls>,
     shutdown: watch::Receiver<bool>,
@@ -865,19 +896,20 @@ impl Drop for PollGuard<'_> {
         self.0.polls.lock().unwrap().remove(self.1);
     }
 }
-type Shared = Arc<Sr>;
+pub(crate) type Shared = Arc<Sr>;
 
 /// The caller of a server-readable route.
-struct Caller {
-    account: String,
-    role: Role,
+pub(crate) struct Caller {
+    pub(crate) account: String,
+    pub(crate) role: Role,
 }
 
 impl Sr {
     pub fn new(store: Arc<Store>, sso: Arc<Sso>, shutdown: watch::Receiver<bool>) -> Result<Shared, Error> {
         let uploads = Arc::new(Semaphore::new(store.config.uploads));
         let projects = Projects::new(store.clone())?;
-        let sr = Arc::new(Self { projects, sso, polls: Mutex::default(), shutdown, uploads });
+        let compiles = projects.as_ref().and_then(|p| crate::compiles::Compiles::new(p.clone()));
+        let sr = Arc::new(Self { projects, compiles, sso, polls: Mutex::default(), shutdown, uploads });
         if sr.projects.is_some()
             && let Ok(runtime) = tokio::runtime::Handle::try_current()
         {
@@ -886,10 +918,10 @@ impl Sr {
         }
         Ok(sr)
     }
-    fn projects(&self) -> Result<&Arc<Projects>, Response> {
+    pub(crate) fn projects(&self) -> Result<&Arc<Projects>, Response> {
         self.projects.as_ref().ok_or_else(|| error(StatusCode::NOT_FOUND, "this deployment does not store server-readable projects"))
     }
-    async fn caller(&self, headers: &HeaderMap) -> Result<(&Arc<Projects>, Caller), Response> {
+    pub(crate) async fn caller(&self, headers: &HeaderMap) -> Result<(&Arc<Projects>, Caller), Response> {
         let projects = self.projects()?;
         let Some(token) = crate::sso::bearer(headers) else { return Err(error(StatusCode::UNAUTHORIZED, "sign in required")) };
         let login = self.sso.login(token).await.map_err(internal)?.ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sign in required"))?;
@@ -898,7 +930,7 @@ impl Sr {
         Ok((projects, Caller { account, role: login.role }))
     }
     /// The caller's access to a live project; non-members get `404`, as if it did not exist.
-    async fn access(&self, projects: &Projects, caller: &Caller, project: &str) -> Result<Access, Response> {
+    pub(crate) async fn access(&self, projects: &Projects, caller: &Caller, project: &str) -> Result<Access, Response> {
         if !is_id(project) {
             return Err(not_found());
         }
@@ -925,7 +957,7 @@ impl Sr {
         let pool = &projects.store.pool;
         let row = sqlx::query(
             "SELECT p.name, p.head_seq, p.floor_seq, p.snapshot_seq, p.bytes, (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint,
-                    o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider
+                    o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider, p.compile
              FROM sr_projects p JOIN accounts o ON o.account = p.owner WHERE p.project = $1 AND p.deleted IS NULL",
         )
         .bind(project)
@@ -958,22 +990,32 @@ impl Sr {
             "id": project, "name": row.get::<String, _>(0), "role": access.as_str(), "owner": owner,
             "head": row.get::<i64, _>(1), "floor": row.get::<i64, _>(2), "snapshot": row.get::<i64, _>(3), "size": row.get::<i64, _>(4),
             "created": row.get::<i64, _>(5), "updated": row.get::<i64, _>(6), "members": members, "invitations": invitations,
+            "compile": crate::compiles::effective_mode(&projects.store.config, &row.get::<String, _>(11)),
         }))
     }
     /// The caller's projects and their heads, roles and names; `version` digests them.
+    /// With server compile, each project also has `compile`: its mode and its latest job's ID
+    /// and state, so a queued, started or finished compile wakes every member's poll.
     async fn heads_now(&self, projects: &Projects, caller: &Caller) -> Result<(String, Value), Response> {
         let rows = sqlx::query(
-            "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' ELSE s.role END, p.name
+            "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' ELSE s.role END, p.name, p.compile, c.job, c.state
              FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
+             LEFT JOIN LATERAL (SELECT job, state FROM compiles WHERE project = p.project AND state <> 'replaced' AND $2 ORDER BY queued DESC LIMIT 1) c ON true
              WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL) ORDER BY p.project",
         )
         .bind(&caller.account)
+        .bind(self.compiles.is_some())
         .fetch_all(&projects.store.pool)
         .await
         .map_err(internal)?;
         let mut map = serde_json::Map::new();
         for r in rows {
-            map.insert(r.get(0), json!({"head": r.get::<i64, _>(1), "role": r.get::<String, _>(2), "name": r.get::<String, _>(3)}));
+            let mut entry = json!({"head": r.get::<i64, _>(1), "role": r.get::<String, _>(2), "name": r.get::<String, _>(3)});
+            if self.compiles.is_some() {
+                let job: Option<String> = r.get(5);
+                entry["compile"] = json!({"mode": crate::compiles::effective_mode(&projects.store.config, &r.get::<String, _>(4)), "job": job, "state": r.get::<Option<String>, _>(6)});
+            }
+            map.insert(r.get(0), entry);
         }
         let value = Value::Object(map);
         Ok((blob::hash(value.to_string().as_bytes())[..32].to_owned(), value))
@@ -1010,9 +1052,16 @@ async fn listen(sr: std::sync::Weak<Sr>, pool: PgPool) {
 }
 async fn maintain(sr: std::sync::Weak<Sr>) {
     loop {
-        let Some(projects) = sr.upgrade().and_then(|s| s.projects.clone()) else { return };
+        let Some((projects, compiles)) = sr.upgrade().and_then(|s| Some((s.projects.clone()?, s.compiles.clone()))) else { return };
         if projects.maintain().await.is_err() {
             println!("{}", json!({"event": "sr_maintenance_failed"}));
+        }
+        // Compile jobs whose worker stopped heartbeating are requeued (once) or failed here too,
+        // so they do not wait for a worker to start.
+        if let Some(compiles) = compiles
+            && compiles.reap().await.is_err()
+        {
+            println!("{}", json!({"event": "compile_reap_failed"}));
         }
         let pause = Duration::from_secs(projects.store.config.sr_maintenance_seconds);
         let _ = tokio::time::timeout(pause, projects.kick.notified()).await;
@@ -1732,6 +1781,7 @@ pub fn routes(sr: Shared) -> Router {
         .route("/v1/sr/projects/{project}/members/{account}", put(change_member).delete(remove_member))
         .route("/v1/sr/projects/{project}/owner", post(transfer))
         .route("/v1/sr/heads", get(heads))
+        .merge(crate::compiles::routes())
         .with_state(sr)
 }
 

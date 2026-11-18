@@ -175,7 +175,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
-| `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes`, `concurrency`, `queue`, `per_member_per_hour` |
+| `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour` ([Server compile](#server-compile)) |
 | `texlive` | none | A TeX Live tree, for server compile |
 
 The organisation's ID is random, made at first start and recorded with the mode (a database that
@@ -611,10 +611,79 @@ For local trials and the tests there is a minimal provider,
 `cargo run -p scribyra-sync --example test-idp -- --config idp.json`; see the comment
 at the top of `crates/sync/examples/test-idp.rs`. It is not for production use.
 
+## Server compile
+
+With `deployment.encryption: "server"` and `deployment.compile` `"server"` or `"both"` (which
+need `texlive`), members compile server-readable projects on the server (design section 6).
+The routes below need the same sign-in as the other `/v1/sr/` routes and answer `404` to anyone
+the project is not shared with; with `compile: "browser"` the compile routes answer `404 {"error":
+"this deployment compiles in the browser"}`.
+
+**Where a project compiles.** `compile: "server"`: every project. `compile: "both"`: each
+project's `compile` setting (`browser` by default; owners and editors change it, and members see
+it in the project details and heads). `compile: "browser"`: none. Project details and heads show
+the effective mode as `compile` (`"browser"` or `"server"`).
+
+| Route | Body → answer |
+| --- | --- |
+| `POST /v1/sr/projects/{p}/compile` | `{seq?}` (owner, editors; reviewers and viewers `403`). Materialises the project at `seq` (default: the head) with its main file (`meta.mainFile`, else a top-level `main.tex`; none: `400`), engine (`meta.engine`: `pdflatex` (default), `xelatex`, `lualatex`) and bibliography tool (Biber when a file loads BibLaTeX without `backend=bibtex`, else BibTeX when the `.aux` asks). → `202 {job, state: "queued", replaced}` (`replaced`: it took the place of this project's queued job); `200 {job, state, cached: true}` when a stored PDF has the same files, engine and TeX Live; `200 {job, state}` when the same files are already queued or running. `409` with `compile: "both"` and the project set to `browser`; `400` for `seq` past the head, `410` below the floor; `429` (`Retry-After: 60`) after `per_member_per_hour` requests in the last hour; `503` (`Retry-After: 60`) when `queue` jobs wait already |
+| `GET /v1/sr/projects/{p}/compile` | Any member. → `200 {mode, head, texlive, job, pdf}`: `job` is the latest request `{id, state (queued, running, done, failed), seq, engine, requestedBy: {account, name}, queued, started, finished, outcome, error, cpuMs, log}` or `null`; `pdf` the latest successful PDF `{job, seq, engine, requestedBy, compiled, bytes, fromHead}` or `null` (`fromHead`: compiled at the current head) |
+| `GET /v1/sr/projects/{p}/compile/pdf` | Any member. → `200 application/pdf` with `Scribyra-Compile-Job` and `Scribyra-Compile-Seq`; `404 {"error":"no PDF yet"}` |
+| `GET /v1/sr/projects/{p}/compile/log?job=` | Any member. → `200 text/plain`: the log of `job`, or of the latest finished job that kept one (a job that failed before TeX ran gives its error); `404` |
+| `PUT /v1/sr/projects/{p}/settings` | `{compile: "browser"\|"server"}` (owner, editors; else `403`) → `200 {compile}`; `409` unless the deployment's `compile` is `"both"` |
+
+Outcomes (`job.outcome`): `success`; `tex_error`; `limit_cpu`, `limit_wall`, `limit_memory`,
+`limit_output`, `limit_scratch`, `limit_processes`; `rejected` (paths, sizes, a missing main file
+or asset, or a version compacted meanwhile); `sandbox_failure`; `lost` (the worker stopped
+heartbeating twice); `quota` (the PDF did not fit the project quota). `error` is a fixed text of
+the service's own; the details are in the log.
+
+**Queue.** Jobs are `compiles` rows (migration `0010`) in PostgreSQL, first in first out, taken
+by workers with `SELECT … FOR UPDATE SKIP LOCKED`. At most `compile_limits.queue` jobs wait; a
+project has at most one queued job (a newer request replaces it, even when the queue is full)
+and one running (its next job waits for it). A worker runs `compile_limits.concurrency` jobs at
+once, each in the sandbox below with the deployment's `compile_limits`, and reports each one
+alive every `compile_heartbeat_seconds`. A job without a report for
+`compile_heartbeat_timeout_seconds` is taken back by any worker or `serve` replica: requeued
+once, then failed (`lost`). Rows stay as the record of who compiled what and for how much CPU
+time; only blobs are removed.
+
+**Results.** The PDF and the log are sealed under the project's data key (associated data
+`scribyra-sr/1\n<project>\n<pdf|log>\n<job>`), stored as blobs under `sr/<project>/c/`, and
+count against the project, owner and deployment quotas. Only the newest successful PDF and log
+and the newest failed log are kept; older ones are queued for removal. Every queued, started and
+finished job `NOTIFY`s the project, so members' heads polls wake (their entry has
+`compile: {mode, job, state}`). The cache key is the digest of the materialised files (paths and
+content hashes), the main file and the bibliography tool, plus the engine and the TeX Live store
+path's name; only the newest successful PDF can be reused.
+
+**Workers.** `scribyra-sync compile-worker` reads the same configuration, connects to the same
+database and blob store (S3: a filesystem blob directory belongs to the `serve` process), takes
+jobs until SIGTERM, then lets running jobs finish for up to `shutdown_grace_seconds` and puts the
+rest back in the queue (without using up their retry) before exiting 0. It answers `/healthz`
+(live) and `/readyz` (database, schema, blob store; `503` once stopping) on
+`compile_worker_bind`. It needs what the [sandbox](#server-compile-sandbox) needs: `bwrap`
+(`SCRIBYRA_BWRAP` or `PATH`), the TeX Live tree of `deployment.texlive` and its closure
+(`SCRIBYRA_TEXLIVE_CLOSURE` when it belongs to that tree, else `nix-store -qR` at start), unprivileged
+user namespaces, and a delegated cgroup v2 subtree (`SCRIBYRA_COMPILE_CGROUP`, else a systemd
+user scope; without either it refuses to start, `{"event":"compile_runner_unavailable"}`). For
+development, `compile_worker_in_process: true` runs one worker inside `serve` (filesystem blobs
+work then); SIGTERM gives its jobs back the same way.
+
+**Metrics.** With `metrics_bind` set, `serve` and `compile-worker` answer `GET /metrics`
+(Prometheus text) on that separate listener (pods: `0.0.0.0:9090`); never expose it publicly.
+Series: `scribyra_compile_queue_length` (queued plus running jobs, read from the database at each
+scrape; scales the workers), `scribyra_compile_jobs{state}`, `scribyra_http_requests_total{route,
+status}` (route templates such as `/v1/sr/projects/{project}/compile`), `scribyra_compile_requests_total{result}`
+(`queued`, `replaced`, `existing`, `cached`, `rate_limited`, `queue_full`, `refused`),
+`scribyra_compile_jobs_total{outcome}` (this process's finished jobs, plus `requeued` and
+`lost`), `scribyra_compile_seconds_total`, `scribyra_compile_cpu_seconds_total` and
+`scribyra_compile_running`. No label holds a project, account, name, path or content.
+
 ## Server compile sandbox
 
 `crates/compile` (`scribyra-compile`) runs one TeX Live compile per sandbox; the compile
-worker (design section 6, slice 11) will call it. Each job is a `bwrap` process with new
+worker ([Server compile](#server-compile)) calls it. Each job is a `bwrap` process with new
 user, mount, PID, network (empty but for loopback), IPC, UTS and cgroup namespaces; a
 read-only root holding exactly the TeX Live store closure, a minimal `/dev`, no `/proc`, and
 a tmpfs `/work` of `scratch_mib` as the only writable path. The project's files enter `/work`
@@ -711,6 +780,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `sr_invitation_days` | 30 | 1–365: pending invitations expire |
 | `sr_maintenance_seconds` | 30 | 1–3600: background erasure, floor and blob clean-up pass |
 | `entry_inline_bytes` | 65536 | Entries (sealed) up to this size stay in PostgreSQL |
+| `metrics_bind` | none (off) | Listener for Prometheus `/metrics` ([Server compile](#server-compile)); pods use `0.0.0.0:9090` |
 | `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds`, `sso_starts_per_minute` | 60, 60, 60 | [Single sign-on](#single-sign-on-oidc) |
 | `org_bytes`, `sessions` | 1 GiB, 10000 | End-to-end organisation quota and device sessions |
 | `principals`, `object_bytes`, `namespace_bytes`, `total_bytes`, `namespace_objects`, `total_objects` | see [Access and limits](#access-and-limits) | Capability object store |
@@ -723,6 +793,8 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | --- | --- | --- |
 | `scribyra-sync` or `scribyra-sync serve` | Serve (applies migrations first unless `migrate_on_start: false`) | 0 after SIGTERM/SIGINT, 1 on a startup or runtime failure |
 | `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary (a downgrade) | 0, or 1 |
+| `scribyra-sync compile-worker` | Take [server compile](#server-compile) jobs from PostgreSQL and run them in the sandbox; probes on `compile_worker_bind`. Needs server compile, S3 blobs (unless `serve` is stopped) and the sandbox's requirements | 0 after SIGTERM/SIGINT (running jobs finish or go back to the queue within `shutdown_grace_seconds`), 1 on a startup failure |
+| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary | 0, or 1 |
 | `scribyra-sync verify` | Check every capability object's blob and the usage rows | 0 when consistent |
 | `scribyra-sync migrate-sqlite <dir>` | One-time import of a milestone-S data directory | 0 |
 

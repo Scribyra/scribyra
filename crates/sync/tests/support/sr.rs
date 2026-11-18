@@ -60,6 +60,19 @@ impl Sr {
     pub fn api(&self, token: &str) -> Api {
         Api { base: self.url(), token: token.to_owned() }
     }
+    /// A `scribyra-sync compile-worker` for this deployment (S3 blobs: a filesystem blob directory
+    /// belongs to one process), its probes on a free port; `extra` merges into its configuration.
+    /// Its `url` is the probe listener.
+    pub fn worker(&self, extra: Value) -> Service {
+        let mut config = self.env.service.config.clone();
+        config["compile_worker_bind"] = json!(format!("127.0.0.1:{}", free_port()));
+        for (k, v) in extra.as_object().unwrap() {
+            config[k] = v.clone();
+        }
+        let mut worker = Service::configure(config);
+        worker.start_with(&["compile-worker"]).unwrap();
+        worker
+    }
     /// A second instance of the same deployment (same database, configuration and blobs) on
     /// another port.
     pub fn replica(&self) -> Service {
@@ -161,6 +174,26 @@ impl Api {
     pub fn invite(&self, project: &str, email: &str, role: &str) -> Reply {
         self.call("POST", &format!("/v1/sr/projects/{project}/invitations"), Some(json!({"email": email, "role": role})))
     }
+    /// `POST …/compile` with an optional `seq`.
+    pub fn compile(&self, project: &str, seq: Option<i64>) -> Reply {
+        self.call("POST", &format!("/v1/sr/projects/{project}/compile"), Some(seq.map_or(json!({}), |s| json!({"seq": s}))))
+    }
+    pub fn compile_status(&self, project: &str) -> Reply {
+        self.call("GET", &format!("/v1/sr/projects/{project}/compile"), None)
+    }
+    /// Polls `GET …/compile` until job `job` is done or failed; returns the status.
+    pub fn compiled(&self, project: &str, job: &str) -> Value {
+        let mut last = Value::Null;
+        let deadline = std::time::Instant::now() + Duration::from_secs(90);
+        while std::time::Instant::now() < deadline {
+            last = self.compile_status(project).json();
+            if last["job"]["id"] == job && matches!(last["job"]["state"].as_str(), Some("done" | "failed")) {
+                return last;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+        }
+        panic!("job {job} did not finish: {last}");
+    }
     pub fn heads(&self, since: Option<&str>, wait: u64) -> Reply {
         let since = since.map(|s| format!("&since={s}")).unwrap_or_default();
         self.call("GET", &format!("/v1/sr/heads?wait={wait}{since}"), None)
@@ -211,6 +244,13 @@ impl Project {
         r.insert("hash".into(), Any::from(super::sha256(bytes)));
         r.insert("size".into(), Any::Number(bytes.len() as f64));
         assets.insert(&mut txn, id, Any::Map(Arc::new(r)));
+        txn.encode_update_v1()
+    }
+    /// Sets a `meta` field (for example `engine`).
+    pub fn set_meta(&self, key: &str, value: &str) -> Vec<u8> {
+        let meta = self.doc.get_or_insert_map("meta");
+        let mut txn = self.doc.transact_mut();
+        meta.insert(&mut txn, key, Any::from(value));
         txn.encode_update_v1()
     }
     pub fn set_main(&self, id: &str) -> Vec<u8> {

@@ -112,6 +112,17 @@ pub struct Config {
     pub sr_invitation_days: u32,
     /// Server-readable mode: how often background maintenance (erasure, floors, garbage) runs.
     pub sr_maintenance_seconds: u64,
+    /// Prometheus metrics (`/metrics`) on their own listener; off when unset. Pods use
+    /// [`crate::deploy::METRICS_BIND`].
+    pub metrics_bind: Option<SocketAddr>,
+    /// `scribyra-sync compile-worker`: where its `/healthz` and `/readyz` answer.
+    pub compile_worker_bind: SocketAddr,
+    /// Development: `serve` also runs a compile worker in its own process (server compile only).
+    pub compile_worker_in_process: bool,
+    /// How often a worker reports each running job alive...
+    pub compile_heartbeat_seconds: u64,
+    /// ...and how long without a report before the job is taken back (requeued once, then failed).
+    pub compile_heartbeat_timeout_seconds: u64,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -175,6 +186,11 @@ impl Default for Config {
             sr_retention_seconds: 7 * 24 * 3600,
             sr_invitation_days: 30,
             sr_maintenance_seconds: 30,
+            metrics_bind: None,
+            compile_worker_bind: "127.0.0.1:8788".parse().unwrap(),
+            compile_worker_in_process: false,
+            compile_heartbeat_seconds: 5,
+            compile_heartbeat_timeout_seconds: 30,
         }
     }
 }
@@ -315,6 +331,9 @@ impl Config {
         }
         if self.sr_snapshot_entries == 0 || self.sr_snapshot_bytes == 0 || self.sr_retention_seconds > 366 * 24 * 3600 || !(1..=365).contains(&self.sr_invitation_days) || !(1..=3600).contains(&self.sr_maintenance_seconds) {
             return Err("invalid server-readable limits (sr_snapshot_entries, sr_snapshot_bytes, sr_retention_seconds, sr_invitation_days, sr_maintenance_seconds)");
+        }
+        if !(1..=300).contains(&self.compile_heartbeat_seconds) || self.compile_heartbeat_timeout_seconds < 2 * self.compile_heartbeat_seconds || self.compile_heartbeat_timeout_seconds > 3600 {
+            return Err("compile_heartbeat_seconds must be 1-300 and compile_heartbeat_timeout_seconds at least twice it, at most 3600");
         }
         if !(1..=3600).contains(&self.sso_recheck_tick_seconds) || self.sso_jwks_refetch_seconds > 3600 || !(1..=100_000).contains(&self.sso_starts_per_minute) {
             return Err("invalid single sign-on limits");
