@@ -611,10 +611,13 @@ pub struct CompileLimits {
     /// Queued and running jobs at once: requested by one member, and on one owner's projects.
     pub active_per_member: u32,
     pub active_per_owner: u32,
+    /// Days a finished job's row (requester, times, CPU time, digest) is kept, unless it holds
+    /// the newest PDF or log or is its project's latest job.
+    pub retention_days: u32,
 }
 impl Default for CompileLimits {
     fn default() -> Self {
-        Self { cpu_seconds: 60, wall_seconds: 120, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120, per_project_per_minute: 30, active_per_member: 2, active_per_owner: 2 }
+        Self { cpu_seconds: 60, wall_seconds: 120, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120, per_project_per_minute: 30, active_per_member: 2, active_per_owner: 2, retention_days: 90 }
     }
 }
 fn short_text(text: &str, max: usize) -> bool {
@@ -700,7 +703,7 @@ impl Deployment {
         }
         let c = &self.compile_limits;
         let bounded = |v: u32, max: u32| (1..=max).contains(&v);
-        if !(bounded(c.cpu_seconds, 3600) && bounded(c.wall_seconds, 7200) && bounded(c.memory_mib, 65536) && bounded(c.scratch_mib, 65536) && bounded(c.output_mib, 4096) && bounded(c.passes, 16) && bounded(c.concurrency, 256) && bounded(c.queue, 100_000) && bounded(c.per_member_per_hour, 100_000) && bounded(c.per_project_per_minute, 100_000) && bounded(c.active_per_member, 1000) && bounded(c.active_per_owner, 1000)) {
+        if !(bounded(c.cpu_seconds, 3600) && bounded(c.wall_seconds, 7200) && bounded(c.memory_mib, 65536) && bounded(c.scratch_mib, 65536) && bounded(c.output_mib, 4096) && bounded(c.passes, 16) && bounded(c.concurrency, 256) && bounded(c.queue, 100_000) && bounded(c.per_member_per_hour, 100_000) && bounded(c.per_project_per_minute, 100_000) && bounded(c.active_per_member, 1000) && bounded(c.active_per_owner, 1000) && bounded(c.retention_days, 3650)) {
             return Err("deployment.compile_limits are out of range");
         }
         if self.compile != Compile::Browser {

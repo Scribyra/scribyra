@@ -657,3 +657,35 @@ fn guests_cannot_change_where_a_project_compiles() {
     assert_eq!(ana.details(&p).json()["compile"], "browser");
     assert_eq!(ana.call("PUT", &settings, Some(json!({"compile": "server"}))).status, 200);
 }
+
+#[test]
+fn finished_rows_are_removed_after_the_retention_period_except_the_ones_still_in_use() {
+    // Review L3: `compiles` rows (requester, times, digest) were kept until the project went.
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({"retention_days": 30}));
+    let ana = sr.api(&sr.login("alice"));
+    let ((p, _), (q, _)) = (paper(&ana, "Old jobs", &hello("p")), paper(&ana, "One old job", &hello("q")));
+    let me = account(&sr, "alice");
+    let row = |project: &str, state: &str, days: i64, pdf: bool| {
+        let job = random_hex(32);
+        postgres().psql(
+            &sr.db(),
+            &format!(
+                "INSERT INTO compiles (job, project, seq, content_hash, engine, texlive, requested_by, state, queued, finished, outcome, pdf_blob, pdf_size)
+                 VALUES ('{job}', '{project}', 1, '{}', 'pdflatex', 'tl', '{me}', '{state}', now() - interval '{days} days', now() - interval '{days} days', 'x', {}, {})",
+                random_hex(32),
+                if pdf { format!("'sr/{project}/c/{job}-pdf'") } else { "NULL".into() },
+                if pdf { "1" } else { "NULL" },
+            ),
+        );
+        job
+    };
+    let (gone, replaced, kept_pdf, recent) = (row(&p, "failed", 100, false), row(&p, "replaced", 99, false), row(&p, "done", 98, true), row(&p, "failed", 10, false));
+    let latest = row(&q, "failed", 200, false);
+    // The first maintenance after a start sweeps.
+    sr.env.service.stop();
+    sr.env.service.start().unwrap();
+    eventually("old rows removed", || postgres().psql(&sr.db(), &format!("SELECT count(*) FROM compiles WHERE job IN ('{gone}', '{replaced}')")) == "0");
+    for job in [kept_pdf, recent, latest] {
+        assert_eq!(postgres().psql(&sr.db(), &format!("SELECT count(*) FROM compiles WHERE job = '{job}'")), "1");
+    }
+}

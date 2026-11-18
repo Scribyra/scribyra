@@ -46,6 +46,8 @@ pub const CHANNEL: &str = "scribyra_compile";
 const QUEUE_LOCK: i64 = 0x5343_5259_434f_4d50;
 /// With the account's `hashtext`, serialises one member's rate checks (`pg_advisory_xact_lock`).
 const RATE_LOCK: i32 = 0x5352_4154;
+/// How often finished rows past `retention_days` are looked for (by each process that reaps).
+const SWEEP: Duration = Duration::from_secs(600);
 /// How often an idle worker looks for jobs when no notice arrives.
 const POLL: Duration = Duration::from_secs(2);
 const NO_MAIN: &str = "choose a main .tex file first";
@@ -217,6 +219,8 @@ pub struct Compiles {
     /// The configured TeX Live store path's name (part of the cache key).
     pub texlive: String,
     heartbeat_timeout: u64,
+    /// When this process last swept old rows.
+    swept: std::sync::Mutex<Option<Instant>>,
 }
 impl Compiles {
     /// `None` unless the deployment's `compile` is `server` or `both`.
@@ -228,7 +232,7 @@ impl Compiles {
         }
         let texlive = d.texlive.as_ref()?.file_name()?.to_string_lossy().into_owned();
         let (limits, heartbeat_timeout) = (d.compile_limits.clone(), config.compile_heartbeat_timeout_seconds);
-        Some(Arc::new(Self { projects, limits, texlive, heartbeat_timeout }))
+        Some(Arc::new(Self { projects, limits, texlive, heartbeat_timeout, swept: Default::default() }))
     }
     fn pool(&self) -> &PgPool {
         &self.projects.store.pool
@@ -374,9 +378,33 @@ impl Compiles {
         Ok(n == 1)
     }
     /// Takes back running jobs whose worker stopped heartbeating: requeued once, then failed.
+    /// Every [`SWEEP`] also removes request records older than an hour and finished rows older
+    /// than `retention_days` (review L3: rows were kept forever), except those holding the
+    /// newest PDF or log and each project's latest job.
     pub async fn reap(&self) -> Result<u64, Error> {
-        // Request records only count for an hour.
-        sqlx::query("DELETE FROM compile_requests WHERE at < now() - interval '1 hour'").execute(self.pool()).await?;
+        let due = {
+            let mut swept = self.swept.lock().unwrap();
+            let due = swept.is_none_or(|t| t.elapsed() >= SWEEP);
+            if due {
+                *swept = Some(Instant::now());
+            }
+            due
+        };
+        if due {
+            sqlx::query("DELETE FROM compile_requests WHERE at < now() - interval '1 hour'").execute(self.pool()).await?;
+            let n = sqlx::query(
+                "DELETE FROM compiles c WHERE c.state IN ('done', 'failed', 'replaced') AND c.finished < now() - make_interval(days => $1)
+                   AND c.pdf_blob IS NULL AND c.log_blob IS NULL
+                   AND c.job IS DISTINCT FROM (SELECT l.job FROM compiles l WHERE l.project = c.project AND l.state <> 'replaced' ORDER BY l.queued DESC LIMIT 1)",
+            )
+            .bind(self.limits.retention_days as i32)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
+            if n > 0 {
+                println!("{}", json!({"event": "compile_rows_expired", "rows": n}));
+            }
+        }
         let expired: Vec<(String, String)> = sqlx::query_as("SELECT job, project FROM compiles WHERE state = 'running' AND heartbeat < now() - make_interval(secs => $1)")
             .bind(self.heartbeat_timeout as f64)
             .fetch_all(self.pool())
