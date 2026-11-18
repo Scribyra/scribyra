@@ -577,3 +577,39 @@ fn requests_are_counted_before_the_project_is_materialised_whatever_they_answer(
     // Refused requests are not recorded.
     assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compile_requests"), "5");
 }
+
+#[test]
+fn asset_sizes_are_checked_before_any_asset_is_read() {
+    // Review M3: the worker read every asset into memory before the input size check. Here the
+    // asset's recorded size (200 MiB) is over the limit: the job is refused without reading it.
+    // Its blob is removed, so reading it first would fail differently.
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let (p, doc) = paper(&ana, "Huge figure", &hello("\\includegraphics{figure.png}"));
+    let figure = b"small figure bytes".to_vec();
+    assert_eq!(ana.put_object(&p, &figure).status, 201);
+    let update = {
+        use yrs::{Map, Transact};
+        let (files, assets) = (doc.doc.get_or_insert_map("files"), doc.doc.get_or_insert_map("assets"));
+        let mut txn = doc.doc.transact_mut();
+        let node = yrs::Any::from(std::collections::HashMap::from([("id".to_owned(), yrs::Any::from("a1")), ("name".to_owned(), yrs::Any::from("figure.png")), ("parentId".to_owned(), yrs::Any::Null), ("binary".to_owned(), yrs::Any::Bool(true)), ("folder".to_owned(), yrs::Any::Bool(false))]));
+        files.insert(&mut txn, "a1", node);
+        let record = yrs::Any::from(std::collections::HashMap::from([("hash".to_owned(), yrs::Any::from(sha256(&figure))), ("size".to_owned(), yrs::Any::Number((200u64 << 20) as f64))]));
+        assets.insert(&mut txn, "a1", record);
+        txn.encode_update_v1()
+    };
+    assert_eq!(ana.append(&p, "a", 3, &update).status, 201);
+    assert_eq!(ana.compile(&p, None).status, 202);
+    let db = sr.db();
+    let blob = postgres().psql(&db, &format!("SELECT blob FROM sr_objects WHERE project = '{p}'"));
+    let data = sr.env.service.dir.join("data");
+    let (runtime, compiles) = library(&mut sr);
+    std::fs::remove_file(data.join(&blob)).unwrap();
+    runtime.block_on(async {
+        let claimed = compiles.claim().await.unwrap().unwrap();
+        let refused = compiles.prepare(&claimed).await.err().expect("refused");
+        assert_eq!((refused.outcome.as_str(), refused.error), ("rejected", Some("the project's files are too large to compile on the server")));
+        // The recorded size (plus the main file) is what was refused.
+        assert!(refused.log.as_deref().unwrap().contains(&format!("at least {}", (200u64 << 20) / 100)), "{:?}", refused.log);
+    });
+}

@@ -113,19 +113,6 @@ pub fn source(m: &Materialised) -> Result<Source, &'static str> {
     let digest = format!("scribyra-compile/1\n{main}\n{bib}\n{}", parts.concat());
     Ok(Source { content_hash: blob::hash(digest.as_bytes()), engine, main, bibliography })
 }
-/// The sandbox job for materialised files (with asset bytes), or the reason, for the log.
-fn job(m: &Materialised, s: &Source, source_date_epoch: u64) -> Result<scribyra_compile::Job, String> {
-    let mut files = Vec::new();
-    for f in &m.files {
-        match &f.content {
-            Content::Folder => {}
-            Content::Text(t) => files.push((f.path.clone(), t.as_bytes().to_vec())),
-            Content::Asset { bytes: Some(b), .. } => files.push((f.path.clone(), b.clone())),
-            Content::Asset { bytes: None, .. } => return Err(format!("{} has not reached the server yet; compile again once it has synced.", f.path)),
-        }
-    }
-    Ok(scribyra_compile::Job { files, main: s.main.clone(), engine: s.engine, bibliography: s.bibliography, source_date_epoch })
-}
 /// The sandbox limits from `deployment.compile_limits` (the rest at the runner's defaults).
 pub fn limits(c: &CompileLimits) -> scribyra_compile::Limits {
     scribyra_compile::Limits { cpu_seconds: c.cpu_seconds.into(), wall_seconds: c.wall_seconds.into(), memory_mib: c.memory_mib.into(), scratch_mib: c.scratch_mib.into(), output_mib: c.output_mib.into(), passes: c.passes, ..scribyra_compile::Limits::default() }
@@ -443,9 +430,11 @@ impl Compiles {
         Ok(Some(state))
     }
 
-    /// The claimed job's sandbox input (or how it failed before running).
+    /// The claimed job's sandbox input (or how it failed before running). Sizes are checked
+    /// from the texts and the assets' recorded sizes before any asset is read, and again as each
+    /// one is read (review M3: every asset was read into memory before the size check).
     pub async fn prepare(&self, claimed: &Claimed) -> Result<(scribyra_compile::Job, String), Finished> {
-        let m = match self.projects.materialise_at(&claimed.project, Some(claimed.seq), true).await {
+        let m = match self.projects.materialise_at(&claimed.project, Some(claimed.seq), false).await {
             Ok(m) => m,
             Err(e) if e.to_string() == server_projects::COMPACTED => {
                 return Err(Finished::failed("rejected", "that version of the project is no longer stored; compile again", Some("The version this compile was asked for has been compacted on the server. Compile again.".into())));
@@ -454,7 +443,38 @@ impl Compiles {
         };
         let mut s = source(&m).map_err(|e| Finished::failed("rejected", NO_MAIN, Some(e.into())))?;
         s.engine = claimed.engine;
-        let job = job(&m, &s, claimed.queued_secs.max(0) as u64).map_err(|log| Finished::failed("rejected", "a file of the project is missing on the server", Some(log)))?;
+        let l = limits(&self.limits);
+        let max = (l.input_mib << 20).min((l.scratch_mib << 20).saturating_sub(1));
+        let too_large = |total: u64| Finished::failed("rejected", "the project's files are too large to compile on the server", Some(format!("The project's files total at least {total} bytes; the server compiles at most {max}.")));
+        let size = |c: &Content| match c {
+            Content::Folder => 0,
+            Content::Text(t) => t.len() as u64,
+            Content::Asset { size, .. } => *size,
+        };
+        let declared: u64 = m.files.iter().map(|f| size(&f.content)).sum();
+        if declared > max {
+            return Err(too_large(declared));
+        }
+        let (mut files, mut total) = (Vec::new(), 0u64);
+        for f in &m.files {
+            let bytes = match &f.content {
+                Content::Folder => continue,
+                Content::Text(t) => t.as_bytes().to_vec(),
+                // Projects from before content-addressed assets keep the bytes inline.
+                Content::Asset { bytes: Some(b), .. } => b.clone(),
+                Content::Asset { hash, .. } => match self.projects.object(&claimed.project, hash).await {
+                    Ok(Some(b)) => b,
+                    Ok(None) => return Err(Finished::failed("rejected", "a file of the project is missing on the server", Some(format!("{} has not reached the server yet; compile again once it has synced.", f.path)))),
+                    Err(_) => return Err(Finished::failed("rejected", "the project could not be read", None)),
+                },
+            };
+            total += bytes.len() as u64;
+            if total > max {
+                return Err(too_large(total));
+            }
+            files.push((f.path.clone(), bytes));
+        }
+        let job = scribyra_compile::Job { files, main: s.main.clone(), engine: s.engine, bibliography: s.bibliography, source_date_epoch: claimed.queued_secs.max(0) as u64 };
         Ok((job, s.content_hash))
     }
 
