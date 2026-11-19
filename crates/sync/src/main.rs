@@ -53,7 +53,7 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
         // Reads only: no ownership, no migrations, so it runs beside serving replicas.
         let options = sqlx::postgres::PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?.application_name("scribyra-sync-audit");
         let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect_with(options).await?;
-        let report = scribyra_sync::audit::verify(&pool, expect.as_ref().map(|(s, h)| (*s, h.as_str()))).await?;
+        let report = scribyra_sync::audit::verify(&pool, expect.as_ref().map(|(s, h)| (*s, h.as_str())), config.audit_retention()).await?;
         println!("{}", report.json());
         return Ok(if report.ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE });
     }

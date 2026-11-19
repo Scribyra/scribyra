@@ -278,6 +278,11 @@ fn audit_verify_finds_changed_and_deleted_rows_and_the_triggers_refuse_changes()
 #[test]
 fn retention_purges_old_events_records_it_and_stays_verifiable() {
     let mut sr = Sr::start(Blobs::Fs, people(), json!({"audit_retention_seconds": 3, "audit_purge_seconds": 1}), json!({}));
+    // The service keeps events at least 30 days; only the audit tables' owner (here the
+    // superuser) can lower that floor, which a test does to purge within seconds.
+    assert_eq!(psql(&sr, "SELECT retention_seconds FROM audit_settings"), (30 * 86400).to_string());
+    psql(&sr, "UPDATE audit_settings SET floor_seconds = 1");
+    assert_eq!(psql(&sr, "SELECT audit_set_retention(3)"), "3");
     let alice = sr.api(&sr.login("alice"));
     alice.create("Before");
     let before: i64 = psql(&sr, "SELECT max(seq) FROM audit_events").parse().unwrap();
@@ -295,6 +300,44 @@ fn retention_purges_old_events_records_it_and_stays_verifiable() {
     sr.env.service.stop();
     let first = psql(&sr, "SELECT min(seq) FROM audit_events");
     postgres().psql(&sr.db(), &format!("BEGIN; ALTER TABLE audit_events DISABLE TRIGGER audit_events_guard; DELETE FROM audit_events WHERE seq = {first}; ALTER TABLE audit_events ENABLE TRIGGER audit_events_guard; COMMIT;"));
+    let (code, report) = verify(&sr, None);
+    assert_eq!((code, report["anchored"].as_bool()), (1, Some(false)), "{report}");
+}
+
+#[test]
+fn a_purge_cannot_delete_young_events_and_verify_flags_one_that_did() {
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    alice.create("P1");
+    let head = alice.call("GET", "/v1/admin/audit?limit=1", None).json()["head"].clone();
+    let exported = format!("{}:{}", head["seq"], head["hash"].as_str().unwrap());
+    alice.create("P2");
+    // Review H2: `audit_purge(now() + '1s')` deleted every event, and verify with an exported
+    // head still said ok. The retention in the database (30 days at least) now bounds a purge.
+    for sql in ["SELECT audit_purge(now() + interval '1 second')", "SELECT audit_purge(now() - interval '29 days')", "SELECT audit_purge(NULL)", "SELECT audit_purge_expired() + audit_purge(now() + interval '1 day')"] {
+        assert!(psql_refused(&sr, sql).contains("a purge cannot delete newer ones"), "{sql}");
+    }
+    assert_eq!(psql(&sr, "SELECT audit_set_retention(1)"), (30 * 86400).to_string(), "not below the floor");
+    assert_eq!(psql(&sr, "SELECT audit_purge_expired()"), "0");
+    assert_eq!(verify(&sr, Some(&exported)).0, 0);
+    // Whoever can lower the floor (the tables' owner, a superuser) can still purge young events;
+    // verify reports the purge and that the exported event is gone.
+    psql(&sr, "UPDATE audit_settings SET floor_seconds = 0");
+    psql(&sr, "SELECT audit_set_retention(1)");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert!(psql(&sr, "SELECT audit_purge(now() - interval '1 second')").parse::<i64>().unwrap() > 3);
+    let (code, report) = verify(&sr, Some(&exported));
+    let problems: Vec<&str> = report["problems"].as_array().unwrap().iter().map(|p| p["problem"].as_str().unwrap()).collect();
+    assert_eq!((code, report["anchored"].as_bool()), (1, Some(true)), "{report}");
+    assert!(problems.contains(&"the purge deleted events newer than the retention allows"), "{report}");
+    assert!(problems.contains(&"the given event was purged and is not the anchor the log starts from"), "{report}");
+    // A purge event appended by an account (not the service) anchors nothing.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    alice.create("Q");
+    let (k, hash) = (psql(&sr, "SELECT max(seq) - 1 FROM audit_events"), psql(&sr, "SELECT hash FROM audit_events WHERE seq = (SELECT max(seq) - 1 FROM audit_events)"));
+    psql(&sr, &format!("BEGIN; ALTER TABLE audit_events DISABLE TRIGGER audit_events_guard; DELETE FROM audit_events WHERE seq <= {k}; ALTER TABLE audit_events ENABLE TRIGGER audit_events_guard; COMMIT;"));
+    psql(&sr, &format!("SELECT audit_append('{}', NULL, 'audit.purge', 'audit', NULL, jsonb_build_object('count', {k}, 'last_seq', {k}, 'last_hash', '{hash}', 'before', 0))", account_of(&alice)));
     let (code, report) = verify(&sr, None);
     assert_eq!((code, report["anchored"].as_bool()), (1, Some(false)), "{report}");
 }
