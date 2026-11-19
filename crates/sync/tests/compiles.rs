@@ -664,7 +664,7 @@ fn guests_cannot_change_where_a_project_compiles() {
     let sr = Sr::start(Blobs::Fs, users, json!({"compile_heartbeat_seconds": 1, "compile_heartbeat_timeout_seconds": 3}), d);
     let (ana, gus) = (sr.api(&sr.login("alice")), sr.api(&sr.login("gus")));
     let (p, _) = paper(&ana, "Guest edited", &hello("x"));
-    assert_eq!(ana.invite(&p, "gus@partner.org", "editor").status, 201);
+    assert_eq!(ana.invite_guest(&p, "gus@partner.org", "editor").status, 201);
     assert_eq!(gus.append(&p, "g", 1, &Project::new().add_text("f2", "more.tex", None, "y")).status, 201);
     let settings = format!("/v1/sr/projects/{p}/settings");
     assert_eq!(gus.call("PUT", &settings, Some(json!({"compile": "server"}))).status, 403);
