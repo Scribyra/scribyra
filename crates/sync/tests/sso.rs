@@ -615,3 +615,27 @@ fn sign_ins_in_progress_are_bounded_per_network_and_rated_per_source() {
     assert_eq!(agent().post(&format!("{}/v1/sso/start", limited.service.url)).header("X-Forwarded-For", "2001:db8:5:1::1").header("Content-Type", "application/json")
         .send(json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}).to_string().as_bytes()).unwrap().status().as_u16(), 200);
 }
+
+#[test]
+fn concurrent_sign_in_starts_all_succeed() {
+    // Review H3: the start deleted expired sign-ins (ROW EXCLUSIVE) and only then locked the
+    // table (SHARE ROW EXCLUSIVE), so two concurrent starts each held the first lock and waited
+    // for the other's: PostgreSQL broke the deadlock with an error and the start answered 500.
+    let env = Env::start("RS256", default_users(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000, "sso_starts_per_minute": 100000}), json!({}));
+    let url = format!("{}/v1/sso/start", env.service.url);
+    let threads: Vec<_> = (0..16)
+        .map(|t| {
+            let url = url.clone();
+            std::thread::spawn(move || {
+                (0..10)
+                    .map(|i| {
+                        let verifier = random_bytes(32);
+                        post_from(&format!("127.0.{t}.{}", i + 1), &url, &json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)})).0
+                    })
+                    .collect::<Vec<u16>>()
+            })
+        })
+        .collect();
+    let statuses: Vec<u16> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
+    assert_eq!(statuses.iter().filter(|s| **s == 200).count(), 160, "{statuses:?}");
+}

@@ -1125,8 +1125,10 @@ async fn start(State(s): State<Shared>, source: Option<axum::Extension<crate::se
     // that holds the most, so one source or network cannot push others out (reviews M2, M5).
     let stored = async {
         let mut tx = s.store.pool.begin().await?;
-        sqlx::query("DELETE FROM sso_flows WHERE expires <= now()").execute(&mut *tx).await?;
+        // The table lock comes first (review H3): a DELETE before it would hold ROW EXCLUSIVE,
+        // and two starts each upgrading to SHARE ROW EXCLUSIVE would deadlock.
         sqlx::query("LOCK TABLE sso_flows IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
+        sqlx::query("DELETE FROM sso_flows WHERE expires <= now()").execute(&mut *tx).await?;
         let (all, provider, mine, near): (i64, i64, i64, i64) =
             sqlx::query_as("SELECT count(*), count(*) FILTER (WHERE provider = $1), count(*) FILTER (WHERE source = $2), count(*) FILTER (WHERE network = $3) FROM sso_flows")
                 .bind(&request.provider)
