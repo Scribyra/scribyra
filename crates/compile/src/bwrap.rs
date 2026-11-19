@@ -107,12 +107,15 @@ impl Bubblewrap {
     Ok(Bubblewrap { bwrap, closure, bash, coreutils, id, conf: Conf::Unset, kind: Kind::Wasm(w) })
   }
 
-  /// The compile runtime `runtime` and package cache `cache`, with `SCRIBYRA_BWRAP`,
+  /// The compile runtime `runtime` and package cache `cache`, with `SCRIBYRA_BWRAP` (else `PATH`),
   /// `SCRIBYRA_NODE` and `SCRIBYRA_WASM_CLOSURE` (a file of store paths; without it,
   /// `nix-store -qR` of node and `SCRIBYRA_BASH`), confined as [`Confinement::from_env`] says.
   pub fn wasm_from_env(runtime: impl Into<PathBuf>, cache: impl Into<PathBuf>, packages: Arc<dyn Packages>) -> io::Result<Bubblewrap> {
     let var = |k: &str| std::env::var_os(k).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{k} is not set")));
-    let (bwrap, node, runtime) = (var("SCRIBYRA_BWRAP")?, PathBuf::from(var("SCRIBYRA_NODE")?), runtime.into());
+    let bwrap = std::env::var_os("SCRIBYRA_BWRAP").map(PathBuf::from)
+      .or_else(|| std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("bwrap")).find(|p| p.is_file()))
+      .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "bwrap is not installed (set SCRIBYRA_BWRAP)"))?;
+    let (node, runtime) = (PathBuf::from(var("SCRIBYRA_NODE")?), runtime.into());
     let closure = match std::env::var_os("SCRIBYRA_WASM_CLOSURE") {
       Some(f) => std::fs::read_to_string(f)?.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect(),
       None => {
@@ -461,7 +464,7 @@ impl Runner for Bubblewrap {
     // With a cgroup, CPU time comes from cpu.stat (orphans included); the driver's own figure
     // is only a fallback for unconfined development runs.
     let cpu_ms = if ran.usage.is_some() { ran.cpu_ms } else { ran.cpu_ms + children_cpu_ms(&report) };
-    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)) }
+    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)), peak_memory: usage.peak_bytes }
   }
 }
 

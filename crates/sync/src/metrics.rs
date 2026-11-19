@@ -22,6 +22,8 @@ pub struct Metrics {
     compile_ms: AtomicU64,
     cpu_ms: AtomicU64,
     running: AtomicI64,
+    /// The WebAssembly engine's package cache, in a worker that has one.
+    packages: OnceLock<std::sync::Arc<scribyra_compile::PackageCache>>,
 }
 pub fn global() -> &'static Metrics {
     static M: OnceLock<Metrics> = OnceLock::new();
@@ -42,6 +44,9 @@ impl Metrics {
         *self.jobs.lock().unwrap().entry(outcome.to_owned()).or_default() += 1;
         self.compile_ms.fetch_add(wall_ms, Ordering::Relaxed);
         self.cpu_ms.fetch_add(cpu_ms, Ordering::Relaxed);
+    }
+    pub fn package_cache(&self, cache: std::sync::Arc<scribyra_compile::PackageCache>) {
+        let _ = self.packages.set(cache);
     }
     pub fn running(&self, delta: i64) {
         self.running.fetch_add(delta, Ordering::Relaxed);
@@ -90,6 +95,14 @@ impl Metrics {
         line(&mut out, "# HELP scribyra_compile_running Compile jobs this process is running now.".into());
         line(&mut out, "# TYPE scribyra_compile_running gauge".into());
         line(&mut out, format!("scribyra_compile_running {}", self.running.load(Ordering::Relaxed)));
+        if let Some(cache) = self.packages.get() {
+            let s = &cache.stats;
+            line(&mut out, "# HELP scribyra_compile_package_requests_total TeX package archives jobs asked the worker's package cache for, by result.".into());
+            line(&mut out, "# TYPE scribyra_compile_package_requests_total counter".into());
+            for (result, n) in [("hit", &s.hits), ("bundled", &s.bundled), ("mirror", &s.mirror), ("rejected", &s.rejected), ("failed", &s.failed)] {
+                line(&mut out, format!("scribyra_compile_package_requests_total{{result=\"{result}\"}} {}", n.load(Ordering::Relaxed)));
+            }
+        }
         out
     }
 }

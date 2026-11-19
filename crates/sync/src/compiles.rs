@@ -16,6 +16,7 @@
 //!
 //! Never logged: content, file names, names, emails, tokens.
 use crate::{
+    config::CompileEngine,
     blobs::{BlobKey, Bytes},
     config::{Compile, CompileLimits, Config},
     metrics,
@@ -228,8 +229,10 @@ fn ms(column: &str) -> String {
 pub struct Compiles {
     pub projects: Arc<Projects>,
     pub limits: CompileLimits,
-    /// The configured TeX Live store path's name (part of the cache key).
+    /// The engine's identity (part of the cache key): the configured TeX Live store path's name,
+    /// or the WebAssembly runtime's (`wasm-<digest>`).
     pub texlive: String,
+    pub engine: CompileEngine,
     heartbeat_timeout: u64,
     /// When this process last swept old rows.
     swept: std::sync::Mutex<Option<Instant>>,
@@ -242,9 +245,14 @@ impl Compiles {
         if d.compile == Compile::Browser {
             return None;
         }
-        let texlive = d.texlive.as_ref()?.file_name()?.to_string_lossy().into_owned();
-        let (limits, heartbeat_timeout) = (d.compile_limits.clone(), config.compile_heartbeat_timeout_seconds);
-        Some(Arc::new(Self { projects, limits, texlive, heartbeat_timeout, swept: Default::default() }))
+        let texlive = match d.compile_engine {
+            CompileEngine::Native => d.texlive.as_ref()?.file_name()?.to_string_lossy().into_owned(),
+            // `serve` need not hold the runtime: then every runtime shares one key, and a
+            // runtime upgrade does not invalidate stored PDFs until `serve` sees it.
+            CompileEngine::Wasm => wasm_runtime(config).and_then(|r| scribyra_compile::wasm_runtime_id(&r).ok()).unwrap_or_else(|| "wasm".into()),
+        };
+        let (limits, heartbeat_timeout, engine) = (d.compile_limits.clone(), config.compile_heartbeat_timeout_seconds, d.compile_engine);
+        Some(Arc::new(Self { projects, limits, texlive, engine, heartbeat_timeout, swept: Default::default() }))
     }
     fn pool(&self) -> &PgPool {
         &self.projects.store.pool
@@ -290,7 +298,8 @@ impl Compiles {
             Err(_) => return Err(RequestError::Internal),
         };
         let s = source(&m).map_err(|_| RequestError::NoMain)?;
-        let engine = engine_name(s.engine);
+        // The WebAssembly engine is the browser's: LuaLaTeX whatever `meta.engine` says.
+        let engine = if self.engine == CompileEngine::Wasm { engine_name(Engine::Lualatex) } else { engine_name(s.engine) };
         let mut tx = self.pool().begin().await?;
         // The project row serialises requests for one project (and against workers finishing).
         let owner: Option<String> = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
@@ -698,11 +707,29 @@ impl Compiles {
     }
 }
 
-/// The runner for this deployment's TeX Live (`deployment.texlive`): `bwrap` from
-/// `SCRIBYRA_BWRAP` (else `PATH`), the closure from `SCRIBYRA_TEXLIVE_CLOSURE` when it belongs
-/// to that tree (else `nix-store -qR`), confined as [`scribyra_compile::Confinement::from_env`].
+/// `compile_runtime`, else `SCRIBYRA_WASM_RUNTIME`.
+fn wasm_runtime(config: &Config) -> Option<PathBuf> {
+    config.compile_runtime.clone().or_else(|| std::env::var_os("SCRIBYRA_WASM_RUNTIME").map(PathBuf::from))
+}
+
+/// The runner for this deployment's engine. WebAssembly (`deployment.compile_engine`, the
+/// default): the compile runtime (`compile_runtime`), the package cache (`compile_cache`, else
+/// `SCRIBYRA_TEX_CACHE`) filled from the runtime's bundled archives and `deployment.tex_mirror`,
+/// Node and its closure (`SCRIBYRA_NODE`, `SCRIBYRA_WASM_CLOSURE`). Native: TeX Live
+/// (`deployment.texlive`) with its closure from `SCRIBYRA_TEXLIVE_CLOSURE` when it belongs to that
+/// tree (else `nix-store -qR`). Both: `bwrap` from `SCRIBYRA_BWRAP` (else `PATH`), confined as
+/// [`scribyra_compile::Confinement::from_env`].
 pub fn runner(config: &Config) -> std::io::Result<Arc<Bubblewrap>> {
     let missing = |m: &str| std::io::Error::new(std::io::ErrorKind::NotFound, m.to_owned());
+    let d = config.deployment.as_ref().ok_or_else(|| missing("no deployment"))?;
+    if d.compile_engine == CompileEngine::Wasm {
+        let runtime = wasm_runtime(config).ok_or_else(|| missing("compile_runtime is not set (the WebAssembly engine's runtime)"))?;
+        let cache = config.compile_cache.clone().or_else(|| std::env::var_os("SCRIBYRA_TEX_CACHE").map(PathBuf::from)).ok_or_else(|| missing("compile_cache is not set (the TeX package cache directory)"))?;
+        let mirror = (!d.tex_mirror.is_empty()).then(|| d.tex_mirror.clone());
+        let packages = Arc::new(scribyra_compile::PackageCache::open(&cache, &runtime, mirror)?);
+        metrics::global().package_cache(packages.clone());
+        return Ok(Arc::new(Bubblewrap::wasm_from_env(runtime, cache, packages)?));
+    }
     let texlive = config.deployment.as_ref().and_then(|d| d.texlive.clone()).ok_or_else(|| missing("deployment.texlive is not set"))?;
     let bwrap = std::env::var_os("SCRIBYRA_BWRAP")
         .map(PathBuf::from)
@@ -1164,12 +1191,12 @@ mod tests {
 
     #[test]
     fn a_sandbox_failure_shows_members_no_host_details() {
-        let o = Outcome { status: Status::SandboxFailure, pdf: None, log: "could not start the sandbox: No such file or directory (os error 2): /var/lib/scribyra/cgroup/job-1".into(), cpu_ms: 0, passes: 0 };
+        let o = Outcome { status: Status::SandboxFailure, pdf: None, log: "could not start the sandbox: No such file or directory (os error 2): /var/lib/scribyra/cgroup/job-1".into(), cpu_ms: 0, passes: 0, peak_memory: 0 };
         let f = Finished::from_outcome(o, "h".into());
         assert_eq!((f.outcome.as_str(), f.error), ("sandbox_failure", Some("the compile sandbox failed")));
         assert_eq!(f.log.as_deref(), Some(SANDBOX_FAILED));
         // Other outcomes keep TeX's log.
-        let o = Outcome { status: Status::TexError, pdf: None, log: "! Undefined control sequence.".into(), cpu_ms: 5, passes: 1 };
+        let o = Outcome { status: Status::TexError, pdf: None, log: "! Undefined control sequence.".into(), cpu_ms: 5, passes: 1, peak_memory: 0 };
         assert_eq!(Finished::from_outcome(o, "h".into()).log.as_deref(), Some("! Undefined control sequence."));
     }
 }

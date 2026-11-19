@@ -136,7 +136,7 @@ pub(crate) struct JobCgroup { dir: PathBuf, procs: Option<File>, done: bool }
 
 /// What the job used, read from its cgroup after everything in it was killed.
 #[derive(Clone, Copy, Debug, Default)]
-pub(crate) struct Usage { pub cpu_usec: u64, pub oom_kills: u64, pub pids_max_hits: u64 }
+pub(crate) struct Usage { pub cpu_usec: u64, pub oom_kills: u64, pub pids_max_hits: u64, pub peak_bytes: u64 }
 
 impl JobCgroup {
   /// The `cgroup.procs` descriptor the child writes "0" to between fork and exec.
@@ -148,7 +148,7 @@ impl JobCgroup {
     self.kill();
     let t = Instant::now();
     while stat(&self.dir.join("cgroup.events"), "populated") != 0 && t.elapsed() < Duration::from_secs(5) { std::thread::sleep(Duration::from_millis(5)); }
-    let u = Usage { cpu_usec: self.cpu_usec(), oom_kills: stat(&self.dir.join("memory.events"), "oom_kill"), pids_max_hits: stat(&self.dir.join("pids.events"), "max") };
+    let u = Usage { cpu_usec: self.cpu_usec(), oom_kills: stat(&self.dir.join("memory.events"), "oom_kill"), pids_max_hits: stat(&self.dir.join("pids.events"), "max"), peak_bytes: fs::read_to_string(self.dir.join("memory.peak")).ok().and_then(|s| s.trim().parse().ok()).unwrap_or(0) };
     self.remove();
     u
   }

@@ -24,6 +24,13 @@ const WRAP: &str = r#"ulimit -u "$1" -n "$2" -f "$3" -c 0 || exit 99; shift 3; e
 
 pub(crate) struct Wasm { node: PathBuf, runtime: PathBuf, cache: PathBuf, packages: Arc<dyn Packages>, id: String, engine_mib: u64 }
 
+/// The engine's identity (part of the PDF cache key): a digest of the runtime's `runtime.json`,
+/// which pins the engine, its glue, the compile driver and the package catalog.
+fn runtime_id(info: &[u8]) -> String { format!("wasm-{}", &format!("{:x}", Sha256::digest(info))[..16]) }
+
+/// [`runtime_id`] of the compile runtime at `runtime`.
+pub fn wasm_runtime_id(runtime: &Path) -> io::Result<String> { Ok(runtime_id(&std::fs::read(runtime.join("runtime.json"))?)) }
+
 /// The WebAssembly heap ceiling of the runtime's BusyTeX build (Emscripten's `getHeapMax`).
 fn engine_heap_mib(runtime: &Path) -> io::Result<u64> {
   let js = std::fs::read_to_string(runtime.join("public/core/busytex/busytex.js"))?;
@@ -40,7 +47,7 @@ impl Wasm {
       if !runtime.join(f).is_file() { return Err(io::Error::other(format!("the compile runtime has no {f}"))); }
     }
     if !cache.is_dir() { return Err(io::Error::other(format!("no package cache directory at {}", cache.display()))); }
-    let id = format!("wasm-{}", &format!("{:x}", Sha256::digest(&info))[..16]);
+    let id = runtime_id(&info);
     let engine_mib = engine_heap_mib(&runtime)?;
     Ok(Wasm { node, runtime: runtime.canonicalize()?, cache: cache.canonicalize()?, packages, id, engine_mib })
   }
@@ -91,6 +98,12 @@ impl Wasm {
         log.push_str(&format!("\n[stopped: {why}]\n"));
         k.clone()
       }
+      // RLIMIT_CPU (SIGXCPU, or SIGKILL at the hard limit) can end Node before the cgroup's
+      // CPU check does: without a result, a job that used its budget hit the CPU limit.
+      _ if result.is_none() && (matches!(ran.code, Some(152) | Some(137)) || ran.cpu_ms >= limits.cpu_seconds * 1000) && usage.oom_kills == 0 => {
+        log.push_str(&format!("\n[stopped: CPU budget of {} s]\n", limits.cpu_seconds));
+        Status::LimitExceeded(Limit::Cpu)
+      }
       _ if usage.oom_kills > 0 => { log.push_str(&format!("\n[stopped: memory limit of {} MiB]\n", limits.memory_mib)); Status::LimitExceeded(Limit::Memory) }
       (_, "success") if *pdf_seen > limits.output_mib << 20 => Status::LimitExceeded(Limit::Output),
       (_, "success") if pdf.starts_with(b"%PDF-") => Status::Success,
@@ -104,6 +117,6 @@ impl Wasm {
       }
     };
     let pdf = (status == Status::Success).then(|| ran.pipes.into_iter().nth(1).unwrap().0);
-    Outcome { status, pdf, log, cpu_ms: ran.cpu_ms, passes: passes.min(64) }
+    Outcome { status, pdf, log, cpu_ms: ran.cpu_ms, passes: passes.min(64), peak_memory: usage.peak_bytes }
   }
 }

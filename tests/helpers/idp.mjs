@@ -2,7 +2,8 @@
 // browser tests: a real login form and real redirects, on a free loopback port. `orgService`
 // starts a provider and a service whose deployment signs in with it; `ssoLogin` and `signIn`
 // sign in without a browser (through the provider's test shortcut).
-import {spawn} from 'node:child_process';
+import {spawn,spawnSync} from 'node:child_process';
+import {tmpdir} from 'node:os';
 import {mkdtemp,writeFile,rm,mkdir} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {randomBytes,createHash} from 'node:crypto';
@@ -89,9 +90,19 @@ export async function signIn(engine,s,user,provider='acme'){
  * `SCRIBYRA_BWRAP` and `SCRIBYRA_TEXLIVE_CLOSURE`, the cgroup from a systemd user scope) and one
  * worker inside `serve`. Limits are generous for a loaded host; `limits` overrides some.
  */
-export function compileService({compile='both',limits={},deployment={},...options}={}){
+// The WebAssembly engine's compile runtime, assembled once per test process (hard links).
+let wasmRuntime;
+function compileRuntime(){
+ wasmRuntime??=(()=>{const out=resolve('target/wasm-compile-runtime-e2e');const r=spawnSync(process.execPath,['scripts/wasm-compile-runtime.mjs',out],{stdio:['ignore','ignore','inherit']});if(r.status!==0)throw Error('assembling the compile runtime failed (needs npm run wasm and the compiler assets)');return out;})();
+ return wasmRuntime;
+}
+// A server-readable deployment with server compile and a worker inside the service. `engine`:
+// 'wasm' (the default, the browser's engine; bundled packages only, no mirror) or 'native'
+// (TeX Live from the dev shell).
+export async function compileService({compile='both',engine='wasm',limits={},deployment={},...options}={}){
  const texlive=process.env.SCRIBYRA_TEXLIVE;
- if(!texlive)throw Error('SCRIBYRA_TEXLIVE is not set: run under `nix develop`.');
- return serverService({compile_worker_in_process:true,compile_heartbeat_seconds:2,compile_heartbeat_timeout_seconds:60,...options,
-  deployment:{compile,texlive,compile_limits:{cpu_seconds:300,wall_seconds:600,memory_mib:2048,scratch_mib:512,output_mib:64,passes:4,concurrency:2,queue:32,per_member_per_hour:120,...limits},...deployment}});
+ if(engine==='native'&&!texlive)throw Error('SCRIBYRA_TEXLIVE is not set: run under `nix develop`.');
+ const wasm=engine==='wasm'?{compile_runtime:compileRuntime(),compile_cache:await mkdtemp(join(tmpdir(),'scribyra-tex-cache-'))}:{};
+ return serverService({compile_worker_in_process:true,compile_heartbeat_seconds:2,compile_heartbeat_timeout_seconds:60,...wasm,...options,
+  deployment:{compile,compile_engine:engine,...(engine==='native'?{texlive}:{tex_mirror:''}),compile_limits:{cpu_seconds:300,wall_seconds:600,memory_mib:2048,scratch_mib:512,output_mib:64,passes:4,concurrency:2,queue:32,per_member_per_hour:120,...limits},...deployment}});
 }

@@ -16,6 +16,7 @@ mod wasm;
 
 pub use bwrap::{store_closure, Bubblewrap, RawOutcome};
 pub use cache::{PackageCache, Packages};
+pub use wasm::wasm_runtime_id;
 pub use cgroup::Confinement;
 
 /// The in-sandbox driver script (for tests that run it under the raw hook).
@@ -92,10 +93,13 @@ pub struct Outcome {
   pub log: String,
   pub cpu_ms: u64,
   pub passes: u32,
+  /// The job's peak memory (its cgroup's `memory.peak`: every process, the scratch tmpfs);
+  /// 0 without a cgroup or on kernels without `memory.peak`.
+  pub peak_memory: u64,
 }
 
 impl Outcome {
-  fn fail(status: Status, log: impl Into<String>) -> Outcome { Outcome { status, pdf: None, log: log.into(), cpu_ms: 0, passes: 0 } }
+  fn fail(status: Status, log: impl Into<String>) -> Outcome { Outcome { status, pdf: None, log: log.into(), cpu_ms: 0, passes: 0, peak_memory: 0 } }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
