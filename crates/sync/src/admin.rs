@@ -5,7 +5,10 @@
 //! Members: list (name, email, provider, role, state, last seen, storage), change role
 //! (administrator or member; guests stay guests; the configuration's own administrators stay
 //! administrators), disable (sessions revoked at once), unblock, remove (sessions revoked, shares
-//! removed, owned projects transferred to a chosen account or the acting administrator).
+//! removed, owned projects transferred to a chosen account or the acting administrator). The
+//! configuration's `admins` cannot be disabled or removed here, at least one active administrator
+//! always remains (decided under locks on every administrator's row), and `scribyra-sync account
+//! unblock` lets an operator restore an account when nobody can (see [`unblock_cli`]).
 //! Projects: list all; in server-readable mode open as administrator (read access without a share
 //! for [`crate::server_projects::ADMIN_OPEN_HOURS`], `project.admin_open`), edit as administrator
 //! (an explicit editor share), transfer, delete (crypto-erase) and export everything (a streamed
@@ -151,6 +154,29 @@ async fn member(a: &Admin, account: &str) -> Response {
         Err(e) => internal(e),
     }
 }
+/// Locks the account rows of every active administrator, always in account order (so concurrent
+/// member actions queue rather than deadlock), before the action's target, and returns them:
+/// whether at least one administrator remains is decided under these locks (review M3).
+async fn lock_admins(tx: &mut sqlx::PgConnection) -> Result<Vec<String>, Response> {
+    sqlx::query_scalar("SELECT account FROM accounts WHERE role = 'admin' AND state = 'active' ORDER BY account FOR UPDATE").fetch_all(&mut *tx).await.map_err(internal)
+}
+/// Refuses an action that would leave no active administrator: `target` stops being one.
+fn keeps_an_admin(admins: &[String], target: &str) -> Result<(), Response> {
+    if !admins.iter().any(|a| a == target) || admins.iter().any(|a| a != target) {
+        Ok(())
+    } else {
+        Err(error(StatusCode::CONFLICT, "at least one active administrator must remain"))
+    }
+}
+/// Refuses to disable or remove an administrator the configuration's `admins` list names: only
+/// the configuration changes that (review M3).
+async fn not_listed(a: &Admin, account: &str) -> Result<(), Response> {
+    match a.sso.listed_admin(account).await {
+        Ok(false) => Ok(()),
+        Ok(true) => Err(error(StatusCode::CONFLICT, "this person is an administrator through the deployment's configuration (admins); change the configuration instead")),
+        Err(e) => Err(internal(e)),
+    }
+}
 /// The target of a member action: an existing account other than the caller's own (an
 /// administrator does not demote, disable or remove themselves; another administrator can).
 async fn target(caller: &Caller, account: &str, tx: &mut sqlx::PgConnection) -> Result<(String, String, bool, bool), Response> {
@@ -184,6 +210,7 @@ async fn set_role(State(a): State<Shared>, Path(account): Path<String>, source: 
     };
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        let admins = lock_admins(&mut tx).await?;
         let (role, state, guest, granted) = target(&caller, &account, &mut tx).await?;
         if guest || role == "guest" {
             return Err(error(StatusCode::CONFLICT, "guests stay guests"));
@@ -195,6 +222,9 @@ async fn set_role(State(a): State<Shared>, Path(account): Path<String>, source: 
             return Err(error(StatusCode::CONFLICT, "this person is an administrator through the deployment's configuration (admins or admin_groups)"));
         }
         let to = if grant { "admin" } else { "member" };
+        if to != "admin" {
+            keeps_an_admin(&admins, &account)?;
+        }
         sqlx::query("UPDATE accounts SET admin_grant = $2, role = $3 WHERE account = $1").bind(&account).bind(grant).bind(to).execute(&mut *tx).await.map_err(internal)?;
         if to != role {
             audit::record(&mut tx, &caller.actor(), "account.role_changed", Some(("account", &account)), json!({"from": role, "to": to, "by": "admin"})).await.map_err(internal)?;
@@ -212,9 +242,12 @@ async fn set_role(State(a): State<Shared>, Path(account): Path<String>, source: 
 /// Disables an account: its sessions end at once and it cannot sign in until unblocked.
 async fn disable(State(a): State<Shared>, Path(account): Path<String>, source: SourceIp, headers: HeaderMap) -> Response {
     let caller = admin!(a, headers, source);
+    check!(not_listed(&a, &account).await);
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        let admins = lock_admins(&mut tx).await?;
         let (_, state, ..) = target(&caller, &account, &mut tx).await?;
+        keeps_an_admin(&admins, &account)?;
         match state.as_str() {
             "disabled" => return Ok(Vec::new()),
             "removed" => return Err(error(StatusCode::CONFLICT, "this account was removed")),
@@ -239,6 +272,7 @@ async fn unblock(State(a): State<Shared>, Path(account): Path<String>, source: S
     let caller = admin!(a, headers, source);
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        lock_admins(&mut tx).await?;
         let (_, state, ..) = target(&caller, &account, &mut tx).await?;
         if state == "active" {
             return Ok(());
@@ -267,9 +301,12 @@ struct Removal {
 async fn remove(State(a): State<Shared>, Path(account): Path<String>, source: SourceIp, headers: HeaderMap, body: Option<Json<Removal>>) -> Response {
     let caller = admin!(a, headers, source);
     let to = body.and_then(|Json(r)| r.transfer).unwrap_or_else(|| caller.account.clone());
+    check!(not_listed(&a, &account).await);
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        let admins = lock_admins(&mut tx).await?;
         let (_, state, ..) = target(&caller, &account, &mut tx).await?;
+        keeps_an_admin(&admins, &account)?;
         if state == "removed" {
             return Err(error(StatusCode::CONFLICT, "this account was removed already"));
         }
@@ -309,6 +346,42 @@ async fn remove(State(a): State<Shared>, Path(account): Path<String>, source: So
         }
         Err(r) => r,
     }
+}
+
+/// `scribyra-sync account unblock <email|provider:email|account>`: the operator's way back when no
+/// administrator can act (every one disabled or removed). Makes the one account that matches
+/// (an account ID, a provider's verified email, or a verified email at any provider) active again,
+/// with its end-to-end link, and records `account.unblocked` as `system` (`"by": "cli"`). Returns
+/// the event to print, or why nothing changed.
+pub async fn unblock_cli(pool: &sqlx::PgPool, who: &str) -> Result<Value, String> {
+    let who = who.trim();
+    let mut tx = pool.begin().await.map_err(|_| "the database could not be reached")?;
+    let query = if valid_id(who) {
+        sqlx::query_as("SELECT account, state FROM accounts WHERE account = $1 FOR UPDATE").bind(who.to_owned())
+    } else {
+        let (provider, email) = match who.split_once(':') {
+            Some((provider, email)) if !provider.contains('@') => (Some(provider.to_owned()), email),
+            _ => (None, who),
+        };
+        sqlx::query_as("SELECT account, state FROM accounts WHERE email = $1 AND email_verified AND ($2::text IS NULL OR provider = $2) ORDER BY account FOR UPDATE").bind(crate::sso::normalise_email(email)).bind(provider)
+    };
+    let rows: Vec<(String, String)> = query.fetch_all(&mut *tx).await.map_err(|_| "the database could not be read")?;
+    let (account, state) = match rows.as_slice() {
+        [] => return Err("no account matches".into()),
+        [one] => one.clone(),
+        many => return Err(format!("{} accounts match; name one as provider:email or by its account ID", many.len())),
+    };
+    if state != "active" {
+        let done = async {
+            sqlx::query("UPDATE accounts SET state = 'active' WHERE account = $1").bind(&account).execute(&mut *tx).await?;
+            sqlx::query("UPDATE sso_links l SET state = 'active' FROM accounts a WHERE a.account = $1 AND l.issuer = a.issuer AND l.subject = a.subject AND l.state = 'blocked'").bind(&account).execute(&mut *tx).await?;
+            audit::record(&mut tx, &Actor::system(), "account.unblocked", Some(("account", &account)), json!({"from": state, "by": "cli"})).await?;
+            Ok::<_, sqlx::Error>(())
+        };
+        done.await.map_err(|_| "the account could not be changed")?;
+    }
+    tx.commit().await.map_err(|_| "the account could not be changed")?;
+    Ok(json!({"event": "account_unblocked", "account": account, "from": state, "changed": state != "active"}))
 }
 
 // --- Projects

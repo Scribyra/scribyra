@@ -1,7 +1,7 @@
 use scribyra_sync::{config::Config, migrate_sqlite, service, store::Store};
 use std::{path::PathBuf, process::ExitCode, str::FromStr};
 
-const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | audit verify [<seq>:<hash>] | migrate-sqlite <old-data-dir>";
+const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | audit verify [<seq>:<hash>] | account unblock <email|provider:email|account> | migrate-sqlite <old-data-dir>";
 
 enum Command {
     Serve,
@@ -10,6 +10,8 @@ enum Command {
     Verify,
     /// Checks the audit log's hash chain; optionally that an exported head is in it.
     AuditVerify(Option<(i64, String)>),
+    /// Lets one account sign in again (when no administrator can), recorded as `system`.
+    AccountUnblock(String),
     MigrateSqlite(PathBuf),
 }
 fn parse(args: &[String]) -> Option<Command> {
@@ -25,6 +27,7 @@ fn parse(args: &[String]) -> Option<Command> {
             let valid = hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
             Some(Command::AuditVerify(Some((seq.parse().ok()?, hash.to_owned())))).filter(|_| valid)
         }
+        [cmd, sub, who] if cmd == "account" && sub == "unblock" => Some(Command::AccountUnblock(who.clone())),
         [cmd, dir] if cmd == "migrate-sqlite" => Some(Command::MigrateSqlite(dir.into())),
         _ => None,
     }
@@ -57,11 +60,26 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
         println!("{}", report.json());
         return Ok(if report.ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE });
     }
+    if let Command::AccountUnblock(who) = &command {
+        // Like `audit verify`: no ownership, so it runs beside serving replicas.
+        let options = sqlx::postgres::PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?.application_name("scribyra-sync-account");
+        let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect_with(options).await?;
+        return Ok(match scribyra_sync::admin::unblock_cli(&pool, who).await {
+            Ok(event) => {
+                println!("{event}");
+                ExitCode::SUCCESS
+            }
+            Err(reason) => {
+                println!("{}", serde_json::json!({"event": "account_unblock_failed", "reason": reason}));
+                ExitCode::FAILURE
+            }
+        });
+    }
     let store = Store::open(config).await?;
     match command {
         Command::Serve => service::serve(store).await.map(|()| ExitCode::SUCCESS),
         Command::CompileWorker => scribyra_sync::compiles::run_worker(store).await.map(|()| ExitCode::SUCCESS),
-        Command::Migrate | Command::AuditVerify(_) => unreachable!(),
+        Command::Migrate | Command::AuditVerify(_) | Command::AccountUnblock(_) => unreachable!(),
         Command::Verify => {
             let report = store.verify().await?;
             println!(

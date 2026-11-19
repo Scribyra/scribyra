@@ -606,6 +606,42 @@ fn disable_unblock_remove_transfer_open_and_edit_as_administrator() {
 }
 
 #[test]
+fn configured_administrators_stay_and_an_operator_can_always_get_back_in() {
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let cat = sr.api(&sr.login("cat"));
+    let ben = sr.api(&sr.login("ben"));
+    let (alice_id, cat_id, ben_id) = (account_of(&alice), account_of(&cat), account_of(&ben));
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{cat_id}/role"), Some(json!({"role": "admin"}))).status, 200);
+    // Review M3: an administrator could disable or remove the configuration's administrators,
+    // and administrators could lock each other out with no way back.
+    assert_eq!(cat.call("POST", &format!("/v1/admin/members/{alice_id}/disable"), None).status, 409);
+    assert_eq!(cat.call("POST", &format!("/v1/admin/members/{alice_id}/remove"), Some(json!({}))).status, 409);
+    assert_eq!(psql(&sr, &format!("SELECT state FROM accounts WHERE account = '{alice_id}'")), "active");
+    assert_eq!(alice.call("GET", "/v1/admin/members", None).status, 200);
+    // When nobody can administer any more (here every administrator disabled by hand), the
+    // operator's command lets one back in, recorded as the service's own action.
+    psql(&sr, "UPDATE accounts SET state = 'disabled' WHERE role = 'admin'");
+    assert_eq!(alice.call("GET", "/v1/admin/members", None).status, 401);
+    let run = |who: &str| {
+        let (code, out) = sr.env.service.run(&["account", "unblock", who]);
+        (code, serde_json::from_str::<Value>(out.lines().last().unwrap_or("null")).unwrap_or(Value::Null))
+    };
+    let (code, out) = run("alice@example.org");
+    assert_eq!((code, out["account"].as_str(), out["from"].as_str()), (0, Some(alice_id.as_str()), Some("disabled")), "{out}");
+    assert_eq!(sr.api(&sr.login("alice")).call("GET", "/v1/admin/members", None).status, 200);
+    assert_eq!(run("test:CAT@example.org").0, 0);
+    assert_eq!(run(&ben_id).1["changed"], false, "ben was never disabled");
+    for nobody in ["nobody@example.org", "other:alice@example.org", "x"] {
+        let (code, out) = run(nobody);
+        assert_eq!((code, out["event"].as_str()), (1, Some("account_unblock_failed")), "{nobody}");
+    }
+    let unblocked: Vec<Value> = events(&alice).into_iter().filter(|e| e["action"] == "account.unblocked").collect();
+    assert_eq!(unblocked.iter().map(|e| (e["actor"].as_str().unwrap(), e["target"].as_str().unwrap(), e["detail"].clone())).collect::<Vec<_>>(), [("system", alice_id.as_str(), json!({"from": "disabled", "by": "cli"})), ("system", cat_id.as_str(), json!({"from": "disabled", "by": "cli"}))]);
+    assert_eq!(verify(&sr, None).0, 0);
+}
+
+#[test]
 fn removal_from_the_admin_group_at_the_provider_demotes_at_the_next_recheck() {
     let sr = Sr::start(
         Blobs::Fs,

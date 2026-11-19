@@ -143,6 +143,13 @@ pub fn normalise_email(text: &str) -> String {
 pub fn vouches(provider: &Configured, email: &str) -> bool {
     email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain))
 }
+/// Whether the deployment's `admins` list names this identity (its `issuer#subject`, or its
+/// verified email as `provider:email` or as an email the provider vouches for).
+pub fn listed(deployment: &Deployment, provider: &Configured, subject: &str, email: Option<&str>, email_verified: bool) -> bool {
+    let pair = format!("{}#{subject}", provider.issuer);
+    let email = email.filter(|_| email_verified).map(normalise_email);
+    deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)))
+}
 /// The deployment role of an identity, or the code of the rule that refuses it: guests when the
 /// deployment admits none, and people outside `member_groups` when the provider names some.
 /// Administrators are the `admins` list (a verified email at a provider whose `email_domains`
@@ -155,10 +162,7 @@ pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, emai
             Guests::Shared => Ok(Role::Guest),
         };
     }
-    let pair = format!("{}#{subject}", provider.issuer);
-    let email = email.filter(|_| email_verified).map(normalise_email);
-    let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)));
-    let admin = listed || groups.iter().any(|g| provider.admin_groups.contains(g));
+    let admin = listed(deployment, provider, subject, email, email_verified) || groups.iter().any(|g| provider.admin_groups.contains(g));
     if !admin && !provider.member_groups.is_empty() && !groups.iter().any(|g| provider.member_groups.contains(g)) {
         return Err("not_member");
     }
@@ -408,6 +412,16 @@ impl Sso {
             role,
             expires: UNIX_EPOCH + Duration::from_secs(row.get::<i64, _>(8).max(0) as u64),
         }))
+    }
+    /// Whether the deployment's `admins` list names this account (from the identity it signed in
+    /// with last). Such an administrator is the configuration's to change: the admin area does
+    /// not disable or remove them (review M3).
+    pub async fn listed_admin(&self, account: &str) -> Result<bool, StoreError> {
+        let row: Option<(String, String, String, Option<String>, bool)> =
+            sqlx::query_as("SELECT provider, issuer, subject, email, email_verified FROM accounts WHERE account = $1").bind(account).fetch_optional(&self.store.pool).await?;
+        let Some((provider, issuer, subject, email, verified)) = row else { return Ok(false) };
+        let Some((deployment, configured)) = self.configured(&provider).filter(|(_, p)| p.issuer == issuer) else { return Ok(false) };
+        Ok(listed(deployment, configured, &subject, email.as_deref(), verified))
     }
     /// The role the deployment's rules (`admins`, groups, guests) alone give an account, from its
     /// newest sign-in: `None` when it never signed in or the rules refuse it now.
