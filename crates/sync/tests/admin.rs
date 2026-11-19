@@ -276,6 +276,58 @@ fn audit_verify_finds_changed_and_deleted_rows_and_the_triggers_refuse_changes()
 }
 
 #[test]
+fn the_service_database_user_cannot_change_the_audit_log() {
+    // Review M1: the triggers trusted a session setting anyone can set (`set_config` then
+    // DELETE succeeded), and the service's user owned the tables (it could disable the
+    // triggers). The service here runs as an ordinary user; the operator created
+    // `scribyra_audit_owner` and let that user SET ROLE to it for the migration, then revoked it.
+    let user = format!("svc_{}", random_hex(6));
+    let name = format!("d_{}", random_hex(6));
+    let su = postgres().url("postgres");
+    postgres().psql(&su, "DO $$ BEGIN CREATE ROLE scribyra_audit_owner NOLOGIN; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$");
+    postgres().psql(&su, &format!("CREATE ROLE {user} LOGIN"));
+    postgres().psql(&su, &format!("GRANT scribyra_audit_owner TO {user} WITH INHERIT FALSE, SET TRUE"));
+    postgres().psql(&su, &format!("CREATE DATABASE {name} OWNER {user}"));
+    let url = postgres().url(&name).replace("postgres@", &format!("{user}@"));
+    let mut sr = Sr::start(Blobs::Fs, people(), json!({"database_url": url}), json!({}));
+    assert!(sr.env.service.logs.lock().unwrap().contains("\"state\":\"protected; reachable: this database user is a member of scribyra_audit_owner\""));
+    postgres().psql(&su, &format!("REVOKE scribyra_audit_owner FROM {user}"));
+    let alice = sr.api(&sr.login("alice"));
+    alice.create("P");
+    let before = psql(&sr, "SELECT count(*) || ' ' || max(seq) FROM audit_events");
+    for sql in [
+        "SELECT set_config('scribyra.audit_writer', 'purge', false); DELETE FROM audit_events",
+        "SELECT set_config('scribyra.audit_writer', 'append', false); UPDATE audit_head SET seq = 1",
+        "DELETE FROM audit_events WHERE seq = 2",
+        "UPDATE audit_events SET detail = '{}' WHERE seq = 2",
+        "TRUNCATE audit_events",
+        "INSERT INTO audit_events SELECT * FROM audit_events WHERE seq = 1",
+        "ALTER TABLE audit_events DISABLE TRIGGER audit_events_guard",
+        "ALTER TABLE audit_events DISABLE TRIGGER ALL",
+        "DROP TRIGGER audit_events_guard ON audit_events",
+        "UPDATE audit_settings SET floor_seconds = 0",
+        "CREATE OR REPLACE FUNCTION audit_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$",
+        "ALTER TABLE audit_events OWNER TO CURRENT_USER",
+        "SET ROLE scribyra_audit_owner",
+        "SELECT audit_purge(now())",
+    ] {
+        let refused = psql_refused(&sr, sql);
+        assert!(refused.contains("permission denied") || refused.contains("must be owner") || refused.contains("a purge cannot delete newer ones"), "{sql}: {refused}");
+    }
+    assert_eq!(psql(&sr, "SELECT count(*) || ' ' || max(seq) FROM audit_events"), before);
+    // It still appends (through the owner's functions), reads, exports and verifies.
+    alice.create("Q");
+    assert_eq!(alice.call("GET", "/v1/admin/audit/export", None).status, 200);
+    assert_eq!(verify(&sr, None).0, 0);
+    assert_eq!(psql(&sr, "SELECT audit_protect()"), "protected");
+    // A restart keeps it so.
+    sr.env.service.stop();
+    sr.env.service.start().unwrap();
+    assert!(sr.env.service.logs.lock().unwrap().contains("\"state\":\"protected\""));
+    assert_eq!(sr.env.service.run(&["migrate"]).1.contains("\"auditProtection\":\"protected\""), true);
+}
+
+#[test]
 fn retention_purges_old_events_records_it_and_stays_verifiable() {
     let mut sr = Sr::start(Blobs::Fs, people(), json!({"audit_retention_seconds": 3, "audit_purge_seconds": 1}), json!({}));
     // The service keeps events at least 30 days; only the audit tables' owner (here the

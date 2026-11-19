@@ -44,9 +44,9 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
     };
     if let Command::Migrate = command {
         // Applies migrations and exits: the operator runs it as a Job before replicas start.
-        let applied = scribyra_sync::store::migrate(&config).await?;
+        let (applied, protection) = scribyra_sync::store::migrate(&config).await?;
         let schema = scribyra_sync::store::MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
-        println!("{}", serde_json::json!({"event": "migrated", "applied": applied, "schema": schema}));
+        println!("{}", serde_json::json!({"event": "migrated", "applied": applied, "schema": schema, "auditProtection": protection}));
         return Ok(ExitCode::SUCCESS);
     }
     if let Command::AuditVerify(expect) = &command {

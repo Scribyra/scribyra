@@ -209,9 +209,10 @@ pub async fn schema(pool: &PgPool) -> Result<Schema, Error> {
     }
     Ok(Schema::Current)
 }
-/// `scribyra-sync migrate`: applies pending migrations and returns how many there were. Takes no
+/// `scribyra-sync migrate`: applies pending migrations and returns how many there were and the
+/// audit tables' protection ([`crate::audit::protect`]). Takes no
 /// ownership lock (the migrator takes its own), so it can run while replicas serve.
-pub async fn migrate(config: &Config) -> Result<usize, Error> {
+pub async fn migrate(config: &Config) -> Result<(usize, String), Error> {
     let options = PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?.application_name("scribyra-sync-migrate");
     let pool = PgPoolOptions::new().max_connections(1).acquire_timeout(Duration::from_secs(30)).connect_with(options).await?;
     let before: i64 = match schema(&pool).await? {
@@ -220,8 +221,11 @@ pub async fn migrate(config: &Config) -> Result<usize, Error> {
     };
     MIGRATOR.run(&pool).await?;
     let after: i64 = sqlx::query_scalar("SELECT count(*) FROM _sqlx_migrations WHERE success").fetch_one(&pool).await?;
+    // Hands the audit tables to their own role if this user can (migration 0031 tried already;
+    // an operator may have granted the role since).
+    let protection = crate::audit::protect(&pool).await?;
     pool.close().await;
-    Ok((after - before).max(0) as usize)
+    Ok(((after - before).max(0) as usize, protection))
 }
 
 impl Store {

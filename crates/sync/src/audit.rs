@@ -1,8 +1,10 @@
 //! The audit log (design section 5): every security-relevant action is one row of
 //! `audit_events`, appended only through the SQL function `audit_append` (migration `0015`),
 //! which numbers rows without gaps under a lock on the one `audit_head` row (so appends from every
-//! replica form one line) and chains them: `hash = SHA-256(prev ‖ canonical row)`. Triggers
-//! refuse direct inserts, updates, deletes outside a purge, and truncation.
+//! replica form one line) and chains them: `hash = SHA-256(prev ‖ canonical row)`. The NOLOGIN
+//! role `scribyra_audit_owner` owns the tables and the functions that write them (migration
+//! `0031`, [`protect`]); the service's database user only reads the tables and calls the
+//! functions, and triggers refuse every change that does not come from the owner.
 //!
 //! [`verify`] recomputes the chain outside the database (`scribyra-sync audit verify`), from the
 //! first row or, after a retention purge, from the anchor its `audit.purge` event records; it
@@ -80,6 +82,12 @@ pub async fn head(pool: &PgPool) -> Result<(i64, String), sqlx::Error> {
     sqlx::query_as("SELECT seq, hash FROM audit_head").fetch_one(pool).await
 }
 
+/// Hands the audit tables to the role `scribyra_audit_owner` where the database user can
+/// (`audit_protect`, migration `0031`; idempotent) and returns the outcome: `protected`,
+/// `protected; reachable: …` (this user can still become the owner) or `unprotected: …`.
+pub async fn protect(pool: &PgPool) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar("SELECT audit_protect()").fetch_one(pool).await
+}
 /// The shortest retention outside tests (`audit_settings.floor_seconds`; the service cannot lower
 /// it). `audit verify` flags a purge whose cutoff was newer than its time minus this (or the
 /// configured retention, if shorter).
