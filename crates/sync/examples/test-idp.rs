@@ -22,7 +22,8 @@
 //! "organization": …}`), `entra` (`{"tid": "…", "acct": 0|1}`), `hd` (Google Workspace) and any
 //! other `claims`. `email_verified` is left out of tokens when not given (a missing claim);
 //! `userinfo_only` names profile claims (`email`, `email_verified`, `name`, `picture`) that only
-//! the userinfo endpoint returns.
+//! the userinfo endpoint returns. `refresh_needs_offline_access: true` issues that user refresh
+//! tokens only when the sign-in asked for the `offline_access` scope.
 //!
 //! `alg` is `RS256` (default), `ES256` or `EdDSA`. The issuer must be the bare origin the
 //! provider is reached at. Prints `{"event":"listening","address":"127.0.0.1:PORT"}` when ready.
@@ -113,6 +114,9 @@ struct User {
     userinfo_only: Vec<String>,
     #[serde(default)]
     disabled: bool,
+    /// Refresh tokens only for sign-ins that asked for `offline_access` (as Zitadel and Entra).
+    #[serde(default)]
+    refresh_needs_offline_access: bool,
 }
 
 enum Signer {
@@ -203,6 +207,7 @@ struct Code {
     username: String,
     sid: String,
     until: Instant,
+    offline: bool,
 }
 struct Refresh {
     client_id: String,
@@ -363,6 +368,7 @@ impl Idp {
                 username: user.username.clone(),
                 sid,
                 until: Instant::now() + Duration::from_secs(60),
+                offline: get("scope").split(' ').any(|s| s == "offline_access"),
             },
         );
         found(with_query(&get("redirect_uri"), &[("code", &code), ("state", &get("state"))]))
@@ -495,7 +501,7 @@ fn authenticate<'a>(idp: &'a Idp, headers: &HeaderMap, form: &HashMap<String, St
 async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<HashMap<String, String>>) -> Response {
     let Some(client) = authenticate(&idp, &headers, &form) else { return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client") };
     let get = |k: &str| form.get(k).cloned().unwrap_or_default();
-    let (user, sid, nonce) = match get("grant_type").as_str() {
+    let (user, sid, nonce, refreshable) = match get("grant_type").as_str() {
         "authorization_code" => {
             let code = idp.codes.lock().unwrap().remove(&get("code"));
             let Some(code) = code else { return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant") };
@@ -504,7 +510,10 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
                 return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant");
             }
             match idp.user(&code.username).filter(|u| idp.enabled(u)) {
-                Some(user) => (user, code.sid, Some(code.nonce)),
+                Some(user) => {
+                    let refreshable = code.offline || !user.refresh_needs_offline_access;
+                    (user, code.sid, Some(code.nonce), refreshable)
+                }
                 None => return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant"),
             }
         }
@@ -516,17 +525,20 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
             let refresh = idp.refresh.lock().unwrap().remove(&get("refresh_token"));
             let Some(refresh) = refresh.filter(|r| r.client_id == client.client_id) else { return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant") };
             match idp.user(&refresh.username).filter(|u| idp.enabled(u)) {
-                Some(user) => (user, String::new(), None),
+                Some(user) => (user, String::new(), None, true),
                 None => return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant"),
             }
         }
         _ => return oauth_error(StatusCode::BAD_REQUEST, "unsupported_grant_type"),
     };
-    let refresh = random_hex();
-    idp.refresh.lock().unwrap().insert(refresh.clone(), Refresh { client_id: client.client_id.clone(), username: user.username.clone() });
     let access = random_hex();
     idp.access.lock().unwrap().insert(access.clone(), user.username.clone());
-    let mut body = json!({"access_token": access, "token_type": "Bearer", "expires_in": 300, "refresh_token": refresh});
+    let mut body = json!({"access_token": access, "token_type": "Bearer", "expires_in": 300});
+    if refreshable {
+        let refresh = random_hex();
+        idp.refresh.lock().unwrap().insert(refresh.clone(), Refresh { client_id: client.client_id.clone(), username: user.username.clone() });
+        body["refresh_token"] = json!(refresh);
+    }
     body["id_token"] = json!(idp.id_token(&client.client_id, &user, nonce.as_deref(), &sid));
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }

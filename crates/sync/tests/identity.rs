@@ -31,6 +31,10 @@ fn zitadel_users() -> Value {
         // The same email in both organisations: two people as far as Scribyra knows.
         zitadel("dee", "dee@shared.test", "100", &[(MEMBER, "100")], json!({})),
         zitadel("dee-b", "dee@shared.test", "200", &[(MEMBER, "200")], json!({})),
+        // A guest of 200 (granted there, at home in 100) who signs in late.
+        zitadel("gia", "gia@a.test", "100", &[(MEMBER, "200")], json!({})),
+        // A second account of organisation 100 with dee's verified email.
+        zitadel("dee2", "dee@shared.test", "100", &[(MEMBER, "100")], json!({})),
         // A provider that does not say whether the email is verified.
         zitadel("ghost", "ghost@a.test", "100", &[(MEMBER, "100")], json!({"email_verified": null})),
         // A role keyed by an organisation that granted nothing mapped, and one with no mapped role.
@@ -38,8 +42,9 @@ fn zitadel_users() -> Value {
         zitadel("nob", "nob@a.test", "100", &[("other-app:admin", "100")], json!({})),
     ])
 }
+/// One Zitadel project serving organisations 100 and 200 as separate Scribyra organisations.
 fn zitadel_provider() -> Value {
-    json!({"claims": null, "preset": "zitadel", "zitadel_project_id": "42"})
+    json!({"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations"})
 }
 fn orgs(login: &Value) -> Vec<(String, String, bool)> {
     login["orgs"].as_array().unwrap().iter().map(|o| (o["id"].as_str().unwrap().to_owned(), o["role"].as_str().unwrap().to_owned(), o["guest"].as_bool().unwrap())).collect()
@@ -63,7 +68,7 @@ fn zitadel_organisations_roles_and_guests() {
     let c = sr.env.client();
     // The preset asks for the project's roles and audience.
     let query: std::collections::HashMap<String, String> = url::Url::parse(&c.start().url).unwrap().query_pairs().into_owned().collect();
-    assert_eq!(query["scope"], "openid email profile urn:zitadel:iam:org:project:id:42:aud urn:zitadel:iam:org:projects:roles");
+    assert_eq!(query["scope"], "openid email profile offline_access urn:zitadel:iam:org:project:id:42:aud urn:zitadel:iam:org:projects:roles");
     let ana = c.login("ana");
     let a = org_of(&sr, "100");
     assert_eq!(orgs(&ana), [(a.clone(), "admin".into(), false)]);
@@ -145,7 +150,7 @@ fn organisations_are_isolated_on_every_route_and_in_the_audit_log() {
     assert_eq!(ana.invite(&pa, "dee@shared.test", "editor").json()["status"], "shared");
     assert_eq!((dee.details(&pa).status, dee_b.details(&pa).status), (200, 404));
     // A guest of B is shared with only inside B, and sees nothing of A from there.
-    assert_eq!(bea.invite(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "viewer").json()["status"], "shared");
     assert_eq!((ids(&cy_b), ids(&cy_a)), (vec![pb.clone()], vec![]));
     assert_eq!(cy_a.details(&pb).status, 404);
     assert_eq!(cy_b.call("POST", "/v1/sr/projects", Some(json!({"name": "mine"}))).status, 403);
@@ -210,14 +215,14 @@ fn organisations_are_isolated_on_every_route_and_in_the_audit_log() {
 
 #[test]
 fn a_role_taken_away_at_a_refresh_cuts_access_at_once() {
-    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({"sso_recheck_tick_seconds": 1}), json!({"guests": "shared", "provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "offline_access": true, "recheck_minutes": 1}}));
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({"sso_recheck_tick_seconds": 1}), json!({"guests": "shared", "provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations", "offline_access": true, "recheck_minutes": 1}}));
     let c = sr.env.client();
     let bea = sr.api(&token(&c.login("bea")));
     let cy_login = c.login("cy");
     let cy = sr.api(&token(&cy_login));
     let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
     let pb = bea.create("B paper");
-    assert_eq!(bea.invite(&pb, "cy@a.test", "editor").status, 201);
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "editor").status, 201);
     let cy_b = cy.in_org(&b);
     assert_eq!(cy_b.log(&pb, 0).status, 200);
     // A heads poll in B waits; the provider withdraws B's grant; the next refresh ends it.
@@ -286,13 +291,18 @@ fn one_providers_claims_never_reach_another_providers_organisation() {
 fn keycloak_entra_google_and_profiles_from_userinfo() {
     let users = json!([
         {"sub": "k1", "username": "kim", "password": "pw-kim", "email": "kim@k.test", "email_verified": true, "name": "Kim",
-         "keycloak": {"realm_roles": ["offline_access", MEMBER], "client_roles": {CLIENT_ID: [ADMIN]}, "organization": {"lab": {}, "acme": {}}}},
+         "keycloak": {"realm_roles": ["offline_access", MEMBER, "acme:scribyra:member"], "client_roles": {CLIENT_ID: ["lab:scribyra:admin"]}, "organization": {"lab": {}, "acme": {}}}},
+        // In two organisations with an unprefixed administrator role: an administrator of neither.
+        {"sub": "k3", "username": "kit", "password": "pw-kit", "email": "kit@k.test", "email_verified": true, "keycloak": {"client_roles": {CLIENT_ID: [ADMIN]}, "organization": ["lab", "acme"]}},
         {"sub": "k2", "username": "kai", "password": "pw-kai", "email": "kai@k.test", "email_verified": true, "keycloak": {"client_roles": {"other": [ADMIN]}, "organization": ["lab"]}},
         {"sub": "e1", "username": "ed", "password": "pw-ed", "email": "ed@e.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "tenant-1", "acct": 0}},
         {"sub": "e2", "username": "gil", "password": "pw-gil", "email": "gil@guest.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "tenant-1", "acct": 1}},
+        // A B2B guest whose tenant does not send the optional `acct` claim.
+        {"sub": "e3", "username": "gus-b2b", "password": "pw-gus-b2b", "email": "gus@guest.test", "email_verified": true, "roles": [ADMIN], "entra": {"tid": "tenant-1"}, "claims": {"idp": "https://sts.windows.net/tenant-home/"}},
         {"sub": "1001", "username": "gwen", "password": "pw-gwen", "email": "gwen@acme.example", "email_verified": true, "hd": "acme.example"},
         {"sub": "1002", "username": "gus", "password": "pw-gus", "email": "gus@acme.example", "email_verified": true, "hd": "acme.example"},
         {"sub": "1003", "username": "consumer", "password": "pw-consumer", "email": "c@gmail.example", "email_verified": true},
+        {"sub": "1004", "username": "otto", "password": "pw-otto", "email": "otto@other.example", "email_verified": true, "hd": "other.example"},
         // Profile only from userinfo; and an email whose verification the provider leaves out.
         {"sub": "u1", "username": "uma", "password": "pw-uma", "email": "uma@k.test", "email_verified": true, "name": "Uma", "picture": "https://k.test/uma.png",
          "userinfo_only": ["email", "email_verified", "name", "picture"], "keycloak": {"realm_roles": [MEMBER], "organization": ["lab"]}},
@@ -308,7 +318,8 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
     let kim = c.login("kim");
     let mut kim_orgs: Vec<(&str, &str)> = kim["orgs"].as_array().unwrap().iter().map(|o| (o["name"].as_str().unwrap(), o["role"].as_str().unwrap())).collect();
     kim_orgs.sort();
-    assert_eq!(kim_orgs, [("acme", "admin"), ("lab", "admin")]);
+    assert_eq!(kim_orgs, [("acme", "member"), ("lab", "admin")], "roles named for an organisation count there only");
+    assert_eq!(c.sign_in("kit").0, Outcome::Error("no_role".into()), "unprefixed roles are no organisation's when the token names several");
     let lab = kim["orgs"].as_array().unwrap().iter().find(|o| o["name"] == "lab").unwrap()["id"].as_str().unwrap().to_owned();
     assert_eq!(c.sign_in("kai").0, Outcome::Error("no_role".into()), "another client's roles do not count");
     let uma = c.login("uma");
@@ -328,16 +339,220 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
     assert_eq!((ed["orgs"][0]["name"].as_str(), ed["role"].as_str()), (Some("Partner (tenant-1)"), Some("member")));
     let gil = partner.login("gil");
     assert_eq!((gil["orgs"][0]["id"].clone(), gil["role"].as_str()), (ed["orgs"][0]["id"].clone(), Some("guest")), "Entra B2B guests are guests of the tenant");
+    assert_eq!(partner.login("gus-b2b")["role"], "guest", "without acct, an idp other than the tenant's marks a guest");
     // Google: the Workspace domain is the organisation, admin_subjects its administrators, and
     // consumer accounts (no hd) are refused.
-    let google = json!({"claims": null, "roles": null, "preset": "google", "admin_subjects": ["1001"]});
+    let google = json!({"claims": null, "roles": null, "preset": "google", "admin_subjects": ["1001"], "hosted_domains": ["acme.example"]});
     let g = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": google}));
     let c = g.env.client();
     let gwen = c.login("gwen");
     assert_eq!((gwen["orgs"][0]["name"].as_str(), gwen["role"].as_str()), (Some("acme.example"), Some("admin")));
     assert_eq!(c.login("gus")["role"], "member");
     assert_eq!(c.sign_in("consumer").0, Outcome::Error("no_organisation".into()));
+    assert_eq!(c.sign_in("otto").0, Outcome::Error("domain".into()), "only the configured Workspace domains");
     // Entra guests are refused when the deployment admits none.
     let off = Sr::start(Blobs::Fs, json!([{"sub": "e2", "username": "gil", "password": "pw-gil", "email": "gil@guest.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "t", "acct": 1}}]), json!({}), json!({"provider": {"claims": null, "preset": "entra"}}));
     assert_eq!(off.env.client().sign_in("gil").0, Outcome::Error("guest".into()));
+}
+
+#[test]
+fn only_the_configured_primary_organisation_takes_the_deployments_id() {
+    // Review H1: the first organisation to sign in took the deployment's ID, which end-to-end
+    // clients sign with (and which migration 0032 kept, with its links). Organisation 200 signing
+    // in first took it over.
+    let deployment_of = |env: &Env| fetch(&format!("{}/v1/deployment", env.service.url), None).json();
+    let id = |env: &Env| postgres().psql(env.service.database_url(), "SELECT org FROM deployment");
+    let claim_of = |env: &Env, org: &str| postgres().psql(env.service.database_url(), &format!("SELECT claim FROM organisations WHERE org = '{org}'"));
+    // No primary organisation: nobody gets the ID, and the app is told so.
+    let mut first = Env::start("RS256", zitadel_users(), json!({}), json!({"provider": zitadel_provider()}));
+    let env = &first;
+    let c = env.client();
+    let (outcome, verifier) = c.sign_in("bea");
+    let Outcome::Grant { grant, org: None } = outcome else { panic!("{outcome:?}") };
+    let bea = c.redeem(&grant, &verifier).json();
+    assert_ne!(bea["orgs"][0]["id"], json!(id(env)), "the first organisation to sign in does not take the deployment's ID");
+    assert_eq!((bea["org"].clone(), bea["orgs"][0]["primary"].clone()), (Value::Null, json!(false)));
+    assert_eq!(deployment_of(env)["org"], Value::Null);
+    assert_eq!(c.me(&token(&bea)).json()["orgs"][0]["primary"], json!(false));
+    assert_ne!(c.login("ana")["orgs"][0]["id"], json!(id(env)));
+    assert_eq!(postgres().psql(env.service.database_url(), &format!("SELECT count(*) FROM organisations WHERE org = '{}'", id(env))), "0");
+    // An organisation that is not the primary one holding the ID (as a sign-in made it before
+    // this fix) refuses the start: an operator decides.
+    let bea_org = bea["orgs"][0]["id"].as_str().unwrap().to_owned();
+    first.service.stop();
+    postgres().psql(first.service.database_url(), &format!("UPDATE deployment SET org = '{bea_org}'"));
+    let refused = first.service.start().unwrap_err();
+    assert!(refused.contains("deployment_org_conflict"), "{refused}");
+    // Named in the configuration: made at start with the ID, whoever signs in first.
+    let env = Env::start("RS256", zitadel_users(), json!({}), json!({"provider": zitadel_provider(), "primary_organisation": {"provider": "test", "organisation": "100"}}));
+    let deployment = id(&env);
+    assert_eq!(claim_of(&env, &deployment), "100");
+    assert_eq!(deployment_of(&env)["org"], json!(deployment));
+    let c = env.client();
+    let (outcome, verifier) = c.sign_in("bea");
+    let Outcome::Grant { grant, org } = outcome else { panic!("{outcome:?}") };
+    assert_eq!(org, Some(deployment.clone()));
+    let bea = c.redeem(&grant, &verifier).json();
+    assert_ne!(bea["orgs"][0]["id"], json!(deployment));
+    assert_eq!((bea["org"].clone(), bea["orgs"][0]["primary"].clone()), (json!(deployment), json!(false)));
+    let ana = c.login("ana");
+    assert_eq!((ana["orgs"][0]["id"].clone(), ana["orgs"][0]["primary"].clone()), (json!(deployment), json!(true)));
+}
+
+#[test]
+fn a_zitadel_project_grant_makes_guests_of_the_project_owner() {
+    // Review M5: by default (`zitadel_foreign_organisations: "guests"`) the project owner's
+    // organisation is the only one; a project grant's users (organisation 200, roles keyed by
+    // their own organisation) are its guests, never members or administrators of their own.
+    let provider = json!({"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100"});
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": provider}));
+    let c = sr.env.client();
+    let a = org_of(&sr, "100");
+    assert_eq!(fetch(&format!("{}/v1/deployment", sr.url()), None).json()["org"], json!(a), "the owner organisation is the provider's only one, and primary");
+    let bea = c.login("bea");
+    assert_eq!(orgs(&bea), [(a.clone(), "guest".into(), true)]);
+    assert_eq!(orgs(&c.login("ana")), [(a.clone(), "admin".into(), false)]);
+    assert_eq!(orgs(&c.login("cy")), [(a.clone(), "member".into(), false)]);
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM organisations"), "1");
+    let bea = sr.api(&token(&bea));
+    assert_eq!(bea.call("GET", "/v1/admin/members", None).status, 403);
+    assert_eq!(bea.call("POST", "/v1/sr/projects", Some(json!({"name": "mine"}))).status, 403);
+    // Guests off: the grant's users are refused.
+    let off = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100"}}));
+    assert_eq!(off.env.client().sign_in("bea").0, Outcome::Error("guest".into()));
+}
+
+#[test]
+fn sign_outs_are_audited_only_where_the_person_holds_a_role() {
+    // Review (low): sign-outs and revocations were audited in every organisation the account had
+    // ever been in, so an organisation that stopped someone, or that they left, kept seeing
+    // their sessions.
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": zitadel_provider()}));
+    let c = sr.env.client();
+    let bea = sr.api(&token(&c.login("bea")));
+    let cy = token(&c.login("cy"));
+    let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
+    let cy_id = account(&sr, "cy");
+    let sign_outs = |org: &str| postgres().psql(&sr.db(), &format!("SELECT count(*) FROM audit_log WHERE org = '{org}' AND action = 'session.sign_out' AND actor = '{cy_id}'"));
+    assert_eq!(c.logout(&cy).status, 200);
+    assert_eq!((sign_outs(&a), sign_outs(&b)), ("1".into(), "1".into()));
+    // Stopped in B: B does not see the next sign-out.
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/disable"), None).status, 200);
+    assert_eq!(c.logout(&token(&c.login("cy"))).status, 200);
+    assert_eq!((sign_outs(&a), sign_outs(&b)), ("2".into(), "1".into()));
+    // Left A (the provider took the role away): A does not see the next one either.
+    sr.env.idp.set("cy", json!({"zitadel": {"resourceowner": "100", "project_id": "42", "roles": {MEMBER: {"200": "b"}}}}));
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/unblock"), None).status, 200);
+    assert_eq!(c.logout(&token(&c.login("cy"))).status, 200);
+    assert_eq!((sign_outs(&a), sign_outs(&b)), ("2".into(), "2".into()));
+}
+
+#[test]
+fn an_administrator_stops_someone_only_in_their_own_organisation() {
+    // Review (low): disabling someone in organisation B revoked their sessions at B's provider,
+    // so an administrator of B also ended their work in A.
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": zitadel_provider()}));
+    let c = sr.env.client();
+    let (ana, bea, cy) = (sr.api(&token(&c.login("ana"))), sr.api(&token(&c.login("bea"))), sr.api(&token(&c.login("cy"))));
+    let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
+    let (pa, pb) = (ana.create("A paper"), bea.create("B paper"));
+    assert_eq!(ana.invite(&pa, "cy@a.test", "editor").json()["status"], "shared");
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    let (cy_a, cy_b) = (cy.in_org(&a), cy.in_org(&b));
+    let version = cy_b.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let poll = {
+        let cy_b = cy_b.clone();
+        std::thread::spawn(move || cy_b.heads(Some(&version), 25).status)
+    };
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let cy_id = account(&sr, "cy");
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/disable"), None).status, 200);
+    // B's poll and requests end; the same session keeps working in A.
+    assert_eq!(poll.join().unwrap(), 404);
+    assert_eq!(cy_b.log(&pb, 0).status, 404);
+    assert_eq!(c.me(&cy.token).status, 200);
+    assert_eq!(cy_a.log(&pa, 0).status, 200);
+    assert_eq!(cy.call("GET", "/v1/sr/projects", None).json()["org"], json!(a), "only A is left, so no header is needed");
+    assert_eq!(postgres().psql(&sr.db(), &format!("SELECT count(*) FROM sso_logins WHERE account = '{cy_id}' AND revoked")), "0");
+    // Re-enabled: that session stays without B for good; a new sign-in has it again.
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/unblock"), None).status, 200);
+    assert_eq!(cy_b.log(&pb, 0).status, 404);
+    assert_eq!(c.me(&cy.token).json()["orgs"].as_array().unwrap().len(), 1);
+    assert_eq!(sr.api(&token(&c.login("cy"))).in_org(&b).log(&pb, 0).status, 200);
+}
+
+#[test]
+fn invitations_pick_members_unless_a_guest_is_invited_and_ask_when_several_share_an_email() {
+    // Review (low): an invitation shared with every account of the organisation holding the
+    // email, guests included, whatever the inviter meant.
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": zitadel_provider()}));
+    let c = sr.env.client();
+    let (ana, bea, cy) = (sr.api(&token(&c.login("ana"))), sr.api(&token(&c.login("bea"))), sr.api(&token(&c.login("cy"))));
+    let b = org_of(&sr, "200");
+    // cy is only a guest of B: a plain invitation does not share with her, and stays pending even
+    // through her next sign-in; an explicit guest invitation does.
+    let pb = bea.create("B paper");
+    assert_eq!(bea.invite(&pb, "cy@a.test", "viewer").json()["status"], "pending");
+    assert_eq!(cy.in_org(&b).details(&pb).status, 404);
+    let cy = sr.api(&token(&c.login("cy")));
+    assert_eq!(cy.in_org(&b).details(&pb).status, 404, "a guest's sign-in does not take a member invitation");
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    assert_eq!(cy.in_org(&b).details(&pb).status, 200);
+    // Pending invitations to someone who has not signed in yet: a guest's first sign-in takes
+    // only the one that invited a guest.
+    let (member_only, as_guest) = (bea.create("B second"), bea.create("B third"));
+    assert_eq!(bea.invite(&member_only, "gia@a.test", "viewer").json()["status"], "pending");
+    assert_eq!(bea.invite_guest(&as_guest, "gia@a.test", "viewer").json()["status"], "pending");
+    let gia = sr.api(&token(&c.login("gia")));
+    assert_eq!((gia.details(&member_only).status, gia.details(&as_guest).status), (404, 200));
+    // Two accounts of A with one verified email: the inviter chooses.
+    let (dee, dee2) = (sr.api(&token(&c.login("dee"))), sr.api(&token(&c.login("dee2"))));
+    let pa = ana.create("A paper");
+    let refused = ana.invite(&pa, "dee@shared.test", "editor");
+    assert_eq!((refused.status, refused.json()["code"].as_str()), (409, Some("choose_account")));
+    let mut candidates: Vec<String> = refused.json()["candidates"].as_array().unwrap().iter().map(|c| c["account"].as_str().unwrap().to_owned()).collect();
+    candidates.sort();
+    let mut both = vec![account(&sr, "dee"), account(&sr, "dee2")];
+    both.sort();
+    assert_eq!(candidates, both);
+    assert_eq!((dee.details(&pa).status, dee2.details(&pa).status), (404, 404), "nobody is shared with before the choice");
+    let chosen = ana.call("POST", &format!("/v1/sr/projects/{pa}/invitations"), Some(json!({"email": "dee@shared.test", "role": "editor", "account": account(&sr, "dee2")})));
+    assert_eq!(chosen.json()["status"], "shared");
+    assert_eq!((dee.details(&pa).status, dee2.details(&pa).status), (404, 200));
+    let unknown = ana.call("POST", &format!("/v1/sr/projects/{pa}/invitations"), Some(json!({"email": "dee@shared.test", "role": "editor", "account": account(&sr, "ana")})));
+    assert_eq!(unknown.status, 404);
+}
+
+#[test]
+fn a_generic_organisation_name_is_kept_and_only_presets_or_administrators_rename() {
+    // Review (low): a generic `claims.organisation_name` (which users may be able to edit at
+    // their provider) renamed the organisation at every sign-in: the last one won.
+    let named = |name: &str, roles: &[&str], org_name: &str| user(name, roles, json!({"claims": {"org": "lab", "org_name": org_name}}));
+    let users = json!([named("alice", &[ADMIN], "Lab"), named("bob", &[MEMBER], "Bob owns this now")]);
+    let provider = json!({"claims": {"roles": "$.roles", "organisation": "$.org", "organisation_name": "$.org_name"}});
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": provider}));
+    let c = sr.env.client();
+    let alice = c.login("alice");
+    assert_eq!(alice["orgs"][0]["name"], "Lab");
+    assert_eq!(c.login("bob")["orgs"][0]["name"], "Lab", "a later sign-in does not rename it");
+    // An administrator renames it, audited.
+    let admin = sr.api(&token(&alice));
+    let renamed = admin.call("PUT", "/v1/admin/organisation", Some(json!({"name": " Acme Lab "})));
+    assert_eq!((renamed.status, renamed.json()["name"].as_str()), (200, Some("Acme Lab")));
+    assert_eq!(admin.call("PUT", "/v1/admin/organisation", Some(json!({"name": ""}))).status, 400);
+    assert_eq!(sr.api(&token(&c.login("bob"))).call("PUT", "/v1/admin/organisation", Some(json!({"name": "Mine"}))).status, 403);
+    assert_eq!(c.login("alice")["orgs"][0]["name"], "Acme Lab");
+    let event = admin.call("GET", "/v1/admin/audit?action=organisation.renamed", None).json()["events"][0].clone();
+    assert_eq!(event["detail"], json!({"from": "Lab", "to": "Acme Lab"}));
+    // A preset's organisation name (set by the provider) still updates it, until an administrator
+    // renames it.
+    let z = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"provider": zitadel_provider()}));
+    let c = z.env.client();
+    assert_eq!(c.login("ana")["orgs"][0]["name"], "org100.zitadel.test");
+    z.env.idp.set("ana", json!({"zitadel": {"resourceowner": "100", "project_id": "42", "roles": {ADMIN: {"100": "acme.example"}}}}));
+    let ana = c.login("ana");
+    assert_eq!(ana["orgs"][0]["name"], "acme.example");
+    assert_eq!(z.api(&token(&ana)).call("PUT", "/v1/admin/organisation", Some(json!({"name": "Acme"}))).status, 200);
+    z.env.idp.set("ana", json!({"zitadel": {"resourceowner": "100", "project_id": "42", "roles": {ADMIN: {"100": "other.example"}}}}));
+    assert_eq!(c.login("ana")["orgs"][0]["name"], "Acme");
 }

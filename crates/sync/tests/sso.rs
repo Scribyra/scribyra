@@ -28,14 +28,14 @@ fn rs256_sign_in_me_logout_and_replays() {
     let started = c.start();
     assert!(started.url.starts_with(&format!("{}/authorize?", env.idp.issuer)));
     let query: std::collections::HashMap<String, String> = url::Url::parse(&started.url).unwrap().query_pairs().into_owned().collect();
-    assert_eq!(query["scope"], "openid email profile");
+    assert_eq!(query["scope"], "openid email profile offline_access");
     assert_eq!(query["code_challenge_method"], "S256");
     assert_eq!(query["redirect_uri"], format!("{}/v1/sso/callback/test", env.service.config["public_url"].as_str().unwrap()));
     let callback = c.authorize(&started, "alice", "pw-alice");
     let (status, outcome) = c.callback(&callback);
     assert_eq!(status, 302);
     let Some(Outcome::Grant { grant, org: returned }) = outcome else { panic!("{outcome:?}") };
-    assert_eq!(returned, org);
+    assert_eq!(returned, Some(org.clone()));
     // The state is single use.
     let (status, outcome) = c.callback(&callback);
     assert_eq!((status, outcome), (400, None));
@@ -48,7 +48,7 @@ fn rs256_sign_in_me_logout_and_replays() {
     assert_eq!(login["subject"], json!({"email": "alice@example.org", "name": "Alice Example"}));
     // Identity and organisations come from the provider's token: one organisation (the provider
     // names none), which took the deployment's ID, and alice's role in it.
-    assert_eq!(login["orgs"], json!([{"id": org, "name": "Test account", "provider": "test", "role": "admin", "guest": false}]));
+    assert_eq!(login["orgs"], json!([{"id": org, "name": "Test account", "provider": "test", "role": "admin", "guest": false, "primary": true}]));
     assert_eq!((login["email"].as_str(), login["emailVerified"].as_bool(), login["picture"].as_str()), (Some("alice@example.org"), Some(true), None));
     let token = login["token"].as_str().unwrap().to_owned();
     assert_eq!(token.len(), 64);
@@ -614,4 +614,55 @@ fn sign_ins_in_progress_are_bounded_per_network_and_rated_per_source() {
     let verifier = random_bytes(32);
     assert_eq!(agent().post(&format!("{}/v1/sso/start", limited.service.url)).header("X-Forwarded-For", "2001:db8:5:1::1").header("Content-Type", "application/json")
         .send(json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)}).to_string().as_bytes()).unwrap().status().as_u16(), 200);
+}
+
+#[test]
+fn concurrent_sign_in_starts_all_succeed() {
+    // Review H3: the start deleted expired sign-ins (ROW EXCLUSIVE) and only then locked the
+    // table (SHARE ROW EXCLUSIVE), so two concurrent starts each held the first lock and waited
+    // for the other's: PostgreSQL broke the deadlock with an error and the start answered 500.
+    let env = Env::start("RS256", default_users(), json!({"requests_per_second": 100000, "source_requests_per_second": 100000, "sso_starts_per_minute": 100000}), json!({}));
+    let url = format!("{}/v1/sso/start", env.service.url);
+    let threads: Vec<_> = (0..16)
+        .map(|t| {
+            let url = url.clone();
+            std::thread::spawn(move || {
+                (0..10)
+                    .map(|i| {
+                        let verifier = random_bytes(32);
+                        post_from(&format!("127.0.{t}.{}", i + 1), &url, &json!({"provider": "test", "return": APP, "challenge": sha256(&verifier)})).0
+                    })
+                    .collect::<Vec<u16>>()
+            })
+        })
+        .collect();
+    let statuses: Vec<u16> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
+    assert_eq!(statuses.iter().filter(|s| **s == 200).count(), 160, "{statuses:?}");
+}
+
+#[test]
+fn logins_without_a_refresh_token_are_short_and_providers_ask_for_one() {
+    // Review M7: Zitadel and generic providers did not ask for offline_access, so their logins
+    // had no refresh token, were never rechecked, and kept a role taken away for up to
+    // session_hours (at most 720).
+    let users = json!([user("nora", &[MEMBER], json!({"refresh_needs_offline_access": true}))]);
+    let expires_in = |login: &Value| login["expires"].as_i64().unwrap() - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let refresh = |env: &Env| postgres().psql(env.service.database_url(), "SELECT count(*) FROM sso_logins WHERE refresh_token IS NOT NULL");
+    // By default the sign-in asks for offline_access, gets a refresh token and lasts session_hours.
+    let env = Env::start("RS256", users.clone(), json!({}), json!({"provider": {"session_hours": 24}}));
+    let nora = env.client().login("nora");
+    assert_eq!(refresh(&env), "1");
+    assert!((24 * 3600 - 60..=24 * 3600 + 1).contains(&expires_in(&nora)), "{nora}");
+    assert!(!env.service.logs.lock().unwrap().contains("sso_no_refresh"));
+    // Without offline_access there is no refresh token: the login lasts no_refresh_session_minutes
+    // (an hour by default), so a role taken away applies at the next sign-in, and the start warns.
+    let env = Env::start("RS256", users.clone(), json!({}), json!({"provider": {"session_hours": 24, "offline_access": false}}));
+    let nora = env.client().login("nora");
+    assert_eq!(refresh(&env), "0");
+    assert!((3600 - 60..=3600 + 1).contains(&expires_in(&nora)), "{nora}");
+    assert!(env.service.logs.lock().unwrap().contains(r#"{"event":"sso_no_refresh","providers":["test"]}"#));
+    let start = postgres().psql(env.service.database_url(), "SELECT detail->>'noRefresh' FROM audit_log WHERE action = 'deployment.start'");
+    assert_eq!(start, r#"["test"]"#);
+    let env = Env::start("RS256", users, json!({}), json!({"provider": {"session_hours": 24, "offline_access": false, "no_refresh_session_minutes": 30}}));
+    assert!((1800 - 60..=1800 + 1).contains(&expires_in(&env.client().login("nora"))));
 }

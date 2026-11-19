@@ -186,6 +186,10 @@ impl Api {
     pub fn invite(&self, project: &str, email: &str, role: &str) -> Reply {
         self.call("POST", &format!("/v1/sr/projects/{project}/invitations"), Some(json!({"email": email, "role": role})))
     }
+    /// An invitation that may share with a guest of the organisation (`guest: true`).
+    pub fn invite_guest(&self, project: &str, email: &str, role: &str) -> Reply {
+        self.call("POST", &format!("/v1/sr/projects/{project}/invitations"), Some(json!({"email": email, "role": role, "guest": true})))
+    }
     /// `POST …/compile` with an optional `seq`.
     pub fn compile(&self, project: &str, seq: Option<i64>) -> Reply {
         self.call("POST", &format!("/v1/sr/projects/{project}/compile"), Some(seq.map_or(json!({}), |s| json!({"seq": s}))))

@@ -20,7 +20,7 @@
 //! (an explicit editor share), transfer, delete (crypto-erase) and export everything (a streamed
 //! zip of every project's files materialised from the server's state, the members and the audit
 //! log). Audit log: query and export (JSON lines or CSV, with the head hash). Settings: the
-//! policy, never a secret.
+//! policy, never a secret. The organisation's name (`PUT /v1/admin/organisation`).
 //!
 //! In end-to-end mode the routes that read content answer `409`; members, the projects' metadata,
 //! deletion (of the ciphertext the server holds) and the audit log work. Removing a person from an
@@ -1138,8 +1138,9 @@ async fn settings(State(a): State<Shared>, source: SourceIp, headers: HeaderMap)
         .iter()
         .map(|p| {
             json!({"id": p.id, "label": p.label, "issuer": p.issuer, "emailDomains": p.email_domains, "preset": p.preset, "claims": p.claims, "roles": p.roles,
-                   "zitadelProjectId": p.zitadel_project_id, "keycloakOrganizations": p.keycloak_organizations, "adminSubjects": p.admin_subjects.len(),
-                   "offlineAccess": p.offline_access, "sessionHours": p.session_hours, "recheckMinutes": p.recheck_minutes})
+                   "zitadelProjectId": p.zitadel_project_id, "zitadelProjectOwnerOrg": p.zitadel_project_owner_org, "zitadelForeignOrganisations": p.zitadel_foreign_organisations,
+                   "keycloakOrganizations": p.keycloak_organizations, "rolesApplyToAllOrganisations": p.roles_apply_to_all_organisations, "hostedDomains": p.hosted_domains, "entraRequireAcct": p.entra_require_acct, "adminSubjects": p.admin_subjects.len(),
+                   "offlineAccess": p.offline_access(), "canRefresh": p.can_refresh(), "sessionHours": p.session_hours, "noRefreshSessionMinutes": p.no_refresh_session_minutes, "recheckMinutes": p.recheck_minutes})
         })
         .collect();
     let policy = scribyra_core::blob::hash(serde_json::to_string(d).unwrap_or_default().as_bytes());
@@ -1151,6 +1152,33 @@ async fn settings(State(a): State<Shared>, source: SourceIp, headers: HeaderMap)
             "texlive": d.texlive.is_some(), "policy": policy,
         }),
     )
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Rename {
+    name: String,
+}
+/// `PUT /v1/admin/organisation {name}`: renames this organisation (1-128 characters), audited as
+/// `organisation.renamed`. Tokens never rename it afterwards.
+async fn rename(State(a): State<Shared>, source: SourceIp, headers: HeaderMap, Json(request): Json<Rename>) -> Response {
+    let caller = admin!(a, headers, source);
+    let name = request.name.trim();
+    if name.is_empty() || name.len() > 128 || name.chars().any(char::is_control) {
+        return error(StatusCode::BAD_REQUEST, "the name must be 1-128 characters");
+    }
+    let done = async {
+        let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        lock_accounts(&caller, &[], false, &mut tx).await?;
+        let from: String = sqlx::query_scalar("SELECT name FROM organisations WHERE org = $1 FOR UPDATE").bind(&caller.org).fetch_one(&mut *tx).await.map_err(internal)?;
+        sqlx::query("UPDATE organisations SET name = $2, renamed = true WHERE org = $1").bind(&caller.org).bind(name).execute(&mut *tx).await.map_err(internal)?;
+        audit::record(&mut tx, &caller.org, &caller.actor(), "organisation.renamed", Some(("organisation", &caller.org)), json!({"from": from, "to": name})).await.map_err(internal)?;
+        tx.commit().await.map_err(internal)
+    };
+    match done.await {
+        Ok(()) => ok_json(StatusCode::OK, json!({"org": caller.org, "name": name})),
+        Err(r) => r,
+    }
 }
 
 /// The admin routes; merged into [`crate::service::router`].
@@ -1169,6 +1197,7 @@ pub fn routes(a: Shared) -> Router {
         .route("/v1/admin/audit", get(audit_log))
         .route("/v1/admin/audit/export", get(audit_export))
         .route("/v1/admin/settings", get(settings))
+        .route("/v1/admin/organisation", axum::routing::put(rename))
         .with_state(a)
 }
 

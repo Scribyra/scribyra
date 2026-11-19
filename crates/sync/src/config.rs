@@ -511,6 +511,10 @@ pub struct Deployment {
     #[serde(default = "yes")]
     pub notify_on_admin_access: bool,
     pub providers: Vec<Provider>,
+    /// The organisation that takes the deployment's ID (`GET /v1/deployment` `org`, the ID
+    /// end-to-end clients sign with). See [`Deployment::primary`].
+    #[serde(default)]
+    pub primary_organisation: Option<PrimaryOrganisation>,
     #[serde(default)]
     pub quotas: Quotas,
     #[serde(default = "audit_days")]
@@ -534,6 +538,16 @@ impl Config {
         self.audit_retention_seconds.unwrap_or_else(|| self.deployment.as_ref().map_or(400, |d| d.audit_retention_days) as u64 * 24 * 3600)
     }
 }
+/// The organisation the configuration names to take the deployment's ID: a provider's
+/// organisation claim value, or (omitted) the one organisation of a provider whose tokens name
+/// none.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrimaryOrganisation {
+    pub provider: String,
+    #[serde(default)]
+    pub organisation: Option<String>,
+}
 /// How a provider's claims name organisations, roles and guests (design section 3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -549,6 +563,18 @@ pub enum Preset {
     /// The Workspace domain (`hd`) is the organisation; everyone is a member and administrators are
     /// `admin_subjects` (Google's tokens carry no roles).
     Google,
+}
+/// What a Zitadel role keyed by an organisation other than the project's owner (a project grant)
+/// makes of someone (review M5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZitadelForeign {
+    /// A guest of the owner organisation, the provider's only one (subject to `guests`).
+    #[default]
+    Guests,
+    /// A member of that organisation, which is its own isolated Scribyra organisation
+    /// (hosting several tenants from one Zitadel project).
+    Organisations,
 }
 /// A generic claims mapping: JSON paths into the ID token (see [`crate::claims::ClaimPath`]).
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -591,6 +617,10 @@ pub struct Provider {
     /// When not empty, only verified emails in these domains sign in (a filter, never a role).
     #[serde(default)]
     pub email_domains: Vec<String>,
+    /// Google: the Workspace domains (`hd`) admitted. A `google` provider needs this or
+    /// `email_domains` (review H2: without either, every Workspace domain signed in).
+    #[serde(default)]
+    pub hosted_domains: Vec<String>,
     /// Exactly one of `preset` and `claims`.
     #[serde(default)]
     pub preset: Option<Preset>,
@@ -601,17 +631,39 @@ pub struct Provider {
     /// Zitadel: the project whose roles count (its roles claim and audience scope).
     #[serde(default)]
     pub zitadel_project_id: Option<String>,
+    /// Zitadel (required): the ID of the organisation that owns the project.
+    #[serde(default)]
+    pub zitadel_project_owner_org: Option<String>,
+    /// Zitadel: roles keyed by another organisation make guests of the owner organisation
+    /// (`guests`, default) or members of their own organisation (`organisations`).
+    #[serde(default)]
+    pub zitadel_foreign_organisations: ZitadelForeign,
     /// Keycloak 26 organisations: ask for and read the `organization` claim.
     #[serde(default)]
     pub keycloak_organizations: bool,
+    /// Entra: refuse tokens without the optional `acct` claim (which marks B2B guests).
+    #[serde(default)]
+    pub entra_require_acct: bool,
+    /// Keycloak organisations: realm, client and group roles without an `<alias>:` prefix count
+    /// in every organisation of someone in several (otherwise only in someone's only one).
+    #[serde(default)]
+    pub roles_apply_to_all_organisations: bool,
     /// Google: the exact `sub` values of administrators (the only identities the configuration
     /// names, because Google's tokens carry no roles).
     #[serde(default)]
     pub admin_subjects: Vec<String>,
+    /// Ask for the `offline_access` scope (refresh tokens, so logins are rechecked). Default:
+    /// on, except for Keycloak (which issues refresh tokens without it, and gives offline
+    /// sessions with it) and Google (which does not take the scope). See
+    /// [`Provider::offline_access`].
     #[serde(default)]
-    pub offline_access: bool,
+    pub offline_access: Option<bool>,
     #[serde(default = "session_hours")]
     pub session_hours: u32,
+    /// How long a login without a refresh token lasts at most (it cannot be rechecked, so a role
+    /// taken away reaches it only when it ends): 5-43200 minutes, capped by `session_hours`.
+    #[serde(default = "no_refresh_session_minutes")]
+    pub no_refresh_session_minutes: u32,
     #[serde(default = "recheck_minutes")]
     pub recheck_minutes: u32,
     /// Extra scopes beyond `openid email profile`, `offline_access` when set, and the preset's.
@@ -624,6 +676,9 @@ fn session_hours() -> u32 {
 fn recheck_minutes() -> u32 {
     10
 }
+fn no_refresh_session_minutes() -> u32 {
+    60
+}
 impl Provider {
     /// The confidential client's secret, read from its file (one line).
     pub fn client_secret(&self) -> Result<String, Box<dyn std::error::Error>> {
@@ -633,11 +688,27 @@ impl Provider {
         }
         Ok(secret)
     }
-    /// The scopes a sign-in asks for: the preset adds what its claims need (Zitadel's roles and
-    /// project audience, Entra's `offline_access`, Keycloak's `organization`).
+    /// Whether sign-ins ask for `offline_access` (review M7: without refresh tokens, logins are
+    /// never rechecked): as configured, else on except for Keycloak and Google.
+    pub fn offline_access(&self) -> bool {
+        self.offline_access.unwrap_or(!matches!(self.preset, Some(Preset::Keycloak | Preset::Google)))
+    }
+    /// Whether this provider's logins are expected to carry refresh tokens (and so are rechecked):
+    /// with `offline_access`, or Keycloak, which issues them without it.
+    pub fn can_refresh(&self) -> bool {
+        self.offline_access() || self.preset == Some(Preset::Keycloak)
+    }
+    /// How long a login lasts: `session_hours`, or for a login without a refresh token (never
+    /// rechecked) at most `no_refresh_session_minutes`.
+    pub fn session_seconds(&self, refreshable: bool) -> i64 {
+        let full = self.session_hours as i64 * 3600;
+        if refreshable { full } else { full.min(self.no_refresh_session_minutes as i64 * 60) }
+    }
+    /// The scopes a sign-in asks for: `offline_access` ([`Provider::offline_access`]) and what the
+    /// preset's claims need (Zitadel's roles and project audience, Keycloak's `organization`).
     pub fn scope(&self) -> String {
         let mut scope = String::from("openid email profile");
-        if self.offline_access || self.preset == Some(Preset::Entra) {
+        if self.offline_access() {
             scope.push_str(" offline_access");
         }
         let mut preset = Vec::new();
@@ -733,6 +804,9 @@ impl Provider {
             if !(r.admin.is_empty() && r.member.is_empty() && r.guest.is_empty()) {
                 return Err("deployment.providers[].roles: Google's tokens carry no roles; name administrators in admin_subjects");
             }
+            if self.hosted_domains.is_empty() && self.email_domains.is_empty() {
+                return Err("deployment.providers[] with preset google needs hosted_domains (or email_domains): the Workspace domains it admits");
+            }
         } else {
             if r.admin.is_empty() && r.member.is_empty() {
                 return Err("deployment.providers[].roles must map at least one provider role to admin or member");
@@ -750,8 +824,26 @@ impl Provider {
         if self.zitadel_project_id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_digit())) {
             return Err("deployment.providers[].zitadel_project_id must be a Zitadel project ID (digits)");
         }
+        if (self.zitadel_project_owner_org.is_some() || self.zitadel_foreign_organisations != ZitadelForeign::Guests) && self.preset != Some(Preset::Zitadel) {
+            return Err("deployment.providers[].zitadel_project_owner_org and zitadel_foreign_organisations are for the zitadel preset only");
+        }
+        if self.preset == Some(Preset::Zitadel) && !self.zitadel_project_owner_org.as_ref().is_some_and(|id| !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())) {
+            return Err("deployment.providers[].zitadel_project_owner_org must be the ID (digits) of the organisation that owns the project");
+        }
+        if !self.hosted_domains.is_empty() && self.preset != Some(Preset::Google) {
+            return Err("deployment.providers[].hosted_domains is for the google preset only");
+        }
+        if self.hosted_domains.len() > 64 || !self.hosted_domains.iter().all(|d| domain_name(d)) {
+            return Err("deployment.providers[].hosted_domains must be lowercase domain names such as example.org");
+        }
         if self.keycloak_organizations && self.preset != Some(Preset::Keycloak) {
             return Err("deployment.providers[].keycloak_organizations is for the keycloak preset only");
+        }
+        if self.entra_require_acct && self.preset != Some(Preset::Entra) {
+            return Err("deployment.providers[].entra_require_acct is for the entra preset only");
+        }
+        if self.roles_apply_to_all_organisations && !self.keycloak_organizations {
+            return Err("deployment.providers[].roles_apply_to_all_organisations needs keycloak_organizations");
         }
         Ok(())
     }
@@ -789,8 +881,20 @@ impl Deployment {
             if !(1..=1440).contains(&p.recheck_minutes) {
                 return Err("deployment.providers[].recheck_minutes must be 1-1440");
             }
+            if !(5..=43200).contains(&p.no_refresh_session_minutes) {
+                return Err("deployment.providers[].no_refresh_session_minutes must be 5-43200");
+            }
             if p.scopes.len() > 16 || !p.scopes.iter().all(|s| !s.is_empty() && s.len() <= 128 && s.bytes().all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')) {
                 return Err("deployment.providers[].scopes must be at most 16 scope names");
+            }
+        }
+        if let Some(primary) = &self.primary_organisation {
+            let Some(p) = self.provider(&primary.provider) else { return Err("deployment.primary_organisation.provider must be the id of a configured provider") };
+            match (crate::claims::fixed_organisation(p), &primary.organisation) {
+                (Some(fixed), Some(claim)) if *claim != fixed => return Err("deployment.primary_organisation.organisation: that provider has one organisation; leave organisation out"),
+                (None, None) => return Err("deployment.primary_organisation needs organisation (the organisation claim value) for a provider whose tokens name organisations"),
+                (_, Some(claim)) if !short_text(claim, 255) => return Err("deployment.primary_organisation.organisation must be an organisation claim value"),
+                _ => {}
             }
         }
         if self.encryption == Encryption::E2ee && self.guests != Guests::Off {
@@ -820,6 +924,23 @@ impl Deployment {
     }
     pub fn provider(&self, id: &str) -> Option<&Provider> {
         self.providers.iter().find(|p| p.id == id)
+    }
+    /// The organisation (provider, claim value) that takes the deployment's ID (review H1): the one
+    /// `primary_organisation` names, or, when the deployment has a single provider whose
+    /// organisation the configuration fixes (its tokens name none), that one. Otherwise none: no
+    /// organisation a token names ever takes it, so the first to sign in cannot claim the ID
+    /// end-to-end clients sign with.
+    pub fn primary(&self) -> Option<(&Provider, String)> {
+        match &self.primary_organisation {
+            Some(primary) => {
+                let p = self.provider(&primary.provider)?;
+                Some((p, primary.organisation.clone().or_else(|| crate::claims::fixed_organisation(p))?))
+            }
+            None => match self.providers.as_slice() {
+                [only] => Some((only, crate::claims::fixed_organisation(only)?)),
+                _ => None,
+            },
+        }
     }
 }
 
@@ -860,7 +981,9 @@ mod tests {
         assert_eq!((d.encryption, d.offline, d.compile, d.link_sharing, d.guests, d.notify_on_admin_access), (Encryption::Server, true, Compile::Browser, false, Guests::Off, true));
         assert_eq!((d.audit_retention_days, d.quotas.project_bytes, d.compile_limits.passes), (400, 1 << 30, 4));
         let p = &d.providers[0];
-        assert_eq!((p.session_hours, p.recheck_minutes, p.offline_access, p.scope()), (12, 10, false, "openid email profile".to_string()));
+        // Keycloak issues refresh tokens without offline_access; a login without one lasts an hour.
+        assert_eq!((p.session_hours, p.recheck_minutes, p.offline_access(), p.can_refresh(), p.scope()), (12, 10, false, true, "openid email profile".to_string()));
+        assert_eq!((p.session_seconds(true), p.session_seconds(false)), (12 * 3600, 3600));
         assert!(Config::default().deployment.is_none());
     }
 
@@ -919,6 +1042,7 @@ mod tests {
         assert!(refused("email_domains", json!(["acme"])).contains(".email_domains"));
         assert!(refused("session_hours", json!(721)).contains(".session_hours"));
         assert!(refused("recheck_minutes", json!(0)).contains(".recheck_minutes"));
+        assert!(refused("no_refresh_session_minutes", json!(4)).contains(".no_refresh_session_minutes"));
         assert!(refused("scopes", json!(["a b"])).contains(".scopes"));
         assert!(refused("required", json!(true)).contains("unknown field"));
         for removed in ["groups_claim", "admin_groups", "member_groups", "guest"] {
@@ -930,6 +1054,26 @@ mod tests {
         p["scopes"] = json!(["groups"]);
         let c = config(deployment(json!({"providers": [p], "guests": "shared"}))).unwrap();
         assert_eq!(c.deployment.unwrap().providers[0].scope(), "openid email profile offline_access groups");
+    }
+
+    #[test]
+    fn the_primary_organisation_is_named_by_the_configuration() {
+        let zitadel = json!({"id": "z", "label": "Z", "issuer": "https://z.example", "client_id": "c", "client_secret_file": "s", "preset": "zitadel", "roles": {"member": ["m"]}, "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations"});
+        let primary = |d: serde_json::Value| config(d).map(|c| c.deployment.unwrap().primary().map(|(p, claim)| (p.id.clone(), claim)));
+        // One provider with one organisation: that one.
+        assert_eq!(primary(deployment(json!({}))).unwrap(), Some(("acme".into(), String::new())));
+        // Review H1: a provider whose tokens name organisations gives none the deployment's ID
+        // unless the configuration names one.
+        assert_eq!(primary(deployment(json!({"providers": [zitadel]}))).unwrap(), None);
+        assert_eq!(primary(deployment(json!({"providers": [zitadel], "primary_organisation": {"provider": "z", "organisation": "100"}}))).unwrap(), Some(("z".into(), "100".into())));
+        // Two providers: only an explicit choice.
+        assert_eq!(primary(deployment(json!({"providers": [provider(), zitadel]}))).unwrap(), None);
+        assert_eq!(primary(deployment(json!({"providers": [provider(), zitadel], "primary_organisation": {"provider": "acme"}}))).unwrap(), Some(("acme".into(), String::new())));
+        let refused = |p: serde_json::Value| primary(deployment(json!({"providers": [provider(), zitadel], "primary_organisation": p}))).err().expect("refused");
+        assert!(refused(json!({"provider": "nobody"})).contains("configured provider"));
+        assert!(refused(json!({"provider": "z"})).contains("needs organisation"));
+        assert!(refused(json!({"provider": "acme", "organisation": "x"})).contains("leave organisation out"));
+        assert!(refused(json!({"provider": "z", "organisation": ""})).contains("claim value"));
     }
 
     #[test]
@@ -962,19 +1106,42 @@ mod tests {
         assert!(refused(json!({"roles": {"admin": [""]}})).contains(".roles"));
         assert!(refused(json!({"roles": {"owner": ["x"]}})).contains("unknown field"));
         assert!(refused(json!({"preset": "google"})).contains("admin_subjects"));
-        with(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"]})).unwrap();
+        // Review H2: Google needs the Workspace domains it admits.
+        assert!(refused(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"]})).contains("needs hosted_domains"));
+        assert!(refused(json!({"preset": "google", "roles": null, "hosted_domains": []})).contains("needs hosted_domains"));
+        assert!(refused(json!({"preset": "google", "roles": null, "hosted_domains": ["Acme.org"]})).contains(".hosted_domains"));
+        assert!(refused(json!({"hosted_domains": ["acme.org"]})).contains("google preset only"));
+        with(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"], "hosted_domains": ["acme.org"]})).unwrap();
+        with(json!({"preset": "google", "roles": null, "email_domains": ["acme.org"]})).unwrap();
         assert!(refused(json!({"admin_subjects": ["1043"]})).contains("google preset only"));
         // Preset options belong to their preset.
         assert!(refused(json!({"zitadel_project_id": "1"})).contains("zitadel preset only"));
-        assert!(refused(json!({"preset": "zitadel", "zitadel_project_id": "abc"})).contains("(digits)"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "abc"})).contains("(digits)"));
+        // Review M5: Zitadel needs the project's owner organisation; foreign roles make guests.
+        assert!(refused(json!({"preset": "zitadel"})).contains("zitadel_project_owner_org"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_owner_org": "acme"})).contains("zitadel_project_owner_org"));
+        assert!(refused(json!({"zitadel_project_owner_org": "1"})).contains("zitadel preset only"));
+        assert!(refused(json!({"zitadel_foreign_organisations": "organisations"})).contains("zitadel preset only"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_foreign_organisations": "members"})).contains("unknown variant"));
+        let zitadel = with(json!({"preset": "zitadel", "zitadel_project_owner_org": "1"})).unwrap().deployment.unwrap();
+        assert_eq!(zitadel.providers[0].zitadel_foreign_organisations, ZitadelForeign::Guests);
+        assert_eq!(zitadel.primary().map(|(_, claim)| claim), Some("1".into()), "with guests, the owner organisation is the provider's only one");
         assert!(refused(json!({"keycloak_organizations": true, "preset": "entra"})).contains("keycloak preset only"));
+        assert!(refused(json!({"roles_apply_to_all_organisations": true})).contains("needs keycloak_organizations"));
+        assert!(refused(json!({"entra_require_acct": true})).contains("entra preset only"));
+        with(json!({"entra_require_acct": true, "preset": "entra"})).unwrap();
+        with(json!({"roles_apply_to_all_organisations": true, "keycloak_organizations": true})).unwrap();
         // Each preset asks for the scopes its claims need.
-        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_id": "273800000000000001"})), "openid email profile urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
-        assert_eq!(scope(json!({"preset": "zitadel"})), "openid email profile urn:zitadel:iam:org:projects:roles");
+        // Review M7: offline_access by default (refresh tokens, so role changes are rechecked).
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "273800000000000001"})), "openid email profile offline_access urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1"})), "openid email profile offline_access urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "offline_access": false})), "openid email profile urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": null, "claims": {"roles": "$.roles"}})), "openid email profile offline_access");
         assert_eq!(scope(json!({"preset": "entra"})), "openid email profile offline_access");
         assert_eq!(scope(json!({"keycloak_organizations": true})), "openid email profile organization");
         assert_eq!(scope(json!({})), "openid email profile");
-        assert_eq!(scope(json!({"preset": "google", "roles": null})), "openid email profile");
+        assert_eq!(scope(json!({"preset": "google", "roles": null, "hosted_domains": ["acme.org"]})), "openid email profile");
+        assert!(!with(json!({"preset": "google", "roles": null, "hosted_domains": ["acme.org"]})).unwrap().deployment.unwrap().providers[0].can_refresh());
     }
 
     #[test]

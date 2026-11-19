@@ -109,7 +109,8 @@ fn roles_decide_who_reads_writes_and_shares() {
     let doc = Project::new();
     assert_eq!(ana.append(&p, "a", 1, &doc.add_text("f1", "main.tex", None, "x")).status, 201);
     for (email, role) in [("ben@example.org", "editor"), ("cat@example.org", "reviewer"), ("dan@example.org", "viewer"), ("gus@partner.org", "viewer")] {
-        let reply = ana.invite(&p, email, role);
+        // gus is a guest: invited as one.
+        let reply = if email == "gus@partner.org" { ana.invite_guest(&p, email, role) } else { ana.invite(&p, email, role) };
         assert_eq!((reply.status, reply.json()["status"].as_str()), (201, Some("shared")), "{email}");
     }
     // Editors write updates and objects; reviewers and viewers read but are refused writes.
@@ -580,7 +581,8 @@ fn invitations_stay_inside_the_projects_organisation() {
     let providers: Vec<(&str, &str)> = details["members"].as_array().unwrap().iter().map(|m| (m["email"].as_str().unwrap(), m["provider"].as_str().unwrap())).collect();
     assert_eq!(providers, vec![("alice@example.org", "test"), ("victim@example.org", "test")]);
     // The partner's organisation is another one: its member cannot even name this project's.
-    let test_org = sr.env.org();
+    // Two providers and no primary organisation: the deployment's ID names neither.
+    let test_org = ana.call("GET", "/v1/sr/projects", None).json()["org"].as_str().unwrap().to_owned();
     let partner_org = early.call("GET", "/v1/sr/projects", None).json()["org"].as_str().unwrap().to_owned();
     assert_ne!(test_org, partner_org);
     assert_eq!(request("GET", &format!("{}/v1/sr/projects", sr.url()), Some(&early.token), &[("Scribyra-Org", test_org)], vec![]).status, 404);

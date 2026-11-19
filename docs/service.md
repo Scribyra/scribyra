@@ -158,7 +158,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
   "providers": [
     {"id": "acme", "label": "Acme account", "issuer": "https://acme.zitadel.cloud",
      "client_id": "…", "client_secret_file": "/run/secrets/scribyra-oidc",
-     "preset": "zitadel", "zitadel_project_id": "273800000000000001",
+     "preset": "zitadel", "zitadel_project_id": "273800000000000001", "zitadel_project_owner_org": "273700000000000001",
      "roles": {"admin": ["scribyra:admin"], "member": ["scribyra:member"], "guest": ["scribyra:guest"]},
      "offline_access": true}
   ]
@@ -175,6 +175,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `guests` | `"off"` | `"off"` refuses what the provider marks as guests ([Sign-in](#single-sign-on-oidc)); `"shared"` admits them to projects shared with them. Must be `"off"` in an end-to-end deployment |
 | `notify_on_admin_access` | `true` | Members see "An administrator opened this project on …" (`adminActivity` in project details, `adminOpened` in lists and heads); `false` hides it from them. The access is audited either way |
 | `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
+| `primary_organisation` | see below | `{"provider": "<id>", "organisation": "<claim value>"}`: the organisation that holds the deployment's ID. `organisation` is left out for a provider whose tokens name no organisation (its one organisation) and required otherwise |
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
 | `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour`, `per_project_per_minute`, `active_per_member`, `active_per_owner`, `retention_days` ([Server compile](#server-compile)) |
@@ -183,11 +184,25 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 There is **no list of people or administrators** in the configuration (design decision 9):
 identity, organisations, roles and guest status come from each provider's tokens. The deployment's
 ID is random, made at first start and recorded with the mode (a database that already held
-exactly one organisation from before keeps it); the first organisation the deployment makes
-(the first provider's, at the first start, when its tokens name no organisation) takes that ID, so
-a deployment with one organisation keeps the ID end-to-end clients sign with. `GET /v1/deployment`
-is public and answers `{name, encryption, offline, compile, linkSharing, providers: [{id, label}],
-org}` (`org`: the deployment's ID); issuers, client IDs and secrets never leave the service.
+exactly one organisation from before keeps it, with its end-to-end membership log and links).
+
+**The primary organisation** is the one organisation that holds the deployment's ID: the one
+`primary_organisation` names or, without it, when the deployment has a single provider whose
+tokens name no organisation, that provider's one organisation. It is made at every start if
+missing. No other organisation ever takes the ID: before this rule (review H1) the first
+organisation to *sign in* took it, so with a provider whose tokens name organisations (Zitadel,
+Entra, Keycloak organisations, Google, a generic `claims.organisation`) a stranger's organisation
+could take over the ID, membership log and links end-to-end clients use. Without a primary
+organisation every organisation has a random ID. A start finds the ID held by another
+organisation than the primary one (or the primary one holding another ID) and refuses with
+`{"event":"deployment_org_conflict","holder":"<provider id>","primary":"<provider id>"}`: name
+the right organisation in `primary_organisation` or, if a stranger's sign-in took the ID under the
+old rule, restore from a backup taken before it (the organisation's projects, links and audit
+chain hang off its ID).
+
+`GET /v1/deployment` is public and answers `{name, encryption, offline, compile, linkSharing,
+providers: [{id, label}], org}`; `org` is the primary organisation's ID (the deployment's), or
+`null` when there is none. Issuers, client IDs and secrets never leave the service.
 
 ### Organisation routes (end-to-end deployments)
 
@@ -282,7 +297,7 @@ editor share. Anyone but the owner may leave a project (remove their own share).
 | `GET /v1/sr/projects/{p}/snapshot` | → `200`, the whole Yjs state (one update, v1) covering `Scribyra-Snapshot-Seq`, with the log headers; `404 {"error":"no snapshot"}` before the first one (read the log from 0); `410 {"error":"compacted", floor, snapshot}` when a newer snapshot replaced it while it was read (ask again) |
 | `PUT /v1/sr/projects/{p}/objects/{sha256}` | Body: an asset or history object's plaintext (at most `sr_object_bytes`). → `201` stored, `204` already stored, `400` when the body's SHA-256 is not the path's, `403` reviewer/viewer (checked again inside the upload's transaction, as for appends), `413`, `507`, `503` when `uploads` are all busy. Upload objects before the update that references them |
 | `GET /v1/sr/projects/{p}/objects/{sha256}` | → `200` the plaintext (checked against its hash), `404 {"error":"unknown object"}` |
-| `POST /v1/sr/projects/{p}/invitations` | `{email, role}` (owner, editors). Invitations stay inside the project's organisation: if accounts of that organisation (members and administrators, or guests when `guests: "shared"`) have that **verified** email, they are shared at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Accounts of other organisations are never matched, whatever their email. Otherwise `201 {status:"pending", invitation: {id, email, role, expires}, project}`: the first sign-in (or refresh that adds the organisation) of an account with that verified email that holds a role in the project's organisation turns it into a share. An email whose `email_verified` the provider did not send counts as unverified and matches nothing. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
+| `POST /v1/sr/projects/{p}/invitations` | `{email, role, guest?, account?}` (owner, editors). Invitations stay inside the project's organisation: if an account of that organisation has that **verified** email, it is shared with at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Only members and administrators match, unless the request says `guest: true` (an explicit guest invitation; with `guests: "shared"`), which matches guests too. When several accounts match, nobody is shared with: `409 {"code": "choose_account", "candidates": [{account, name, email, provider, role}]}`, and the inviter repeats the request with the chosen `account` (`404` when that is not one of them). Accounts of other organisations are never matched, whatever their email. Otherwise `201 {status:"pending", invitation: {id, email, role, expires}, project}`: the first sign-in (or refresh that adds the organisation) of an account with that verified email that is a member or administrator of the project's organisation (or a guest, for a guest invitation) turns it into a share. An email whose `email_verified` the provider did not send counts as unverified and matches nothing. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
 | `DELETE /v1/sr/projects/{p}/invitations/{id}` | → `204` withdrawn, `404` unknown or no longer pending |
 | `PUT /v1/sr/projects/{p}/members/{account}` | `{role}` → `200` details (owner, editors), `404` if not a member |
 | `GET /v1/sr/directory` | → `{org, members: [{account, name, email, role}]}`: the organisation's members and administrators (active, verified emails only), to share with. Guests `403` |
@@ -388,8 +403,14 @@ exported heads outside the database.
 | `session.sign_in`, `session.sign_out` | A sign-in is redeemed; a session signs out | the account; `{provider, role}` |
 | `session.refused` | A sign-in in progress is refused (`reason`: a claim check, `no_role`, `guest`, `no_organisation`, `token_exchange`, `account_disabled`, `account_removed`, …) | `system` (or the account, when known); `{reason, provider}`; in the deployment chain, or in the organisations that stopped the account. Requests with an unknown `state` are not recorded |
 | `session.revoked`, `account.blocked` | Back-channel logout, a refused refresh token (`invalid_grant` blocks the account), a refresh that leaves no role (`reason`: `no_role`, `guest`, `no_organisation`, `no_access`) | `system`; `{reason, provider}` |
+
+Sign-ins, sign-outs, revocations and blocks are recorded in each organisation where the account
+holds a role and is not stopped at that moment (a revocation because a refresh took roles away
+also in the organisations that lost them); an organisation the person left, or where an
+administrator disabled or removed them, does not see their later sessions.
 | `account.created`, `account.role_changed` | An account's first sign-in into an organisation; a role the provider changed at a sign-in or refresh (`to: null` when it took the role away) | `{provider, role}`; `system`, `{from, to, by: "provider"}` |
 | `account.disabled`, `account.unblocked`, `account.removed` | Admin area; `account unblock` (`system`, `by: "cli"`) | `{from}`; removal `{transferredTo, projects, shares}` |
+| `organisation.renamed` | An administrator renamed the organisation | the organisation; `{from, to}` |
 | `project.created`, `project.renamed`, `project.deleted`, `project.transferred` | Owners, editors and administrators (`admin: true` when an administrator acted) | target the project |
 | `project.admin_open`, `project.admin_edit` | Open or edit as administrator | |
 | `project.compile_mode` | `PUT …/settings` | `{mode}` |
@@ -441,7 +462,7 @@ disable each other.
 | Route | Body → answer |
 | --- | --- |
 | `GET /v1/admin/members?removed=true` | → `{account, org, members: [{account, name, email, provider, role, state, guest, created, lastSeen, storage, projects}]}`: the organisation's memberships. `role` is the provider's (`admin`, `member`, `guest`, or `null` when it grants none now), read only; `state` is `active`, `disabled`, `removed` or `blocked` (the provider refused a refresh token); `storage`: sealed bytes of owned projects there; removed members only with `removed=true`. There is no route that changes roles: grant and remove them at the provider |
-| `POST /v1/admin/members/{a}/disable` | → the member: an emergency stop in this organisation: the account's sessions at the organisation's provider are revoked (waiting heads polls answer `401`; it may sign in again for other organisations), its access to this organisation is refused (`403 code account_disabled` at sign-in when no other organisation is left) until unblocked. `409` for the caller's own account or the last active administrator |
+| `POST /v1/admin/members/{a}/disable` | → the member: an emergency stop in this organisation, and only there: each of the account's current sessions loses this organisation for good (table `sso_login_stops`; waiting heads polls and requests in it answer `404 unknown_org`, or `401` for a session left with no organisation, and end-to-end device sessions in it are closed) while the same sessions keep working in the account's other organisations; its access to this organisation is refused (`403 code account_disabled` at sign-in when no other organisation is left) until unblocked. `409` for the caller's own account or the last active administrator |
 | `POST /v1/admin/members/{a}/unblock` | → the member: a disabled or removed member may use the organisation again (with the role the provider gives), and a block from a refused refresh token is cleared |
 | `POST /v1/admin/members/{a}/remove` | `{transfer?}` → `{account, state: "removed", transferredTo, projects}` (`409` as for disable): as disable, and their shares in this organisation's projects are removed and the projects they own there transferred to `transfer` (an active member or administrator there, its membership locked meanwhile; default the caller); refused (`account_removed`) until unblocked. Remove the role at the provider too. End-to-end: removal from the organisation still needs an administrator's app to sign `person.remove` |
 | `GET /v1/admin/projects` | → `{encryption: "server", projects: [{id, name, owner, members, size, head, created, updated, role, openUntil}]}`; end-to-end: `{encryption: "e2ee", projects: [{id, size, head, epoch}]}` |
@@ -452,6 +473,7 @@ disable each other.
 | `GET /v1/admin/export` | → a streamed zip (stored, UTF-8 names; ZIP64 sizes and offsets from 4 GiB): `projects/<name>-<id8>/<path>` for every file of every project materialised from the server's state, `projects.json` (per project its folder, `seq`, `mainFile` and `missing`: assets whose object is not on the server, and files the project tree marks as conflicts, such as an invalid name, which are never written; every entry is a relative path without `.`, `..`, backslashes, colons or control characters, unique ignoring case), `members.json`, `audit.jsonl` (every event of the organisation's chain and a final `{"head": {seq, hash}}`, streamed with a data descriptor); only the organisation's projects and members. One export at a time per replica (`429`); it holds one file in memory at a time (an asset is at most `sr_object_bytes`) |
 | `GET /v1/admin/audit?actor&action&target&targetType&from&to&before&limit` | → the organisation's chain: `{org, events: [{seq, time, actor, actorName, actorEmail, ip, action, targetType, target, detail, prev, hash}], head: {seq, hash}, next}` newest first; `action` matches an action or its first part (`project`); `from`/`to` in ms; `limit` ≤ 500; page with `before=next` |
 | `GET /v1/admin/audit/export?…&format=jsonl|csv` | → the filtered events oldest first, as JSON lines ending with `{"head": …}` or CSV (every field quoted, formula prefixes defused, a final `# head <seq>:<hash>` line); header `Scribyra-Audit-Head: <seq>:<hash>`; recorded as `audit.export` |
+| `PUT /v1/admin/organisation` | `{name}` (1–128 characters) → `{org, name}`: renames this organisation; no token renames it afterwards |
 | `GET /v1/admin/settings` | → the deployment's policy (providers with their claims mapping, without client IDs or secret files; `adminSubjects` as a count), `notifyOnAdminAccess`, the caller's `org` and the `policy` hash |
 
 In end-to-end mode open, edit, transfer and export answer `409` (the service cannot read
@@ -641,10 +663,16 @@ because the service only ever redirects back to a configured origin.
 | `claims` | | A generic mapping of JSON paths into the ID token: `{roles, organisation?, organisation_name?, guest?: {path, equals}}`. `roles` names a string or a list of strings; without `organisation` the provider has one organisation. A path is `$` followed by `.key` segments (letters, digits, `_`, `-`) or `["key"]` segments for names with other characters, for example `$["urn:zitadel:iam:org:project:roles"]` or `$.resource_access.scribyra.roles`; segments select object members only (no wildcards, indexes or evaluation) |
 | `roles` | `{}` | Provider role names for each deployment role: `{"admin": [...], "member": [...], "guest": [...]}`; the highest a person holds in an organisation wins. At least one `admin` or `member` name (except `google`, which takes none) |
 | `zitadel_project_id` | none | `zitadel` only: the project whose roles count (its own roles claim is read first) and whose audience scope is asked for |
+| `zitadel_project_owner_org` | required for `zitadel` | The ID of the Zitadel organisation that owns the project (digits) |
+| `zitadel_foreign_organisations` | `"guests"` | `zitadel` only. `"guests"`: the owner organisation is the provider's only organisation; roles it keys make members and administrators, and a role keyed by any other organisation (a project grant, whose users that organisation manages) makes the person a **guest** of the owner organisation (refused with `guests: "off"`). `"organisations"`: each organisation keying a role is its own isolated Scribyra organisation (hosting several tenants from one project); a role keyed by an organisation other than the person's own (`urn:zitadel:iam:user:resourceowner:id`) makes a guest there |
 | `keycloak_organizations` | `false` | `keycloak` only: ask for the `organization` scope and take organisations from that claim (Keycloak 26); without it the provider has one organisation |
+| `roles_apply_to_all_organisations` | `false` | `keycloak` with `keycloak_organizations` only: realm, client and group roles without an organisation prefix count in *every* organisation of someone in several. Off, they count only for someone in exactly one organisation, and someone in several needs roles named `<alias>:<role>` (below) |
+| `hosted_domains` | `[]` | `google` only: the Workspace domains (`hd`) admitted; another domain is refused with `domain`. A `google` provider needs this or `email_domains` (then those domains are the admitted `hd` values), or it refuses to start: without either, every Workspace domain in the world could sign in |
+| `entra_require_acct` | `false` | `entra` only: refuse tokens without the `acct` optional claim (`missing_claim`) instead of telling guests apart by `idp` |
 | `admin_subjects` | `[]` | `google` only: the exact `sub` values of administrators. Google's tokens carry no roles, so this is the one place a configuration names people (a Directory API group check may come later) |
-| `offline_access` | `false` | Adds the `offline_access` scope, which some providers require before they issue refresh tokens |
+| `offline_access` | `true`, except `keycloak` and `google` | Adds the `offline_access` scope, which most providers (Zitadel, Entra, Okta) require before they issue refresh tokens; without refresh tokens logins are never rechecked. Keycloak issues refresh tokens without it (and with it gives offline sessions, which need the `offline_access` role); Google does not take the scope |
 | `session_hours` | 12 | 1–720: how long a login lasts |
+| `no_refresh_session_minutes` | 60 | 5–43200: how long a login lasts at most when the provider gave it no refresh token (capped by `session_hours`). Such a login is never rechecked, so a role taken away, a guest mark or a disabled account at the provider reaches it only when it ends and the person signs in again |
 | `recheck_minutes` | 10 | 1–1440: how often a login with a refresh token is rechecked |
 | `scopes` | `[]` | Extra scopes beyond `openid email profile` and those `offline_access` and the preset add |
 
@@ -655,11 +683,19 @@ organisation:
 
 | Preset | Organisation | Roles | Guest | Scopes added |
 | --- | --- | --- | --- | --- |
-| `zitadel` | each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`); name: the map's value (the org's domain) | the role keys granted in that org | a role granted by an org other than `urn:zitadel:iam:user:resourceowner:id` (a project grant), or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
-| `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles` and `resource_access.{client_id}.roles` (another client's roles do not count) | a role mapped to `guest` | `organization` with `keycloak_organizations` |
-| `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B), or a role mapped to `guest` | `offline_access` |
-| `google` | `hd` (accounts without it are refused) | everyone a member; `admin_subjects` administrators | never | none |
-| generic `claims` | `claims.organisation`, `claims.organisation_name` | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
+| `zitadel` | `zitadel_project_owner_org` (with `"guests"`), or each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`) with `"organisations"`; name: the map's value (the org's domain) | the role keys the organisation keys | `"guests"`: a role keyed by an org other than the owner; `"organisations"`: a role keyed by an org other than `urn:zitadel:iam:user:resourceowner:id`; or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
+| `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles`, `resource_access.{client_id}.roles` (another client's roles do not count) and `groups` (a leading `/` dropped); with organisations, see below | a role mapped to `guest` | `organization` with `keycloak_organizations` |
+| `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B); without `acct`, an `idp` claim other than the tenant's own `https://sts.windows.net/{tid}/` (or refused with `entra_require_acct`); or a role mapped to `guest` | `offline_access` |
+| `google` | `hd` (accounts without it are refused, and so is a domain outside `hosted_domains`, else `email_domains`) | everyone a member; `admin_subjects` administrators | never | none |
+| generic `claims` | `claims.organisation`, `claims.organisation_name` (names a new organisation only) | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
+
+**Keycloak roles and organisations.** Realm, client and group roles belong to no organisation, so
+for someone whose token lists several organisations they count nowhere (review M4: an
+administrator of one organisation became one of all), unless `roles_apply_to_all_organisations`
+is set. Name a role for one organisation as `<alias>:<role>`, where `<role>` is a name the `roles`
+mapping lists: for example a client role or group `acme:scribyra:admin` makes an administrator of
+organisation `acme` only. Someone in exactly one organisation gets their unprefixed roles there
+too; the highest role wins.
 
 A guest is never more than a guest. Zitadel only puts roles in ID tokens with the project's
 "Assert roles on authentication" and the application's "User roles inside ID token" settings on.
@@ -678,22 +714,27 @@ what the token lacks is taken from the provider's userinfo endpoint (whose `sub`
 `email_verified` is false: such an email is never shown as the account's and never matches an
 invitation. Each organisation is a row of `organisations` (provider, claim value, name; random
 64-hex ID), made when a token first names it (a provider without an organisation claim gets its
-one organisation at start); each role is a row of `memberships` (account, organisation, role,
+one organisation at start). Its name is the first token's; later only a preset's organisation
+name, which the provider itself sets (a Zitadel organisation's domain, a Keycloak alias, a Google
+domain), updates it, never a generic `claims.organisation_name` (which people may be able to edit
+at their provider, so the last sign-in used to rename the organisation), and after an
+administrator renamed it (`PUT /v1/admin/organisation`) no token does; each role is a row of `memberships` (account, organisation, role,
 state), recomputed from every token of that provider: a new organisation is `account.created`
 there, a changed role `account.role_changed`, an organisation the token no longer names loses the
 role (`to: null`; the person's projects stay in it). Memberships at other providers are not
 touched. A login acts only in organisations of the provider it signed in with.
 
-`POST /v1/sso/start {provider, return, challenge}` → `{url}`;`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
-`/v1/sso/callback/<provider>`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>`;
+`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
+`/v1/sso/callback/<provider>`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>` (`&org=`
+only with a primary organisation);
 `POST /v1/sso/redeem {code, verifier}` → the login with its `token`; `GET /v1/sso/me` (same body
 without `token`) and `POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`:
 
 ```json
 {"token": "<64 hex>", "expires": 1763600000, "account": "<64 hex>", "provider": "acme",
- "org": "<the deployment's ID>", "role": "member",
- "orgs": [{"id": "<64 hex>", "name": "acme.zitadel.cloud", "provider": "acme", "role": "member", "guest": false},
-          {"id": "<64 hex>", "name": "partner.zitadel.cloud", "provider": "acme", "role": "guest", "guest": true}],
+ "org": "<the primary organisation's ID, or null>", "role": "member",
+ "orgs": [{"id": "<64 hex>", "name": "acme.zitadel.cloud", "provider": "acme", "role": "member", "guest": false, "primary": true},
+          {"id": "<64 hex>", "name": "partner.zitadel.cloud", "provider": "acme", "role": "guest", "guest": true, "primary": false}],
  "email": "ben@acme.org", "emailVerified": true, "name": "Ben", "picture": "https://…",
  "subject": {"email": "ben@acme.org", "name": "Ben"}, "person": null, "state": "unlinked"}
 ```
@@ -705,6 +746,15 @@ unknown_org` for one the account holds no role in), so an end-to-end client can 
 each organisation (`state` is `unlinked`, `linked` or `blocked`: the end-to-end link). `email` is the
 **verified** email or `null`; `subject.email` is whatever the provider sent, for the person's own
 display only. A session whose account has no organisation left answers `401`.
+
+**Which organisation ID the app uses (the H1 contract).** The ID of an organisation is always
+`orgs[].id` of the login; the end-to-end routes (`/v1/orgs/{org}/…`, the session challenge, signed
+events, wraps and entries) and the `Scribyra-Org` header take that ID. `GET /v1/deployment` `org`
+and the login's `org` are only the primary organisation's ID (the one marked `primary: true`) and
+are `null` without one; they are never "the organisation" of someone who signs in, and an app must
+not compare a login's organisations against them or sign with them on their own. An app that
+remembers an end-to-end connection keys it by the organisation ID it chose from `orgs` (and asks
+the person to choose when `orgs` lists several).
 
 ### Organisations and the `Scribyra-Org` header
 
@@ -720,7 +770,7 @@ check it the same way. Error codes the app can show:
 | `400 org_required` | The account is in several organisations and the request named none |
 | `404 unknown_org` | The header names an organisation the caller holds no role in (whether it exists is never confirmed) |
 | `404` `unknown project` | A project of another organisation (or none), whoever asks |
-| `403 no_role`, `guest`, `no_organisation`, `account_disabled`, `account_removed` | Redeem refused (also as `#scribyra-sso-error=<code>` for the first three) |
+| `403 no_role`, `guest`, `no_organisation`, `domain`, `missing_claim`, `account_disabled`, `account_removed` | Redeem refused (also as `#scribyra-sso-error=<code>` for the first five) |
 | `403` `administrators only` | An admin route from someone who is not an administrator of the organisation |
 
 **In the app** (server-readable; `web/org-server.js`). The browser keeps the account's `orgs` from
@@ -796,10 +846,14 @@ provider again, but stay blocked until an administrator unlinks them. Their acco
 client error (except 408 and 429) revokes only that login without blocking, so a
 wrong client secret does not block everyone. Network and server errors keep the login
 and retry on the next pass (the claim is undone); the service logs only counters
-(`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
-simply expire after `session_hours`: **role changes, guest marks and provider disablement
-reach such logins only when they expire**, so set `offline_access: true` (or use a provider that
-issues refresh tokens without it, like Keycloak) wherever that matters. Each revocation of a linked member's login (also a
+(`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked: **role
+changes, guest marks and provider disablement reach such logins only when they expire**, so
+they last at most `no_refresh_session_minutes` (an hour by default) rather than `session_hours`
+(review M7: they used to keep a removed role for up to 720 hours). `offline_access` is on by
+default for that reason; a provider that is not expected to issue refresh tokens (`google`, or
+`offline_access: false` on anything but Keycloak) is named at every start in
+`{"event":"sso_no_refresh","providers":["<id>",…]}` and in the `deployment.start` audit event
+(`noRefresh`). Each revocation of a linked member's login (also a
 sign-out or a back-channel logout) closes their device sessions at once.
 
 **Back-channel logout** (OpenID Connect Back-Channel Logout 1.0) is accepted at
@@ -821,20 +875,31 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
   verified for many accounts, so `email_domains` can refuse legitimate users; test it
   with your tenant before relying on it. Use `preset: "entra"` with app roles (define them on
   the app registration and assign them); a multi-tenant app gets one organisation per tenant.
+  **Add the `acct` optional claim to the ID token** (app registration, Token configuration):
+  Entra sends it only when asked, and it is what marks B2B guests. Without it the service treats
+  a token whose `idp` names another issuer than the tenant as a guest (review M6: such guests
+  counted as members), which covers B2B guests from other tenants and Microsoft accounts; set
+  `entra_require_acct: true` to refuse tokens without `acct` altogether.
 - *Zitadel*: issuer `https://<instance>.zitadel.cloud`; `preset: "zitadel"` with the project's
-  ID. Create the roles (for example `scribyra:admin`, `scribyra:member`) in the project, grant
-  them to users of your organisation, and to other organisations through project grants (their
-  users are then guests here). Turn on "Assert roles on authentication" and "User roles inside ID
-  token".
+  ID and its owner organisation's ID (`zitadel_project_owner_org`). Create the roles (for example
+  `scribyra:admin`, `scribyra:member`) in the project and grant them to users of your
+  organisation. A project grant lets another organisation grant the roles to *its* users, keyed by
+  that organisation: by default they are only guests of yours (review M5: before, an administrator
+  of the granted organisation became an administrator of a new Scribyra organisation of their
+  own). Set `zitadel_foreign_organisations: "organisations"` only when one project deliberately
+  serves several separate tenants. Turn on "Assert roles on authentication" and "User roles inside
+  ID token".
 - *Google Workspace*: issuer `https://accounts.google.com`; `preset: "google"` with
-  `admin_subjects`. The Workspace domain (`hd`) is the organisation; consumer accounts are
+  `hosted_domains` (your Workspace domains; required) and `admin_subjects`. The Workspace domain (`hd`) is the organisation; consumer accounts are
   refused. Google issues refresh tokens only for offline access requests, which this service
-  does not make, so Google logins are not rechecked and last for `session_hours`.
+  does not make, so Google logins are not rechecked and last for `no_refresh_session_minutes`
+  (an hour by default).
 - *Okta and others*: a generic `claims` mapping, for example `{"roles": "$.groups"}` once you
   added a groups claim to the authorization server (`https://<org>.okta.com/oauth2/<server-id>`).
-  Use `offline_access` for refresh tokens.
+  `offline_access` (on by default) asks for refresh tokens; allow the refresh token grant for the
+  client.
 - *Keycloak*: issuer `https://<host>/realms/<realm>`; `preset: "keycloak"` with realm or client
-  roles. Keycloak issues refresh tokens without `offline_access` and supports back-channel
+  roles (with organisations, per-organisation `<alias>:<role>` client roles or groups). Keycloak issues refresh tokens without `offline_access` and supports back-channel
   logout (set the client's back-channel logout URL).
 
 For local trials and the tests there is a minimal provider,

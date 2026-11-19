@@ -8,10 +8,10 @@
 //!
 //! | Preset | Organisation | Roles | Guest |
 //! | --- | --- | --- | --- |
-//! | `zitadel` | each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role granted by an organisation other than `urn:zitadel:iam:user:resourceowner:id`, or a role mapped to guest |
-//! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles` | a role mapped to guest |
-//! | `entra` | `tid` | `roles` | `acct = 1`, or a role mapped to guest |
-//! | `google` | `hd` (refused without) | everyone a member, `admin_subjects` administrators | never |
+//! | `zitadel` | `zitadel_project_owner_org`; with `zitadel_foreign_organisations: organisations` each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role keyed by another organisation than the owner (`guests`) or than `urn:zitadel:iam:user:resourceowner:id` (`organisations`), or a role mapped to guest |
+//! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles`, `groups`; with several organisations only `<alias>:<role>` names count (in that one), unless `roles_apply_to_all_organisations` | a role mapped to guest |
+//! | `entra` | `tid` | `roles` | `acct = 1`; without `acct`, an `idp` other than `https://sts.windows.net/{tid}/` (refused instead with `entra_require_acct`); or a role mapped to guest |
+//! | `google` | `hd` (refused without, and unless in `hosted_domains`, else `email_domains`) | everyone a member, `admin_subjects` administrators | never |
 //! | generic | `claims.organisation` (else the provider's one), `claims.organisation_name` | `claims.roles` | `claims.guest {path, equals}`, or a role mapped to guest |
 //!
 //! `roles` maps provider role names to deployment roles; the highest wins. A guest is never more
@@ -19,7 +19,7 @@
 //! are refused when the deployment admits none (`guest`), and a token without the organisation
 //! claim its mapping needs is refused (`no_organisation`).
 use crate::{
-    config::{Guests, Preset, Provider},
+    config::{Guests, Preset, Provider, ZitadelForeign},
     sso::Role,
 };
 use serde_json::{Map, Value};
@@ -96,6 +96,11 @@ pub enum Refusal {
     /// The mapping needs an organisation claim the token lacks (Google without `hd`, Entra
     /// without `tid`, a configured organisation path or Keycloak organisations missing).
     NoOrganisation,
+    /// The organisation the token names is not one this provider admits (a Google Workspace
+    /// domain outside `hosted_domains`, or `email_domains` when that is not set).
+    Domain,
+    /// A claim the configuration requires is missing (Entra's `acct` with `entra_require_acct`).
+    MissingClaim,
 }
 impl Refusal {
     pub fn code(self) -> &'static str {
@@ -103,6 +108,8 @@ impl Refusal {
             Self::NoRole => "no_role",
             Self::Guest => "guest",
             Self::NoOrganisation => "no_organisation",
+            Self::Domain => "domain",
+            Self::MissingClaim => "missing_claim",
         }
     }
 }
@@ -183,12 +190,15 @@ fn grant(claim: String, name: Option<String>, role: Option<Role>, guest: bool) -
     Some(Grant { claim, name, role: if guest { Role::Guest } else { role }, guest })
 }
 
-/// Whether this provider's tokens never name an organisation: then it has exactly one.
-pub fn single_organisation(provider: &Provider) -> bool {
+/// The one organisation (its claim value) of a provider whose tokens never name one, so the
+/// configuration alone fixes it; `None` when tokens name organisations.
+pub fn fixed_organisation(provider: &Provider) -> Option<String> {
     match (provider.preset, &provider.claims) {
-        (Some(Preset::Keycloak), _) => !provider.keycloak_organizations,
-        (None, Some(rules)) => rules.organisation.is_none(),
-        _ => false,
+        (Some(Preset::Keycloak), _) if !provider.keycloak_organizations => Some(String::new()),
+        (None, Some(rules)) if rules.organisation.is_none() => Some(String::new()),
+        // With foreign roles making guests, the project's owner is Zitadel's only organisation.
+        (Some(Preset::Zitadel), _) if provider.zitadel_foreign_organisations == ZitadelForeign::Guests => provider.zitadel_project_owner_org.clone(),
+        _ => None,
     }
 }
 /// The organisations, roles and guest marks this provider's token gives `subject`, after the
@@ -212,16 +222,35 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
                     }
                 }
             }
-            for (org, org_name, names) in orgs {
-                // A role granted by another organisation (a project grant) makes a guest there.
-                let foreign = owner.as_deref() != Some(org.as_str());
-                grants.extend(grant(org, org_name, mapped(provider, names), foreign));
+            match (provider.zitadel_foreign_organisations, &provider.zitadel_project_owner_org) {
+                // Review M5: one organisation, the project owner's. Only roles it keys make members
+                // and administrators; a role keyed by another organisation (a project grant, whose
+                // users that organisation manages) makes a guest of it.
+                (ZitadelForeign::Guests, Some(project_owner)) => {
+                    let (own, foreign): (Vec<_>, Vec<_>) = orgs.into_iter().partition(|(o, ..)| o == project_owner);
+                    let own = own.into_iter().next();
+                    let org_name = own.as_ref().and_then(|(_, n, _)| n.clone());
+                    let role = own.and_then(|(_, _, names)| mapped(provider, names));
+                    let guest = mapped(provider, foreign.into_iter().flat_map(|(_, _, names)| names));
+                    grants.extend(grant(project_owner.clone(), org_name.clone(), role, false).or_else(|| grant(project_owner.clone(), org_name, guest, true)));
+                }
+                // Each organisation keying a role is its own; a role granted by an organisation
+                // other than the person's own makes a guest there.
+                _ => {
+                    for (org, org_name, names) in orgs {
+                        let foreign = owner.as_deref() != Some(org.as_str());
+                        grants.extend(grant(org, org_name, mapped(provider, names), foreign));
+                    }
+                }
             }
         }
         (Some(Preset::Keycloak), _) => {
             let realm = claims.get("realm_access").and_then(|r| r.get("roles"));
             let client = claims.get("resource_access").and_then(|r| r.get(&provider.client_id)).and_then(|c| c.get("roles"));
-            let role = mapped(provider, strings(realm).into_iter().chain(strings(client)));
+            // Group names (a group membership mapper), without a full path's leading slash.
+            let groups = strings(claims.get("groups")).into_iter().map(|g| g.strip_prefix('/').unwrap_or(g));
+            let names: Vec<&str> = strings(realm).into_iter().chain(strings(client)).chain(groups).take(MAX_ROLE_NAMES).collect();
+            let role = mapped(provider, names.iter().copied());
             if provider.keycloak_organizations {
                 // Keycloak 26: a list of aliases, or an object keyed by alias (with attributes).
                 let aliases: Vec<String> = match claims.get("organization") {
@@ -233,7 +262,14 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
                 if aliases.is_empty() {
                     return Err(Refusal::NoOrganisation);
                 }
+                // Realm and client roles are not per organisation (review M4): they count in every
+                // organisation only for someone in one, or with roles_apply_to_all_organisations;
+                // otherwise only roles named `<alias>:<role>` count, in that organisation.
+                let everywhere = aliases.len() == 1 || provider.roles_apply_to_all_organisations;
                 for alias in aliases.into_iter().take(MAX_ORGS) {
+                    let own = names.iter().filter_map(|n| n.strip_prefix(alias.as_str())?.strip_prefix(':'));
+                    let own = mapped(provider, own);
+                    let role = if everywhere { [role, own].into_iter().flatten().max_by_key(|r| rank(*r)) } else { own };
                     let org_name = Some(alias.clone());
                     grants.extend(grant(alias, org_name, role, false));
                 }
@@ -243,11 +279,22 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
         }
         (Some(Preset::Entra), _) => {
             let tenant = claims.get("tid").and_then(scalar).ok_or(Refusal::NoOrganisation)?;
-            let guest = equals(claims.get("acct"), "1");
+            // `acct` is an optional claim the app registration must add (review M6). Without it, a
+            // B2B guest still shows as an `idp` other than the tenant's own issuer.
+            let guest = match claims.get("acct") {
+                Some(acct) => equals(Some(acct), "1"),
+                None if provider.entra_require_acct => return Err(Refusal::MissingClaim),
+                None => claims.get("idp").is_some_and(|idp| idp.as_str() != Some(&format!("https://sts.windows.net/{tenant}/"))),
+            };
             grants.extend(grant(tenant, None, mapped(provider, strings(claims.get("roles"))), guest));
         }
         (Some(Preset::Google), _) => {
             let domain = claims.get("hd").and_then(scalar).ok_or(Refusal::NoOrganisation)?;
+            // Only the Workspace domains the configuration names (review H2).
+            let allowed = if provider.hosted_domains.is_empty() { &provider.email_domains } else { &provider.hosted_domains };
+            if !allowed.contains(&domain) {
+                return Err(Refusal::Domain);
+            }
             let role = if provider.admin_subjects.iter().any(|s| s == subject) { Role::Admin } else { Role::Member };
             grants.extend(grant(domain.clone(), Some(domain), Some(role), false));
         }
@@ -309,8 +356,27 @@ mod tests {
     }
 
     #[test]
+    fn zitadel_project_grants_make_guests_of_the_owner_organisation() {
+        // Review M5: with a project grant to organisation 200, its users got roles keyed by their
+        // own organisation and became members and administrators of a new organisation.
+        let p = provider(json!({"preset": "zitadel", "zitadel_project_owner_org": "100"}));
+        let partner = claims(json!({ZITADEL_OWNER: "200", ZITADEL_ROLES: {"scribyra:admin": {"200": "partner"}}}));
+        assert_eq!(map(&p, Guests::Shared, &partner, "u"), Ok(vec![g("100", None, Role::Guest, true)]));
+        assert_eq!(map(&p, Guests::Off, &partner, "u"), Err(Refusal::Guest));
+        // Roles the owner keys make members and administrators, whoever's user it is; foreign
+        // ones add nothing to them.
+        let home = claims(json!({ZITADEL_OWNER: "100", ZITADEL_ROLES: {"scribyra:member": {"100": "acme", "200": "partner"}, "scribyra:admin": {"200": "partner"}}}));
+        assert_eq!(map(&p, Guests::Off, &home, "u"), Ok(vec![g("100", Some("acme"), Role::Member, false)]));
+        let invited = claims(json!({ZITADEL_OWNER: "300", ZITADEL_ROLES: {"scribyra:admin": {"100": "acme"}}}));
+        assert_eq!(map(&p, Guests::Off, &invited, "u"), Ok(vec![g("100", Some("acme"), Role::Admin, false)]));
+        // An unmapped foreign role makes nothing.
+        assert_eq!(map(&p, Guests::Shared, &claims(json!({ZITADEL_OWNER: "200", ZITADEL_ROLES: {"x": {"200": "partner"}}})), "u"), Err(Refusal::NoRole));
+        assert_eq!(fixed_organisation(&p), Some("100".into()));
+    }
+
+    #[test]
     fn zitadel_organisations_roles_and_cross_organisation_guests() {
-        let p = provider(json!({"preset": "zitadel"}));
+        let p = provider(json!({"preset": "zitadel", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations"}));
         let token = claims(json!({
             ZITADEL_OWNER: "100",
             ZITADEL_ROLES: {"scribyra:admin": {"100": "acme.zitadel.cloud"}, "scribyra:member": {"100": "acme.zitadel.cloud", "200": "partner.zitadel.cloud"}, "unmapped": {"300": "other"}},
@@ -332,7 +398,7 @@ mod tests {
         // Without a resource owner every grant is foreign: never an administrator by accident.
         assert_eq!(map(&p, Guests::Off, &claims(json!({ZITADEL_ROLES: {"scribyra:admin": {"100": "acme"}}})), "u"), Err(Refusal::Guest));
         // With a project ID, that project's claim counts first.
-        let p = provider(json!({"preset": "zitadel", "zitadel_project_id": "42"}));
+        let p = provider(json!({"preset": "zitadel", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations", "zitadel_project_id": "42"}));
         let both = claims(json!({ZITADEL_OWNER: "100", "urn:zitadel:iam:org:project:42:roles": {"scribyra:member": {"100": "acme"}}, ZITADEL_ROLES: {"scribyra:admin": {"100": "acme"}}}));
         assert_eq!(map(&p, Guests::Off, &both, "u"), Ok(vec![g("100", Some("acme"), Role::Member, false)]));
     }
@@ -346,11 +412,26 @@ mod tests {
         let other = claims(json!({"resource_access": {"other": {"roles": ["scribyra:admin"]}}}));
         assert_eq!(map(&p, Guests::Off, &other, "u"), Err(Refusal::NoRole));
         let p = provider(json!({"preset": "keycloak", "keycloak_organizations": true}));
-        let orgs = claims(json!({"realm_access": {"roles": ["scribyra:member"]}, "organization": {"acme": {"id": ["1"]}, "lab": {}}}));
+        let orgs = claims(json!({"realm_access": {"roles": ["acme:scribyra:member", "lab:scribyra:member"]}, "organization": {"acme": {"id": ["1"]}, "lab": {}}}));
         assert_eq!(map(&p, Guests::Off, &orgs, "u"), Ok(vec![g("acme", Some("acme"), Role::Member, false), g("lab", Some("lab"), Role::Member, false)]));
         let list = claims(json!({"realm_access": {"roles": ["scribyra:member"]}, "organization": ["acme"]}));
         assert_eq!(map(&p, Guests::Off, &list, "u"), Ok(vec![g("acme", Some("acme"), Role::Member, false)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"realm_access": {"roles": ["scribyra:member"]}})), "u"), Err(Refusal::NoOrganisation));
+        // Review M4: in several organisations, a realm or client role is no organisation's: an
+        // administrator of one is not made one of all. Roles named `<alias>:<role>` (realm,
+        // client or group names) count in that organisation only.
+        let admin = claims(json!({"realm_access": {"roles": ["scribyra:admin"]}, "organization": ["acme", "lab"]}));
+        assert_eq!(map(&p, Guests::Off, &admin, "u"), Err(Refusal::NoRole));
+        let scoped = claims(json!({"realm_access": {"roles": ["scribyra:member", "lab:scribyra:member"]}, "resource_access": {"scribyra": {"roles": ["acme:scribyra:admin"]}}, "groups": ["/lab:scribyra:guest", "other:scribyra:admin"], "organization": ["acme", "lab"]}));
+        assert_eq!(map(&p, Guests::Shared, &scoped, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false), g("lab", Some("lab"), Role::Member, false)]));
+        // In one organisation every role is that organisation's, prefixed or not.
+        let one = claims(json!({"realm_access": {"roles": ["scribyra:admin"]}, "organization": ["acme"]}));
+        assert_eq!(map(&p, Guests::Off, &one, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false)]));
+        // The configuration can say realm roles apply in every organisation.
+        let mut all = p.clone();
+        all.roles_apply_to_all_organisations = true;
+        assert_eq!(map(&all, Guests::Off, &admin, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false), g("lab", Some("lab"), Role::Admin, false)]));
+        assert_eq!(map(&all, Guests::Off, &scoped, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false), g("lab", Some("lab"), Role::Member, false)]));
     }
 
     #[test]
@@ -362,13 +443,33 @@ mod tests {
         assert_eq!(map(&p, Guests::Shared, &b2b, "u"), Ok(vec![g("t-1", None, Role::Guest, true)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"roles": ["scribyra:member"]})), "u"), Err(Refusal::NoOrganisation));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"tid": "t-1"})), "u"), Err(Refusal::NoRole));
+        // Review M6: without the optional `acct` claim, a B2B guest (signed in at another
+        // identity provider than the tenant itself) is still a guest.
+        let unmarked = claims(json!({"tid": "t-1", "roles": ["scribyra:admin"], "idp": "https://sts.windows.net/t-home/"}));
+        assert_eq!(map(&p, Guests::Off, &unmarked, "u"), Err(Refusal::Guest));
+        let msa = claims(json!({"tid": "t-1", "roles": ["scribyra:admin"], "idp": "live.com"}));
+        assert_eq!(map(&p, Guests::Shared, &msa, "u"), Ok(vec![g("t-1", None, Role::Guest, true)]));
+        let own = claims(json!({"tid": "t-1", "roles": ["scribyra:admin"], "idp": "https://sts.windows.net/t-1/"}));
+        assert_eq!(map(&p, Guests::Off, &own, "u"), Ok(vec![g("t-1", None, Role::Admin, false)]));
+        assert_eq!(map(&p, Guests::Off, &claims(json!({"tid": "t-1", "roles": ["scribyra:admin"]})), "u"), Ok(vec![g("t-1", None, Role::Admin, false)]));
+        // The configuration can refuse tokens without `acct`.
+        let mut strict = p.clone();
+        strict.entra_require_acct = true;
+        assert_eq!(map(&strict, Guests::Shared, &claims(json!({"tid": "t-1", "roles": ["scribyra:admin"]})), "u"), Err(Refusal::MissingClaim));
+        assert_eq!(map(&strict, Guests::Off, &claims(json!({"tid": "t-1", "roles": ["scribyra:member"], "acct": 0})), "u"), Ok(vec![g("t-1", None, Role::Member, false)]));
     }
 
     #[test]
     fn google_workspace_domains_and_admin_subjects() {
-        let mut p = provider(json!({"preset": "google"}));
+        let mut p = provider(json!({"preset": "google", "hosted_domains": ["acme.org"]}));
         p.roles = Default::default();
         p.admin_subjects = vec!["1001".into()];
+        // Review H2: another Workspace domain is refused, even for a listed subject.
+        assert_eq!(map(&p, Guests::Off, &claims(json!({"hd": "evil.example"})), "1001"), Err(Refusal::Domain));
+        let mut by_email = p.clone();
+        (by_email.hosted_domains, by_email.email_domains) = (vec![], vec!["acme.org".into()]);
+        assert_eq!(map(&by_email, Guests::Off, &claims(json!({"hd": "evil.example"})), "1002"), Err(Refusal::Domain));
+        assert_eq!(map(&by_email, Guests::Off, &claims(json!({"hd": "acme.org"})), "1002"), Ok(vec![g("acme.org", Some("acme.org"), Role::Member, false)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"hd": "acme.org"})), "1001"), Ok(vec![g("acme.org", Some("acme.org"), Role::Admin, false)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"hd": "acme.org"})), "1002"), Ok(vec![g("acme.org", Some("acme.org"), Role::Member, false)]));
         // Consumer accounts (no hosted domain) are refused, even a listed subject.
