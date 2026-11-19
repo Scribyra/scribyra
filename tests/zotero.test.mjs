@@ -3,8 +3,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readBibliography,checkBibliography,citedKeys,entryFingerprint,withCitationKey,fieldChanges,validCitationKey} from '../web/bibtex.js';
-import {composeLinkedFile,planRefresh,applyRefresh,remoteEntry} from '../web/zotero-sync.js';
-import {zoteroApi,ZOTERO_ORIGIN,ZoteroError} from '../web/zotero-api.js';
+import {composeLinkedFile,planRefresh,applyRefresh,remoteEntry} from '../plugins/zotero/src/sync.js';
+import {zoteroApi,ZOTERO_ORIGIN,ZoteroError} from '../plugins/zotero/src/api.js';
 import {fakeZotero,exportItem,zoteroCitationKey} from './helpers/fake-zotero.mjs';
 
 const BIB=`% My references

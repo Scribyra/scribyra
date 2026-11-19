@@ -7,7 +7,7 @@
 // Zotero's current export with the base finds remote changes. An entry changed on only
 // one side takes that side; an entry changed on both is a conflict the person decides.
 // Entries the person added by hand are never touched.
-import {readBibliography,entryFingerprint,withCitationKey,fieldChanges,validCitationKey} from './bibtex.js';
+import {readBibliography,entryFingerprint,withCitationKey,fieldChanges,validCitationKey} from '../../../web/bibtex.js';
 
 /** One Zotero item's export (`include=biblatex` or `bibtex`) as an entry, or null for notes and attachments. */
 export function remoteEntry(item,format){

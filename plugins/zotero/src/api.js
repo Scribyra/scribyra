@@ -1,4 +1,5 @@
-// The Zotero Web API v3, read-only, from this tab. The only destination is
+// The Zotero Web API v3, read-only, from the Zotero plugin through the host's fetch
+// proxy (docs/plugins.md): the plugin may contact only https://api.zotero.org. The only destination is
 // https://api.zotero.org: the origin is fixed here and pagination links pointing
 // anywhere else are refused, so the key cannot be sent to another host. Requests omit
 // cookies and the referrer and are never cached. Nothing here records telemetry.

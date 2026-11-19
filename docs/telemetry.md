@@ -70,11 +70,14 @@ preserved from a peer is the existing `recovery` failure signal, sent only with 
 failures category and carrying no project, session or peer detail. The telemetry
 session ID (below) is unrelated to direct sessions and never derived from them.
 
-Bibliography import and Zotero links add no operation either. Zotero requests,
-API keys, library IDs, collection names and refresh choices record nothing
-(`tests/telemetry-consent.test.mjs` checks that `web/bibtex.js` and the `web/zotero*`
-modules never call the recorder); the edits a refresh applies are local-only `command`
-and `storage_commit` work. See [Zotero](zotero.md).
+Bibliography import, the plugin host and plugins (including the Zotero plugin) add no
+operation either ([plugins](plugins.md#telemetry-and-privacy)). Plugin requests, keys,
+links, plugin ids, permissions and failures are never recorded. Plugin failures are
+shown to the person, not reported. `tests/telemetry-consent.test.mjs` checks that
+`web/bibtex.js`, `web/bib-text.js`, `web/bibliography-import.js`, every `web/plugin*.js`,
+the Zotero plugin's sources and the built packages never call the recorder. The file
+changes a plugin makes are ordinary local-only `command` and `storage_commit` work. See
+[Zotero](zotero.md).
 
 Open in Scribyra links add no operation either. The link, its host, repository,
 ref, folder, file names, sizes, commit and skip report record nothing
