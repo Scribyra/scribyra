@@ -755,6 +755,10 @@ impl Provider {
                     preset.push(format!("urn:zitadel:iam:org:project:id:{id}:aud"));
                 }
                 preset.push("urn:zitadel:iam:org:projects:roles".to_owned());
+                // The user's own organisation (`urn:zitadel:iam:user:resourceowner:id`), which
+                // Zitadel puts in tokens only when asked: without it every role of
+                // `zitadel_foreign_organisations: "organisations"` looked foreign (a guest).
+                preset.push("urn:zitadel:iam:user:resourceowner".to_owned());
             }
             Some(Preset::Keycloak) if self.keycloak_organizations => preset.push("organization".to_owned()),
             _ => {}
@@ -1187,9 +1191,9 @@ mod tests {
         with(json!({"roles_apply_to_all_organisations": true, "keycloak_organizations": true})).unwrap();
         // Each preset asks for the scopes its claims need.
         // Review M7: offline_access by default (refresh tokens, so role changes are rechecked).
-        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "273800000000000001"})), "openid email profile offline_access urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
-        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1"})), "openid email profile offline_access urn:zitadel:iam:org:projects:roles");
-        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "offline_access": false})), "openid email profile urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "273800000000000001"})), "openid email profile offline_access urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles urn:zitadel:iam:user:resourceowner");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1"})), "openid email profile offline_access urn:zitadel:iam:org:projects:roles urn:zitadel:iam:user:resourceowner");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "offline_access": false})), "openid email profile urn:zitadel:iam:org:projects:roles urn:zitadel:iam:user:resourceowner");
         assert_eq!(scope(json!({"preset": null, "claims": {"roles": "$.roles"}})), "openid email profile offline_access");
         assert_eq!(scope(json!({"preset": "entra"})), "openid email profile offline_access");
         assert_eq!(scope(json!({"keycloak_organizations": true})), "openid email profile organization");

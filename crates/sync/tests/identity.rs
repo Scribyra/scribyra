@@ -68,7 +68,7 @@ fn zitadel_organisations_roles_and_guests() {
     let c = sr.env.client();
     // The preset asks for the project's roles and audience.
     let query: std::collections::HashMap<String, String> = url::Url::parse(&c.start().url).unwrap().query_pairs().into_owned().collect();
-    assert_eq!(query["scope"], "openid email profile offline_access urn:zitadel:iam:org:project:id:42:aud urn:zitadel:iam:org:projects:roles");
+    assert_eq!(query["scope"], "openid email profile offline_access urn:zitadel:iam:org:project:id:42:aud urn:zitadel:iam:org:projects:roles urn:zitadel:iam:user:resourceowner");
     let ana = c.login("ana");
     let a = org_of(&sr, "100");
     assert_eq!(orgs(&ana), [(a.clone(), "admin".into(), false)]);

@@ -17,8 +17,9 @@
 //! Each user's ID tokens can take the shape of a provider the service has a preset for:
 //! `roles` (a `roles` claim: generic mappings and Entra app roles), `zitadel` (`{"resourceowner":
 //! "<org id>", "project_id": "<id>", "roles": {"<role>": {"<org id>": "<org domain>"}}}`: the
-//! project roles claim, also under the project's own name when `project_id` is set, and the
-//! resource owner claims), `keycloak` (`{"realm_roles": [], "client_roles": {"<client>": []},
+//! project roles claim, also under the project's own name when `project_id` is set, and, when
+//! the sign-in asked for the scope `urn:zitadel:iam:user:resourceowner`, the resource owner
+//! claims), `keycloak` (`{"realm_roles": [], "client_roles": {"<client>": []},
 //! "organization": …}`), `entra` (`{"tid": "…", "acct": 0|1}`), `hd` (Google Workspace) and any
 //! other `claims`. `email_verified` is left out of tokens when not given (a missing claim);
 //! `userinfo_only` names profile claims (`email`, `email_verified`, `name`, `picture`) that only
@@ -208,10 +209,13 @@ struct Code {
     sid: String,
     until: Instant,
     offline: bool,
+    scope: String,
 }
 struct Refresh {
     client_id: String,
     username: String,
+    /// The sign-in's scopes, which a refreshed ID token keeps.
+    scope: String,
 }
 struct Idp {
     config: Config,
@@ -271,7 +275,7 @@ impl Idp {
     }
     /// An ID token for a sign-in (with its nonce, and any pending fault) or, without a nonce,
     /// for a refresh.
-    fn id_token(&self, client_id: &str, user: &User, nonce: Option<&str>, sid: &str) -> String {
+    fn id_token(&self, client_id: &str, user: &User, nonce: Option<&str>, sid: &str, scope: &str) -> String {
         let fault = if nonce.is_some() { self.fault.lock().unwrap().take() } else { None };
         let fault = fault.as_deref().unwrap_or("");
         let now = now();
@@ -284,7 +288,7 @@ impl Idp {
         if let Some(nonce) = nonce {
             claims["nonce"] = json!(nonce);
         }
-        shape(user, &mut claims);
+        shape(user, &mut claims, scope);
         for (k, v) in &user.claims {
             claims[k] = v.clone();
         }
@@ -369,6 +373,7 @@ impl Idp {
                 sid,
                 until: Instant::now() + Duration::from_secs(60),
                 offline: get("scope").split(' ').any(|s| s == "offline_access"),
+                scope: get("scope"),
             },
         );
         found(with_query(&get("redirect_uri"), &[("code", &code), ("state", &get("state"))]))
@@ -386,7 +391,7 @@ fn profile(user: &User) -> serde_json::Map<String, Value> {
     out
 }
 /// The claims of the provider shapes a user has (see the module documentation).
-fn shape(user: &User, claims: &mut Value) {
+fn shape(user: &User, claims: &mut Value, scope: &str) {
     if !user.roles.is_empty() {
         claims["roles"] = json!(user.roles);
     }
@@ -396,7 +401,9 @@ fn shape(user: &User, claims: &mut Value) {
         if let Some(project) = z.get("project_id").and_then(Value::as_str) {
             claims[format!("urn:zitadel:iam:org:project:{project}:roles")] = roles;
         }
-        if let Some(owner) = z.get("resourceowner") {
+        // Zitadel names the user's own organisation only when asked (the scope
+        // `urn:zitadel:iam:user:resourceowner`).
+        if let Some(owner) = z.get("resourceowner").filter(|_| scope.split(' ').any(|s| s == "urn:zitadel:iam:user:resourceowner")) {
             claims["urn:zitadel:iam:user:resourceowner:id"] = owner.clone();
             claims["urn:zitadel:iam:user:resourceowner:name"] = z.get("resourceowner_name").cloned().unwrap_or(owner.clone());
         }
@@ -501,7 +508,7 @@ fn authenticate<'a>(idp: &'a Idp, headers: &HeaderMap, form: &HashMap<String, St
 async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<HashMap<String, String>>) -> Response {
     let Some(client) = authenticate(&idp, &headers, &form) else { return oauth_error(StatusCode::UNAUTHORIZED, "invalid_client") };
     let get = |k: &str| form.get(k).cloned().unwrap_or_default();
-    let (user, sid, nonce, refreshable) = match get("grant_type").as_str() {
+    let (user, sid, nonce, refreshable, scope) = match get("grant_type").as_str() {
         "authorization_code" => {
             let code = idp.codes.lock().unwrap().remove(&get("code"));
             let Some(code) = code else { return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant") };
@@ -512,7 +519,7 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
             match idp.user(&code.username).filter(|u| idp.enabled(u)) {
                 Some(user) => {
                     let refreshable = code.offline || !user.refresh_needs_offline_access;
-                    (user, code.sid, Some(code.nonce), refreshable)
+                    (user, code.sid, Some(code.nonce), refreshable, code.scope)
                 }
                 None => return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant"),
             }
@@ -525,7 +532,7 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
             let refresh = idp.refresh.lock().unwrap().remove(&get("refresh_token"));
             let Some(refresh) = refresh.filter(|r| r.client_id == client.client_id) else { return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant") };
             match idp.user(&refresh.username).filter(|u| idp.enabled(u)) {
-                Some(user) => (user, String::new(), None, true),
+                Some(user) => (user, String::new(), None, true, refresh.scope),
                 None => return oauth_error(StatusCode::BAD_REQUEST, "invalid_grant"),
             }
         }
@@ -536,10 +543,10 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
     let mut body = json!({"access_token": access, "token_type": "Bearer", "expires_in": 300});
     if refreshable {
         let refresh = random_hex();
-        idp.refresh.lock().unwrap().insert(refresh.clone(), Refresh { client_id: client.client_id.clone(), username: user.username.clone() });
+        idp.refresh.lock().unwrap().insert(refresh.clone(), Refresh { client_id: client.client_id.clone(), username: user.username.clone(), scope: scope.clone() });
         body["refresh_token"] = json!(refresh);
     }
-    body["id_token"] = json!(idp.id_token(&client.client_id, &user, nonce.as_deref(), &sid));
+    body["id_token"] = json!(idp.id_token(&client.client_id, &user, nonce.as_deref(), &sid, &scope));
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
 }
 /// OpenID Connect Core 1.0, section 5.3: the profile of the access token's user (with the claims
