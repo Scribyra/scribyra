@@ -292,10 +292,14 @@ const wasmReady=init();
 if(orgConnected()||orgJoining())void wasmReady.then(()=>remoteBackup().start()).catch(error=>notice('Remote backup could not start: '+error.message));
 if(orgServerConnected())void wasmReady.then(()=>serverEngine().start()).then(()=>refreshProjects()).catch(error=>notice('Syncing with your organisation could not start: '+error.message));
 // The return from the organisation's sign-in arrives in the fragment (never sent to the app's host).
-function openOrgPanel(prefill={}){
+// The organisation dialogs sign in with WASM helpers (random bytes, hashes): a click before the
+// core has loaded would otherwise fail in the engine. The anchor is taken at the click.
+async function openOrgPanel(prefill={}){
+  const anchor=document.activeElement;
+  await wasmReady;
   orgPanel?.close();
-  if(prefill.server||orgServerConnected()&&!orgConnected())orgPanel=orgServerDialog({engine:serverEngine(),anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onChanged:()=>{void refreshProjects();},onOpen:id=>openProject(id)});
-  else orgPanel=orgDialog({engine:remoteBackup(),server:serverEngine,anchor:document.activeElement,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
+  if(prefill.server||orgServerConnected()&&!orgConnected())orgPanel=orgServerDialog({engine:serverEngine(),anchor,prefill,listProjects:()=>storage.listProjects(),onChanged:()=>{void refreshProjects();},onOpen:id=>openProject(id)});
+  else orgPanel=orgDialog({engine:remoteBackup(),server:serverEngine,anchor,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
 }
 const SIGN_IN_ERRORS={guest:'Guest accounts can’t use this organisation’s Scribyra.',not_member:'Your account is not in a group that may use this organisation’s Scribyra. Ask your administrator.'};
 function takeOrgFragment(){
@@ -965,7 +969,7 @@ async function action(name, value = '', detail = {}) {
         finally{if(environmentPanel===panel)environmentPanel=null;}break;
       }
       case 'remote-backup': {
-        openOrgPanel();
+        await openOrgPanel();
         break;
       }
       case 'storage': {
