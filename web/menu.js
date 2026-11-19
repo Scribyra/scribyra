@@ -218,7 +218,7 @@ export function openDialog(root,{anchor,scope,align='end',onClose}={}){
   return begin({root,anchor,scope:scope||scopeFor(anchor),align,persistent:true,hover:false,items:()=>[],returnFocus:anchor,onClose,
     keys(event){
       if(event.key!=='Tab')return false;
-      const stops=[...root.querySelectorAll('input:not(:disabled),button:not(:disabled)')].filter(stop=>stop.offsetParent!==null),at=stops.indexOf(document.activeElement);
+      const stops=[...root.querySelectorAll('input:not(:disabled),button:not(:disabled),select:not(:disabled)')].filter(stop=>stop.offsetParent!==null),at=stops.indexOf(document.activeElement);
       stops[(at+(event.shiftKey?-1:1)+stops.length)%stops.length]?.focus();return true;
     },
   });

@@ -4,10 +4,11 @@
 // invitation with a role, and signing out.
 import {openDialog} from './menu.js';
 import {MODE_TEXT} from './org-server.js';
+import {orgAdminDialog,adminNotice} from './org-admin-dialog.js';
 import './org-dialog.css';
 
 const element=(tag,text,cls)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(cls)node.className=cls;return node;};
-const ROLE_LABEL={owner:'Owner',editor:'Editor',reviewer:'Reviewer',viewer:'Viewer'};
+const ROLE_LABEL={owner:'Owner',editor:'Editor',reviewer:'Reviewer',viewer:'Viewer',admin:'Opened as administrator'};
 const ROLES=[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']];
 const host=service=>{try{return new URL(service).host;}catch{return service;}};
 
@@ -55,6 +56,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    people.append(row);
   }
   box.append(people);
+  for(const a of details.adminActivity||[])box.append(element('p',adminNotice(a),'org-help org-admin-notice'));
   if(details.invitations?.length){
    const pending=element('ul',null,'org-members');pending.setAttribute('aria-label','Pending invitations');
    for(const i of details.invitations){
@@ -84,8 +86,10 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
     actions(button('Forget this deployment',async()=>{await engine.forget();onChanged();close();})));
    return parts;
   }
-  parts.push(element('p',`Signed in as ${info.email||info.accountName||'your account'}.`,'org-help'),actions(button('Sign out',async()=>{await engine.signOut();onChanged();feedback='Signed out.';})));
   const [projects,local]=await Promise.all([engine.projects(),listProjects()]);
+  parts.push(element('p',`Signed in as ${info.email||info.accountName||'your account'}.`,'org-help'),actions(button('Sign out',async()=>{await engine.signOut();onChanged();feedback='Signed out.';}),
+   // The admin area, for the deployment's administrators only (the service refuses everyone else).
+   ...(engine.info.role==='admin'?[button('Admin',async()=>{close();orgAdminDialog({engine,anchor,onOpen,onChanged});})]:[])));
   const list=element('ul',null,'org-projects');list.setAttribute('aria-label',`Projects on ${info.name}`);
   for(const project of projects){
    const row=element('li',null,'org-project'),s=project.localId?engine.status(project.localId):null;
@@ -99,6 +103,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    },project.localId?'secondary':'primary'));
    if(!project.gone&&project.role)row.append(button('Share',async()=>{shared=shared===project.project?null:project.project;}));
    if(s?.message&&!['synced'].includes(s.state))row.append(element('p',s.message,'org-help org-why'));
+   if(project.adminOpened&&project.role!=='admin')row.append(element('p',adminNotice({action:'project.admin_open',time:project.adminOpened}),'org-help org-why org-admin-notice'));
    if(shared===project.project&&!project.gone)row.append(await shareBox(project));
    list.append(row);
   }

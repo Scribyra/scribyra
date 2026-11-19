@@ -1027,7 +1027,8 @@ impl Sr {
     /// and state, so a queued, started or finished compile wakes every member's poll.
     async fn heads_now(&self, projects: &Projects, caller: &Caller) -> Result<(String, Value), Response> {
         let rows = sqlx::query(
-            "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' WHEN s.role IS NOT NULL THEN s.role ELSE 'admin' END, p.name, p.compile, c.job, c.state
+            "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' WHEN s.role IS NOT NULL THEN s.role ELSE 'admin' END, p.name, p.compile, c.job, c.state,
+                    (SELECT (extract(epoch FROM max(e.time)) * 1000)::bigint FROM audit_events e WHERE e.target_type = 'project' AND e.target_id = p.project AND e.action = 'project.admin_open')
              FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
              LEFT JOIN sr_admin_opens o ON o.project = p.project AND o.account = $1 AND o.until > now() AND $3
              LEFT JOIN LATERAL (SELECT job, state FROM compiles WHERE project = p.project AND state <> 'replaced' AND $2 ORDER BY queued DESC LIMIT 1) c ON true
@@ -1042,6 +1043,10 @@ impl Sr {
         let mut map = serde_json::Map::new();
         for r in rows {
             let mut entry = json!({"head": r.get::<i64, _>(1), "role": r.get::<String, _>(2), "name": r.get::<String, _>(3)});
+            // Members' polls wake when an administrator opens the project (design section 5).
+            if let Some(opened) = r.get::<Option<i64>, _>(7) {
+                entry["adminOpened"] = json!(opened);
+            }
             if self.compiles.is_some() {
                 let job: Option<String> = r.get(5);
                 entry["compile"] = json!({"mode": crate::compiles::effective_mode(&projects.store.config, &r.get::<String, _>(4)), "job": job, "state": r.get::<Option<String>, _>(6)});

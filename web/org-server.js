@@ -48,8 +48,9 @@ const database=()=>openDB(DB,1,{upgrade(db){
 
 export const STATUS_TEXT={
  saved:'Saved on this device',syncing:'Syncing…',synced:'Synced',waiting:'Waiting to sync','read-only':'Read only',
- removed:'No longer shared with you',paused:'Sync paused',
+ removed:'No longer shared with you',paused:'Sync paused',admin:'Opened as administrator · Read only',
 };
+export const ADMIN_TEXT='You opened this project as an administrator: it is read-only here, and its members can see that you opened it.';
 export const MODE_TEXT=name=>`Stored on ${name}’s server, which can read it. ${name}’s administrators can open it.`;
 export const pausedText=name=>`Reconnecting — editing is paused because ${name} keeps projects online only.`;
 // One entry may carry at most this much; the service's default `sr_entry_bytes` is 16 MiB.
@@ -139,6 +140,30 @@ export function srClient(service,{token,fetchImpl=globalThis.fetch.bind(globalTh
    const response=await request(`${p(project)}/objects/${hash}`,{allow:[404],timeout:Math.max(timeoutMs,120000)});
    return response.status===404?null:new Uint8Array(await response.arrayBuffer());
   },
+  /** The admin area's routes (administrators only; design section 5). */
+  admin:(()=>{
+   const id=value=>{if(!isId(value))throw Error('Invalid ID.');return value;};
+   const a=path=>'/v1/admin'+path;
+   return{
+    members:(removed=false)=>json(a('/members'+(removed?'?removed=true':''))),
+    setRole:(account,role)=>send('PUT',a(`/members/${id(account)}/role`),{role}),
+    disable:account=>send('POST',a(`/members/${id(account)}/disable`),{}),
+    unblock:account=>send('POST',a(`/members/${id(account)}/unblock`),{}),
+    remove:(account,transfer)=>send('POST',a(`/members/${id(account)}/remove`),transfer?{transfer:id(transfer)}:{}),
+    projects:()=>json(a('/projects')),
+    open:project=>send('POST',a(`/projects/${id(project)}/open`),{}),
+    edit:project=>send('POST',a(`/projects/${id(project)}/edit`),{}),
+    transfer:(project,account)=>send('POST',a(`/projects/${id(project)}/owner`),{account:id(account)}),
+    async deleteProject(project){await request(a(`/projects/${id(project)}`),{method:'DELETE'});},
+    audit:(query={})=>json(a('/audit?'+new URLSearchParams(Object.entries(query).filter(([,v])=>v!==undefined&&v!==null&&v!=='')))),
+    settings:()=>json(a('/settings')),
+    /** A download (export everything, or the audit log): its bytes, file name and audit head. */
+    async download(path,query={}){
+     const response=await request(a(path)+'?'+new URLSearchParams(Object.entries(query).filter(([,v])=>v!==undefined&&v!==null&&v!=='')),{timeout:Math.max(timeoutMs,600000)});
+     return{blob:await response.blob(),name:/filename="([^"]+)"/.exec(response.headers.get('content-disposition')||'')?.[1]||'scribyra-export',head:response.headers.get('scribyra-audit-head')};
+    },
+   };
+  })(),
  };
 }
 
@@ -334,7 +359,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   }
   link=await pull(link);
   const role=remote?.[link.project]?.role||link.role;
-  if(!writes(role)){attempts.delete(localId);stalled.delete(localId);setStatus(localId,'read-only',`Your role on this project is ${role}: what you change stays on this device.`);await hydrateHistory(localId,link.project).catch(()=>{});return;}
+  if(!writes(role)){attempts.delete(localId);stalled.delete(localId);setStatus(localId,role==='admin'?'admin':'read-only',role==='admin'?ADMIN_TEXT:`Your role on this project is ${role}: what you change stays on this device.`);await hydrateHistory(localId,link.project).catch(()=>{});return;}
   for(const entry of (await db.getAll('outbox',IDBKeyRange.bound([localId,0],[localId,Infinity]))))link=await deliver(link,entry);
   const read=await storage.readCommittedProject(localId);
   if(read.kind==='deleted'||read.kind==='missing'){setStatus(localId,'paused','This project is no longer on this device. Its copy on the server is kept.');return;}
@@ -387,7 +412,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
    const link={localId,project,name:doc.getMap('meta').get('name')||entry?.name||'Untitled project',role:entry?.role||'viewer',lineage,created:true,seq,vector:Y.encodeStateVector(doc),pushedSequence:saved.sequence,client:newClient(),clientSeq:0,mine:[]};
    await db.put('links',link);
    await hydrateHistory(localId,project).catch(()=>{});
-   setStatus(localId,writes(link.role)?'synced':'read-only');
+   setStatus(localId,writes(link.role)?'synced':link.role==='admin'?'admin':'read-only',link.role==='admin'?ADMIN_TEXT:'');
    return{localId,name:link.name};
   }finally{doc.destroy();}
  }
@@ -534,13 +559,15 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   /** Projects this person can open (owned and shared), with this browser's copy if any. */
   async projects(){
    await load();const links=await db.getAll('links'),byProject=new Map(links.map(l=>[l.project,l]));
-   const list=signedIn()?(await client.list()).projects:[];
+   const listing=signedIn()?await client.list():null,list=listing?.projects||[];
+   // The deployment role can change while signed in (an administrator's grant, or the provider's groups).
+   if(listing?.role&&listing.role!==connection.role){connection.role=listing.role;await save();}
    // The list is as fresh as the heads poll: roles and names it shows take effect here too.
    if(signedIn()){
     remote={...remote};for(const p of list)remote[p.id]={...remote[p.id],role:p.role,name:p.name,head:remote[p.id]?.head??p.head};
     for(const l of links){const p=list.find(x=>x.id===l.project);if(p&&(p.role!==l.role||p.name!==l.name)){Object.assign(l,{role:p.role,name:p.name});await db.put('links',l);}}
    }
-   const out=list.map(p=>({project:p.id,name:p.name,role:p.role,owner:p.owner,head:p.head,localId:byProject.get(p.id)?.localId||null}));
+   const out=list.map(p=>({project:p.id,name:p.name,role:p.role,owner:p.owner,head:p.head,adminOpened:p.adminOpened||null,localId:byProject.get(p.id)?.localId||null}));
    const seen=new Set(out.map(p=>p.project));
    for(const l of links)if(!seen.has(l.project))out.push({project:l.project,name:l.name,role:l.created?null:'owner',owner:null,localId:l.localId,gone:l.created&&signedIn()});
    return out;
@@ -568,6 +595,17 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   },
   async download(project){await load();if(!isId(project))throw Error('Unknown project.');if(!remote)remote=Object.fromEntries((await client.list()).projects.map(p=>[p.id,{role:p.role,name:p.name,head:p.head}]));return download(project);},
   async details(project){await load();return client.details(project);},
+  /** The admin area's client (administrators only; the service refuses everyone else). */
+  async admin(){await load();if(!signedIn())throw Error('Sign in first.');return client.admin;},
+  /** "Open as administrator": the audited open, then a read-only copy on this browser (or the one it has). */
+  async openAsAdmin(project){
+   await load();const details=await client.admin.open(project);
+   remote={...remote,[project]:{...remote?.[project],role:details.role,name:details.name,head:details.head}};
+   const link=(await db.getAll('links')).find(l=>l.project===project);
+   if(link){if(link.role!==details.role)await db.put('links',{...link,role:details.role});schedule(link.localId,50);return{localId:link.localId,name:link.name};}
+   const result=await download(project);if(!result)throw Error('This project has no changes yet.');
+   return result;
+  },
   async invite(project,email,role){await load();return client.invite(project,String(email||'').trim(),role);},
   async withdraw(project,id){await load();await client.withdraw(project,id);},
   async setMemberRole(project,account,role){await load();return client.setRole(project,account,role);},

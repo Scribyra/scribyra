@@ -24,3 +24,15 @@
 .org-share,.org-request{flex-basis:100%;padding:4px 0 2px}
 /* The dialog is taller than the anchored popups: keep it centred in the viewport. */
 .ui-popup.org-dialog{position:fixed!important;inset:0!important;margin:auto!important;height:fit-content;transform:none!important}
+/* The admin area: wider, with tabs, a filter grid and the audit table. */
+.ui-popup.org-dialog.org-admin{width:min(860px,calc(100vw - 16px));max-width:min(860px,calc(100vw - 16px));max-height:min(88vh,860px)}
+.org-tabs{display:flex;gap:4px;border-bottom:1px solid var(--border);margin:4px 0 8px}
+.org-tab{background:none;border:0;border-bottom:2px solid transparent;padding:6px 10px;font:inherit;font-size:12.5px;color:var(--muted);cursor:pointer}
+.org-tab[aria-selected=true]{color:var(--text);border-bottom-color:var(--accent)}
+.org-filters{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px}
+.org-audit{width:100%;border-collapse:collapse;font-size:11.5px}.org-audit caption{text-align:left;font-weight:600;padding:4px 0}
+.org-audit th,.org-audit td{text-align:left;vertical-align:top;padding:4px 6px;border-bottom:1px solid var(--border);word-break:break-word}
+.org-settings{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;font-size:12px}.org-settings dt{color:var(--muted)}.org-settings dd{margin:0;word-break:break-all}
+.org-admin-notice{color:var(--text)}
+.org-dialog select:focus-visible,.org-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.org-dialog .button.danger{background:var(--danger,#b4323a);border-color:var(--danger,#b4323a);color:#fff}
