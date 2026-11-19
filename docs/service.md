@@ -339,11 +339,30 @@ small JSON `detail` (at most 4 KiB), `prev` and `hash` = SHA-256(prev bytes ‖ 
 text: `jsonb_build_array(seq, time in µs, actor, ip or "", action, target_type or "", target_id or
 "", detail)::text`), 64 zeros before the first row. Rows are written only by the SQL function
 `audit_append`, which locks the one `audit_head` row, so appends from every replica form one line
-(and `time` never decreases along it); a trigger refuses direct `INSERT`, every `UPDATE`, `DELETE`
-outside `audit_purge`, and `TRUNCATE` (also on `audit_head`). The trigger guards against mistakes
-and the service's own bugs; anyone who can disable triggers (a database superuser, or the table's
-owner) can still change rows, and the chain is what makes that visible. Events are written in the
-transaction of the action they record, so an action and its event commit together.
+(and `time` never decreases along it). Events are written in the transaction of the action they
+record, so an action and its event commit together.
+
+**Who can change the log (migration `0031`).** The NOLOGIN role `scribyra_audit_owner` owns
+`audit_events`, `audit_head`, `audit_settings` and the functions that write them (`audit_append`,
+`audit_purge`, `audit_purge_expired`, `audit_set_retention`: `SECURITY DEFINER` with
+`search_path` fixed to the service's schema, then `pg_temp`). The service's database user (and the
+database's owner) get `SELECT` on the tables and `EXECUTE` on the functions, nothing else, so they
+can neither write rows directly nor disable or drop the triggers; the triggers let only the
+tables' owner insert, delete or move the head, and refuse every `UPDATE` and `TRUNCATE`.
+`audit_protect()` does the handover; `migrate` and every `serve` start run it and report
+`auditProtection` (in `migrate`'s output, the `audit_protection` event and `deployment.start`):
+
+| Outcome | Meaning and operator step |
+| --- | --- |
+| `protected` | Done; the service's user cannot become the owner |
+| `protected; reachable: this database user is a superuser` | Done, but the service runs as a superuser, which can do anything: give it an ordinary user |
+| `protected; reachable: this database user is a member of scribyra_audit_owner` | Done; now revoke the grant you made: `REVOKE scribyra_audit_owner FROM <service user>;` |
+| `protected; reachable: this database user can grant itself scribyra_audit_owner (it created the role)` | The user has `CREATEROLE` and created the role, so PostgreSQL gave it `ADMIN OPTION`; as a superuser: `REVOKE ADMIN OPTION FOR scribyra_audit_owner FROM <service user>;` (better: drop `CREATEROLE` too) |
+| `unprotected: …` | The service's user can neither create the role nor `SET ROLE` to it; the tables stay its own (the triggers then let it change rows, as any table owner could). As a superuser, once: `CREATE ROLE scribyra_audit_owner NOLOGIN; GRANT scribyra_audit_owner TO <service user> WITH INHERIT FALSE, SET TRUE;` then restart `serve` (or run `migrate`) and revoke as above. If the schema is not `public` or the service's user does not own it, also grant `CREATE` on it to `scribyra_audit_owner` for the handover. Running `migrate` as a superuser also works for this step, but leaves the other tables it creates owned by the superuser |
+
+What remains: a database superuser (and whoever holds `scribyra_audit_owner`) can still rewrite
+the log. The hash chain, `audit verify` and the heads that exports carry are what detect that; keep
+exported heads outside the database.
 
 | Action | Recorded when | Actor, target, detail |
 | --- | --- | --- |
@@ -351,51 +370,66 @@ transaction of the action they record, so an action and its event commit togethe
 | `session.refused` | A sign-in in progress is refused (`reason`: a claim check, `guest`, `not_member`, `token_exchange`, `account_disabled`, `account_removed`, …) | `system` (or the account, when known); `{reason, provider}`. Requests with an unknown `state` are not recorded |
 | `session.revoked`, `account.blocked` | Back-channel logout, a refused refresh token (`invalid_grant` blocks the account), the group rules at a recheck | `system`; `{reason, provider}` |
 | `account.created`, `account.role_changed` | First sign-in; a role the provider's groups or an administrator changed | `{provider, role}`; `{from, to, by: "provider" or "admin"}` |
-| `account.disabled`, `account.unblocked`, `account.removed` | Admin area | `{from}`; removal `{transferredTo, projects, shares}` |
+| `account.admin_grant_changed`, `account.admin_grant_cleared` | An administrator's grant changed without a role change; a grant dropped because the rules now make the account an administrator or guest (sign-in or recheck) | `{grant}`; `system`, `{role, by: "provider"}` |
+| `account.disabled`, `account.unblocked`, `account.removed` | Admin area; `account unblock` (`system`, `by: "cli"`) | `{from}`; removal `{transferredTo, projects, shares}` |
 | `project.created`, `project.renamed`, `project.deleted`, `project.transferred` | Owners, editors and administrators (`admin: true` when an administrator acted) | target the project |
 | `project.admin_open`, `project.admin_edit` | Open or edit as administrator | |
 | `project.compile_mode` | `PUT …/settings` | `{mode}` |
 | `share.created`, `share.changed`, `share.removed` | Sharing (including a member leaving, `left: true`) | `{account, role}` |
 | `invitation.created`, `invitation.accepted`, `invitation.withdrawn` | Invitations (the invitee's email is not recorded) | `{invitation, role, provider}` |
 | `export.everything`, `audit.export` | Admin exports | filters and format |
-| `audit.purge` | Retention | `system`; `{count, last_seq, last_hash, before}` |
-| `deployment.start` | Each start of `serve` | `system`; `{policy, encryption, schema, version}` (`policy` is the SHA-256 of the deployment object, so configuration changes show) |
+| `audit.purge` | Retention | `system`; `{count, last_seq, last_hash, before, retention}` |
+| `deployment.start` | Each start of `serve` | `system`; `{policy, encryption, schema, version, auditRetention, auditProtection}` (`policy` is the SHA-256 of the deployment object, so configuration changes show) |
 
 Never recorded: content, ID or session tokens, provider tokens; emails only as account details
 (the admin routes add the actor's name and email from `accounts`).
 
-**Retention.** Every `audit_purge_seconds` (daily) a task on each replica deletes the events older
-than `deployment.audit_retention_days` (30–3650, default 400) through `audit_purge`, which appends
-`audit.purge` with the count and the last purged event's sequence number and hash; the head's lock
-keeps two replicas from purging the same events.
+**Retention (migration `0030`).** The retention lives in the database (`audit_settings`): each
+`serve` start stores `deployment.audit_retention_days` (30–3650, default 400) there through
+`audit_set_retention`, which never goes below `floor_seconds` (30 days). The service cannot lower
+the floor; only the tables' owner or a superuser can (`UPDATE audit_settings SET floor_seconds =
+…`), which the tests do together with the tests-only `audit_retention_seconds` to purge within
+seconds. `audit_purge(before)` refuses a cutoff newer than now minus the retention. Every
+`audit_purge_seconds` (daily) a task on each replica calls `audit_purge_expired()`, which deletes
+the older events and appends `audit.purge` with the count, the last purged event's sequence
+number and hash, the cutoff and the retention; the head's lock keeps two replicas from purging the
+same events.
 
 **`scribyra-sync audit verify [<seq>:<hash>]`** reads the log (no ownership lock, so it runs beside
 serving replicas) and recomputes every hash outside the database's functions; it checks that
 sequence numbers have no gap, that each `prev` is the previous hash, that the first kept event is
-the chain's start or anchored by an `audit.purge` (its `last_seq` + 1 and `last_hash`), and that
+the chain's start or anchored by an `audit.purge` (its `last_seq` + 1 and `last_hash`; only a
+`system` purge event recorded after the events it names anchors), that no purge's cutoff was newer
+than its own time minus the retention (the configured one, or 30 days if longer), and that
 `audit_head` names the last event; with `<seq>:<hash>` (the head an export carries) also that this
-event, if still kept, has that hash. It prints `{"event":"audit_verify","ok":…,"events":n,"first":…,
+event has that hash: one purged since is accepted only if it is the anchor the log starts from
+(so check an exported head while the retention still keeps it), and one past the last event is a
+problem. It prints `{"event":"audit_verify","ok":…,"events":n,"first":…,
 "last":…,"head":{"seq","hash"},"anchored":…,"problems":[{"seq","problem"}]}` and exits 0 only when
 the chain holds.
 
 **Admin routes** (`/v1/admin/…`, `Authorization: ScribyraSSO <token>` of an administrator; `401`
 without a session, `403` for everyone else). An administrator is one by `admins`, by
 `admin_groups`, or by an administrator's grant in the admin area; the configuration's own
-administrators can only be changed in the configuration (or at the provider).
+administrators can only be changed in the configuration (or at the provider). Each action's
+transaction locks the caller's account row and checks again that they are an active
+administrator (still holding the grant, if that is what makes them one); member actions also
+lock every active administrator's row (in account order, with the target's and an heir's), so at
+least one active administrator always remains and two cannot disable each other.
 
 | Route | Body → answer |
 | --- | --- |
 | `GET /v1/admin/members?removed=true` | → `{account, members: [{account, name, email, provider, role, state, guest, granted, created, lastSeen, storage, projects}]}` (`storage`: sealed bytes of owned projects; removed accounts only with `removed=true`) |
-| `PUT /v1/admin/members/{a}/role` | `{role: "admin"|"member"}` → the member. `409` for guests (they stay guests), for an administrator by the configuration, a removed account, or the caller's own account |
-| `POST /v1/admin/members/{a}/disable` | → the member: sessions revoked at once (waiting heads polls answer `401`), sign-in refused (`403 "this account is disabled"`) |
+| `PUT /v1/admin/members/{a}/role` | `{role: "admin"|"member"}` → the member. `409` for guests (they stay guests), for an administrator by the configuration (`admins` or `admin_groups`: neither demoted nor granted, so a grant never outlasts the provider taking the role away; a grant such a person holds is cleared at their next sign-in or recheck), a removed account, the caller's own account, or a change that would leave no active administrator |
+| `POST /v1/admin/members/{a}/disable` | → the member: sessions revoked at once (waiting heads polls answer `401`), sign-in refused (`403 "this account is disabled"`). `409` for an administrator the `admins` list names (change the configuration instead) or the last active administrator |
 | `POST /v1/admin/members/{a}/unblock` | → the member: a disabled, blocked or removed account may sign in again |
-| `POST /v1/admin/members/{a}/remove` | `{transfer?}` → `{account, state: "removed", transferredTo, projects}`: sessions revoked, every share removed, owned projects transferred to `transfer` (an active member or administrator; default the caller); sign-in refused (`403 "this account was removed"`) until unblocked. End-to-end: removal from the organisation still needs an administrator's app to sign `person.remove` |
+| `POST /v1/admin/members/{a}/remove` | `{transfer?}` → `{account, state: "removed", transferredTo, projects}` (`409` as for disable): sessions revoked, every share removed, owned projects transferred to `transfer` (an active member or administrator, its row locked meanwhile; default the caller); sign-in refused (`403 "this account was removed"`) until unblocked. End-to-end: removal from the organisation still needs an administrator's app to sign `person.remove` |
 | `GET /v1/admin/projects` | → `{encryption: "server", projects: [{id, name, owner, members, size, head, created, updated, role, openUntil}]}`; end-to-end: `{encryption: "e2ee", projects: [{id, size, head, epoch}]}` |
 | `POST /v1/admin/projects/{p}/open` | → project details with `role: "admin"`: read access (log, snapshot, objects, heads) for 12 hours (`sr_admin_opens`), recorded as `project.admin_open` |
 | `POST /v1/admin/projects/{p}/edit` | → details: an editor share for the administrator (`project.admin_edit`) |
 | `POST /v1/admin/projects/{p}/owner` | `{account}` → `{id, owner}`: an active member or administrator becomes the owner; the previous owner keeps an editor share |
 | `DELETE /v1/admin/projects/{p}` | → `204`: crypto-erase as the owner's delete; end-to-end: the ciphertext the service holds (log, objects, key wraps) is removed |
-| `GET /v1/admin/export` | → a streamed zip (stored, UTF-8 names, ZIP64 when large): `projects/<name>-<id8>/<path>` for every file of every project materialised from the server's state (assets whose object is missing are listed in `projects.json` as `missing`), `projects.json`, `members.json`, `audit.jsonl` (every event and a final `{"head": {seq, hash}}`). One export at a time per replica (`429`) |
+| `GET /v1/admin/export` | → a streamed zip (stored, UTF-8 names; ZIP64 sizes and offsets from 4 GiB): `projects/<name>-<id8>/<path>` for every file of every project materialised from the server's state, `projects.json` (per project its folder, `seq`, `mainFile` and `missing`: assets whose object is not on the server, and files the project tree marks as conflicts, such as an invalid name, which are never written; every entry is a relative path without `.`, `..`, backslashes, colons or control characters, unique ignoring case), `members.json`, `audit.jsonl` (every event and a final `{"head": {seq, hash}}`, streamed with a data descriptor). One export at a time per replica (`429`); it holds one file in memory at a time (an asset is at most `sr_object_bytes`) |
 | `GET /v1/admin/audit?actor&action&target&targetType&from&to&before&limit` | → `{events: [{seq, time, actor, actorName, actorEmail, ip, action, targetType, target, detail, prev, hash}], head: {seq, hash}, next}` newest first; `action` matches an action or its first part (`project`); `from`/`to` in ms; `limit` ≤ 500; page with `before=next` |
 | `GET /v1/admin/audit/export?…&format=jsonl|csv` | → the filtered events oldest first, as JSON lines ending with `{"head": …}` or CSV (every field quoted, formula prefixes defused, a final `# head <seq>:<hash>` line); header `Scribyra-Audit-Head: <seq>:<hash>`; recorded as `audit.export` |
 | `GET /v1/admin/settings` | → the deployment's policy (providers without client IDs or secret files) and its `policy` hash |
@@ -885,7 +919,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `metrics_bind` | none (off) | Listener for Prometheus `/metrics` ([Server compile](#server-compile)); pods use `0.0.0.0:9090` |
 | `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds`, `sso_starts_per_minute` | 60, 60, 60 | [Single sign-on](#single-sign-on-oidc) |
 | `audit_purge_seconds` | 86400 | How often the audit log's retention task runs (1 s to 7 days) |
-| `audit_retention_seconds` | none | Development and tests only: keep audit events this many seconds instead of `deployment.audit_retention_days` |
+| `audit_retention_seconds` | none | Development and tests only: keep audit events this many seconds instead of `deployment.audit_retention_days`. Below 30 days it takes effect only after the tables' owner or a superuser lowered `audit_settings.floor_seconds` |
 | `org_bytes`, `sessions` | 1 GiB, 10000 | End-to-end organisation quota and device sessions |
 | `principals`, `object_bytes`, `namespace_bytes`, `total_bytes`, `namespace_objects`, `total_objects` | see [Access and limits](#access-and-limits) | Capability object store |
 | `tcp_connections`, `http_concurrency`, `requests_per_second`, `source_requests_per_second`, `rate_sources`, `uploads`, `principal_uploads`, `namespace_uploads`, `namespace_downloads`, `response_bytes`, `send_seconds` | see [Access and limits](#access-and-limits) | Admission and transfer limits (`uploads` also bounds server-readable object uploads) |
@@ -896,11 +930,12 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | Command | Does | Exit |
 | --- | --- | --- |
 | `scribyra-sync` or `scribyra-sync serve` | Serve (applies migrations first unless `migrate_on_start: false`) | 0 after SIGTERM/SIGINT, 1 on a startup or runtime failure |
-| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary (a downgrade) | 0, or 1 |
+| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v,"auditProtection":…}` ([who can change the log](#administration-and-the-audit-log)). Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary (a downgrade) | 0, or 1 |
 | `scribyra-sync compile-worker` | Take [server compile](#server-compile) jobs from PostgreSQL and run them in the sandbox; probes on `compile_worker_bind`. Needs server compile, S3 blobs (unless `serve` is stopped) and the sandbox's requirements | 0 after SIGTERM/SIGINT (running jobs finish or go back to the queue within `shutdown_grace_seconds`), 1 on a startup failure |
-| `scribyra-sync migrate` | Apply pending migrations and exit; prints `{"event":"migrated","applied":n,"schema":v}`. Takes no ownership lock (the migrator locks itself), so it can run as a Job while replicas serve. Refuses a database with migrations newer than the binary | 0, or 1 |
+| `scribyra-sync migrate` | As above | 0, or 1 |
 | `scribyra-sync verify` | Check every capability object's blob and the usage rows | 0 when consistent |
 | `scribyra-sync audit verify [<seq>:<hash>]` | Recompute the audit log's hash chain ([Administration](#administration-and-the-audit-log)) | 0 when the chain holds, 1 otherwise |
+| `scribyra-sync account unblock <email|provider:email|account>` | Recovery when no administrator can act (all disabled or removed): makes the one matching account active again (a verified email at any provider, a provider's verified email, or an account ID; several matches are refused) and records `account.unblocked` as `system` with `by: "cli"`. Prints `{"event":"account_unblocked","account","from","changed"}` or `{"event":"account_unblock_failed","reason"}`. No ownership lock, so it runs beside serving replicas | 0, or 1 |
 | `scribyra-sync migrate-sqlite <dir>` | One-time import of a milestone-S data directory | 0 |
 
 **Probes and signals:**
