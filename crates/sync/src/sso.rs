@@ -188,6 +188,7 @@ fn refusal_message(code: &str, label: &str) -> String {
         "guest" => "Guest accounts can't use this deployment.".into(),
         "no_organisation" => format!("{label} did not say which organisation your account belongs to."),
         "domain" => format!("Your {label} organisation can't use this deployment."),
+        "missing_claim" => format!("{label} did not send what this deployment needs to know about your account. Ask your administrator."),
         "account_disabled" => "An administrator disabled your account here.".into(),
         "account_removed" => "An administrator removed your account here.".into(),
         _ => "This account cannot sign in here.".into(),

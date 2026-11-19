@@ -288,6 +288,8 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
         {"sub": "k2", "username": "kai", "password": "pw-kai", "email": "kai@k.test", "email_verified": true, "keycloak": {"client_roles": {"other": [ADMIN]}, "organization": ["lab"]}},
         {"sub": "e1", "username": "ed", "password": "pw-ed", "email": "ed@e.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "tenant-1", "acct": 0}},
         {"sub": "e2", "username": "gil", "password": "pw-gil", "email": "gil@guest.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "tenant-1", "acct": 1}},
+        // A B2B guest whose tenant does not send the optional `acct` claim.
+        {"sub": "e3", "username": "gus-b2b", "password": "pw-gus-b2b", "email": "gus@guest.test", "email_verified": true, "roles": [ADMIN], "entra": {"tid": "tenant-1"}, "claims": {"idp": "https://sts.windows.net/tenant-home/"}},
         {"sub": "1001", "username": "gwen", "password": "pw-gwen", "email": "gwen@acme.example", "email_verified": true, "hd": "acme.example"},
         {"sub": "1002", "username": "gus", "password": "pw-gus", "email": "gus@acme.example", "email_verified": true, "hd": "acme.example"},
         {"sub": "1003", "username": "consumer", "password": "pw-consumer", "email": "c@gmail.example", "email_verified": true},
@@ -328,6 +330,7 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
     assert_eq!((ed["orgs"][0]["name"].as_str(), ed["role"].as_str()), (Some("Partner (tenant-1)"), Some("member")));
     let gil = partner.login("gil");
     assert_eq!((gil["orgs"][0]["id"].clone(), gil["role"].as_str()), (ed["orgs"][0]["id"].clone(), Some("guest")), "Entra B2B guests are guests of the tenant");
+    assert_eq!(partner.login("gus-b2b")["role"], "guest", "without acct, an idp other than the tenant's marks a guest");
     // Google: the Workspace domain is the organisation, admin_subjects its administrators, and
     // consumer accounts (no hd) are refused.
     let google = json!({"claims": null, "roles": null, "preset": "google", "admin_subjects": ["1001"], "hosted_domains": ["acme.example"]});

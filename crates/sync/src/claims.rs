@@ -10,7 +10,7 @@
 //! | --- | --- | --- | --- |
 //! | `zitadel` | `zitadel_project_owner_org`; with `zitadel_foreign_organisations: organisations` each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role keyed by another organisation than the owner (`guests`) or than `urn:zitadel:iam:user:resourceowner:id` (`organisations`), or a role mapped to guest |
 //! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles`, `groups`; with several organisations only `<alias>:<role>` names count (in that one), unless `roles_apply_to_all_organisations` | a role mapped to guest |
-//! | `entra` | `tid` | `roles` | `acct = 1`, or a role mapped to guest |
+//! | `entra` | `tid` | `roles` | `acct = 1`; without `acct`, an `idp` other than `https://sts.windows.net/{tid}/` (refused instead with `entra_require_acct`); or a role mapped to guest |
 //! | `google` | `hd` (refused without, and unless in `hosted_domains`, else `email_domains`) | everyone a member, `admin_subjects` administrators | never |
 //! | generic | `claims.organisation` (else the provider's one), `claims.organisation_name` | `claims.roles` | `claims.guest {path, equals}`, or a role mapped to guest |
 //!
@@ -99,6 +99,8 @@ pub enum Refusal {
     /// The organisation the token names is not one this provider admits (a Google Workspace
     /// domain outside `hosted_domains`, or `email_domains` when that is not set).
     Domain,
+    /// A claim the configuration requires is missing (Entra's `acct` with `entra_require_acct`).
+    MissingClaim,
 }
 impl Refusal {
     pub fn code(self) -> &'static str {
@@ -107,6 +109,7 @@ impl Refusal {
             Self::Guest => "guest",
             Self::NoOrganisation => "no_organisation",
             Self::Domain => "domain",
+            Self::MissingClaim => "missing_claim",
         }
     }
 }
@@ -276,7 +279,13 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
         }
         (Some(Preset::Entra), _) => {
             let tenant = claims.get("tid").and_then(scalar).ok_or(Refusal::NoOrganisation)?;
-            let guest = equals(claims.get("acct"), "1");
+            // `acct` is an optional claim the app registration must add (review M6). Without it, a
+            // B2B guest still shows as an `idp` other than the tenant's own issuer.
+            let guest = match claims.get("acct") {
+                Some(acct) => equals(Some(acct), "1"),
+                None if provider.entra_require_acct => return Err(Refusal::MissingClaim),
+                None => claims.get("idp").is_some_and(|idp| idp.as_str() != Some(&format!("https://sts.windows.net/{tenant}/"))),
+            };
             grants.extend(grant(tenant, None, mapped(provider, strings(claims.get("roles"))), guest));
         }
         (Some(Preset::Google), _) => {
@@ -434,6 +443,20 @@ mod tests {
         assert_eq!(map(&p, Guests::Shared, &b2b, "u"), Ok(vec![g("t-1", None, Role::Guest, true)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"roles": ["scribyra:member"]})), "u"), Err(Refusal::NoOrganisation));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"tid": "t-1"})), "u"), Err(Refusal::NoRole));
+        // Review M6: without the optional `acct` claim, a B2B guest (signed in at another
+        // identity provider than the tenant itself) is still a guest.
+        let unmarked = claims(json!({"tid": "t-1", "roles": ["scribyra:admin"], "idp": "https://sts.windows.net/t-home/"}));
+        assert_eq!(map(&p, Guests::Off, &unmarked, "u"), Err(Refusal::Guest));
+        let msa = claims(json!({"tid": "t-1", "roles": ["scribyra:admin"], "idp": "live.com"}));
+        assert_eq!(map(&p, Guests::Shared, &msa, "u"), Ok(vec![g("t-1", None, Role::Guest, true)]));
+        let own = claims(json!({"tid": "t-1", "roles": ["scribyra:admin"], "idp": "https://sts.windows.net/t-1/"}));
+        assert_eq!(map(&p, Guests::Off, &own, "u"), Ok(vec![g("t-1", None, Role::Admin, false)]));
+        assert_eq!(map(&p, Guests::Off, &claims(json!({"tid": "t-1", "roles": ["scribyra:admin"]})), "u"), Ok(vec![g("t-1", None, Role::Admin, false)]));
+        // The configuration can refuse tokens without `acct`.
+        let mut strict = p.clone();
+        strict.entra_require_acct = true;
+        assert_eq!(map(&strict, Guests::Shared, &claims(json!({"tid": "t-1", "roles": ["scribyra:admin"]})), "u"), Err(Refusal::MissingClaim));
+        assert_eq!(map(&strict, Guests::Off, &claims(json!({"tid": "t-1", "roles": ["scribyra:member"], "acct": 0})), "u"), Ok(vec![g("t-1", None, Role::Member, false)]));
     }
 
     #[test]

@@ -661,6 +661,7 @@ because the service only ever redirects back to a configured origin.
 | `keycloak_organizations` | `false` | `keycloak` only: ask for the `organization` scope and take organisations from that claim (Keycloak 26); without it the provider has one organisation |
 | `roles_apply_to_all_organisations` | `false` | `keycloak` with `keycloak_organizations` only: realm, client and group roles without an organisation prefix count in *every* organisation of someone in several. Off, they count only for someone in exactly one organisation, and someone in several needs roles named `<alias>:<role>` (below) |
 | `hosted_domains` | `[]` | `google` only: the Workspace domains (`hd`) admitted; another domain is refused with `domain`. A `google` provider needs this or `email_domains` (then those domains are the admitted `hd` values), or it refuses to start: without either, every Workspace domain in the world could sign in |
+| `entra_require_acct` | `false` | `entra` only: refuse tokens without the `acct` optional claim (`missing_claim`) instead of telling guests apart by `idp` |
 | `admin_subjects` | `[]` | `google` only: the exact `sub` values of administrators. Google's tokens carry no roles, so this is the one place a configuration names people (a Directory API group check may come later) |
 | `offline_access` | `false` | Adds the `offline_access` scope, which some providers require before they issue refresh tokens |
 | `session_hours` | 12 | 1–720: how long a login lasts |
@@ -676,7 +677,7 @@ organisation:
 | --- | --- | --- | --- | --- |
 | `zitadel` | `zitadel_project_owner_org` (with `"guests"`), or each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`) with `"organisations"`; name: the map's value (the org's domain) | the role keys the organisation keys | `"guests"`: a role keyed by an org other than the owner; `"organisations"`: a role keyed by an org other than `urn:zitadel:iam:user:resourceowner:id`; or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
 | `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles`, `resource_access.{client_id}.roles` (another client's roles do not count) and `groups` (a leading `/` dropped); with organisations, see below | a role mapped to `guest` | `organization` with `keycloak_organizations` |
-| `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B), or a role mapped to `guest` | `offline_access` |
+| `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B); without `acct`, an `idp` claim other than the tenant's own `https://sts.windows.net/{tid}/` (or refused with `entra_require_acct`); or a role mapped to `guest` | `offline_access` |
 | `google` | `hd` (accounts without it are refused, and so is a domain outside `hosted_domains`, else `email_domains`) | everyone a member; `admin_subjects` administrators | never | none |
 | generic `claims` | `claims.organisation`, `claims.organisation_name` | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
 
@@ -755,7 +756,7 @@ check it the same way. Error codes the app can show:
 | `400 org_required` | The account is in several organisations and the request named none |
 | `404 unknown_org` | The header names an organisation the caller holds no role in (whether it exists is never confirmed) |
 | `404` `unknown project` | A project of another organisation (or none), whoever asks |
-| `403 no_role`, `guest`, `no_organisation`, `domain`, `account_disabled`, `account_removed` | Redeem refused (also as `#scribyra-sso-error=<code>` for the first four) |
+| `403 no_role`, `guest`, `no_organisation`, `domain`, `missing_claim`, `account_disabled`, `account_removed` | Redeem refused (also as `#scribyra-sso-error=<code>` for the first five) |
 | `403` `administrators only` | An admin route from someone who is not an administrator of the organisation |
 
  Sign-ins in progress, one-time
@@ -833,6 +834,11 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
   verified for many accounts, so `email_domains` can refuse legitimate users; test it
   with your tenant before relying on it. Use `preset: "entra"` with app roles (define them on
   the app registration and assign them); a multi-tenant app gets one organisation per tenant.
+  **Add the `acct` optional claim to the ID token** (app registration, Token configuration):
+  Entra sends it only when asked, and it is what marks B2B guests. Without it the service treats
+  a token whose `idp` names another issuer than the tenant as a guest (review M6: such guests
+  counted as members), which covers B2B guests from other tenants and Microsoft accounts; set
+  `entra_require_acct: true` to refuse tokens without `acct` altogether.
 - *Zitadel*: issuer `https://<instance>.zitadel.cloud`; `preset: "zitadel"` with the project's
   ID and its owner organisation's ID (`zitadel_project_owner_org`). Create the roles (for example
   `scribyra:admin`, `scribyra:member`) in the project and grant them to users of your

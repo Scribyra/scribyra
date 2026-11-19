@@ -641,6 +641,9 @@ pub struct Provider {
     /// Keycloak 26 organisations: ask for and read the `organization` claim.
     #[serde(default)]
     pub keycloak_organizations: bool,
+    /// Entra: refuse tokens without the optional `acct` claim (which marks B2B guests).
+    #[serde(default)]
+    pub entra_require_acct: bool,
     /// Keycloak organisations: realm, client and group roles without an `<alias>:` prefix count
     /// in every organisation of someone in several (otherwise only in someone's only one).
     #[serde(default)]
@@ -808,6 +811,9 @@ impl Provider {
         }
         if self.keycloak_organizations && self.preset != Some(Preset::Keycloak) {
             return Err("deployment.providers[].keycloak_organizations is for the keycloak preset only");
+        }
+        if self.entra_require_acct && self.preset != Some(Preset::Entra) {
+            return Err("deployment.providers[].entra_require_acct is for the entra preset only");
         }
         if self.roles_apply_to_all_organisations && !self.keycloak_organizations {
             return Err("deployment.providers[].roles_apply_to_all_organisations needs keycloak_organizations");
@@ -1089,6 +1095,8 @@ mod tests {
         assert_eq!(zitadel.primary().map(|(_, claim)| claim), Some("1".into()), "with guests, the owner organisation is the provider's only one");
         assert!(refused(json!({"keycloak_organizations": true, "preset": "entra"})).contains("keycloak preset only"));
         assert!(refused(json!({"roles_apply_to_all_organisations": true})).contains("needs keycloak_organizations"));
+        assert!(refused(json!({"entra_require_acct": true})).contains("entra preset only"));
+        with(json!({"entra_require_acct": true, "preset": "entra"})).unwrap();
         with(json!({"roles_apply_to_all_organisations": true, "keycloak_organizations": true})).unwrap();
         // Each preset asks for the scopes its claims need.
         assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "273800000000000001"})), "openid email profile urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
