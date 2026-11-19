@@ -91,7 +91,9 @@ test('the admin area: every project, open as administrator, transfer, remove, de
   await signIn(ana.page,s,'ana');
   let admin=await openAdmin(ana.page);
   await expect(admin.getByRole('tab',{name:'Members'})).toHaveAttribute('aria-selected','true');
-  await expect(memberRow(admin,'ben@acme.test')).toContainText('acme · Active');
+  // State, and the role with the provider it comes from (read-only: roles are granted there).
+  await expect(memberRow(admin,'ben@acme.test')).toContainText('Active · last seen');
+  await expect(memberRow(admin,'ben@acme.test').getByLabel('Role of ben@acme.test')).toHaveText('Member · from Acme account');
   await expect(memberRow(admin,'ana@acme.test')).toContainText('(you)');
   await admin.getByRole('tab',{name:'Projects'}).click();
   await expect(projectRow(admin,'Ben thesis')).toContainText('ben@acme.test');
