@@ -7,7 +7,7 @@ import {validateProjectState} from './model.js';
 import {fail,jsonBytes,parseBytes,decode,hydrate,inventory,verifiedCheckpoint,replay,replayEach,restorable,rowFrom} from './history-storage.js';
 
 const allowedRoot=name=>name.startsWith('text:')||['meta','files','assets','trash',...ROOTS].includes(name);
-const allowedMeta=new Set(['schemaVersion','lineageId','name','mainFile','engine','texEnvironment']);
+const allowedMeta=new Set(['schemaVersion','lineageId','name','mainFile','engine','texEnvironment','importSource']);
 // Direct-session proofs and claims exist only in projects that have been in a session.
 const allowedMetadata=key=>allowedMeta.has(key)||typeof key==='string'&&(/^directProof:[a-zA-Z]+:[0-9a-f-]{36}$/.test(key)&&ROOTS.includes(key.split(':')[1])||/^directClaim:[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/.test(key));
 export function exportable(doc){

@@ -77,3 +77,15 @@ test('direct-session modules record nothing themselves',async()=>{
   assert.doesNotMatch(text,/observability|telemetry|observe\(|observed\(/,name);
  }
 });
+
+// docs/telemetry.md and docs/open-links.md: open links add no telemetry operation. The
+// repository, host, ref, path, file names and sizes never reach the recorder.
+test('open-link modules record nothing themselves',async()=>{
+ const {readFile,readdir}=await import('node:fs/promises');
+ const files=[...(await readdir(new URL('../web/',import.meta.url))).filter(name=>/^open-link.*\.js$/.test(name)).map(name=>new URL('../web/'+name,import.meta.url)),new URL('../site/open-link-format.js',import.meta.url),new URL('../site/open.js',import.meta.url)];
+ assert.equal(files.length,5,files.join());
+ for(const file of files){
+  const text=await readFile(file,'utf8');
+  assert.doesNotMatch(text,/observability|telemetry|observe\(|observed\(|recorder|sendBeacon/i,file.pathname);
+ }
+});

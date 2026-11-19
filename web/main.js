@@ -9,6 +9,10 @@ import {inlineRename,installTreeMenus,moveDestinations,moveTarget,treeMenuItems}
 import {takeTexFragment,texLinkEntry} from './tex-link.js';
 import './tex-link.css';
 let initialTexLink=takeTexFragment(window);
+// "Open in Scribyra" links (docs/open-links.md): consumed before startup, only ever shown as a confirmation.
+import {takeOpenFragment,openLinkEntry} from './open-link-dialog.js';
+import './open-link.css';
+let initialOpenLink=takeOpenFragment(window);
 import {initializeCollaborationSchema} from './collaboration-schema.js';
 import {mountCollaboration} from './collaboration.js';
 import {agentCommands,localAgentOwner} from './agent-commands.js';
@@ -86,6 +90,9 @@ if(initialDirectInvite)history.replaceState(null,'',location.pathname+location.s
 window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#direct='))return;const text=location.href;history.replaceState(null,'',location.pathname+location.search);if(direct)direct.offerInvite(text);else notice('Open a project, then paste this invite in Share.');});
 const texLinks=texLinkEntry({initial:initialTexLink,create:source=>createProject('TeX link scratch',[{path:'main.tex',content:source}],{fromTexLink:true}),approve:acceptTexLink,compile:()=>agent.api.compile()});
 const startedFromTexLink=!!initialTexLink;initialTexLink=null;
+const openLinks=openLinkEntry({initial:initialOpenLink,projects:()=>allProjects,openExisting:id=>openProject(id),notify:message=>notice(message),
+  importProject:({name,entries,main,source})=>createProject(name,entries,{mainPath:main,importSource:source}),compile:()=>agent.api.compile()});
+initialOpenLink=null;
 let tabSession,localEdits=0,savedEdits=0;
 let autoPending=false;
 let revision = 0, saveTimer, autoTimer, saveChain = Promise.resolve(), mountedFile, renderFrame;
@@ -341,18 +348,21 @@ function watchLocalProject(target,id){
   tabSession=localTabs({doc:target,projectId:id,read:storage.readCommittedProject,preserve:storage.preserveRecoveryProject,onRecovery:()=>{if(doc===target)notice('A competing binary version was saved in a separate recovery project. Both versions are preserved.');},isActive:()=>doc===target&&!leavingProject,isComposing:composingSource,onStatus:message=>{if(doc===target&&state.tabSyncStatus!==message){state.tabSyncStatus=message;emit();}},onMissing:kind=>{if(doc!==target)return;disconnectProjectTools();state.upgradeAvailable=kind==='upgraded';state.recoveryAvailable=true;state.saveStatus='Not saved · export a backup';notice(kind==='upgraded'?'Reload to update Scribyra. Export your open copy or save a recovered copy first; it includes your unsaved source.':kind==='deleted'?'This project was deleted in another tab. Export your open copy or save a recovered copy.':'This project is missing from local storage. Export your open copy or save a recovered copy.');},onError:error=>{if(doc===target)notice(error.message+' Your open source is preserved.');}});
 }
 
-async function createProject(name, files = [{ path: 'main.tex', content: STARTER }],{fromTexLink=false,directAttempt}={}) {
+async function createProject(name, files = [{ path: 'main.tex', content: STARTER }],{fromTexLink=false,directAttempt,mainPath,importSource}={}) {
   if (!name) return;
   const newDoc = new Y.Doc(),id=crypto.randomUUID(),client=projectCommands({doc:newDoc,projectId:id});
   try {
     client.run({op:'project.configure',name:name.slice(0,160),engine:'lualatex',mainFile:''});
     if(files.length){const added=entryCommand(files);client.run(added.command,client.revision(),added.attachments);}
-    const list=projectFiles(newDoc),main=list.find(f=>f.path==='main.tex')||list.find(f=>f.path.endsWith('/main.tex'))||list.find(f=>f.path.toLowerCase().endsWith('.tex'));
+    const list=projectFiles(newDoc),main=mainPath!==undefined?list.find(f=>f.path===mainPath&&!f.binary):list.find(f=>f.path==='main.tex')||list.find(f=>f.path.endsWith('/main.tex'))||list.find(f=>f.path.toLowerCase().endsWith('.tex'));
     client.run({op:'project.configure',mainFile:main?.id||''});
+    // Where an open link imported it from (public facts only), for a later Git plugin.
+    if(importSource)newDoc.getMap('meta').set('importSource',importSource);
     if(fromTexLink){texLinks.mark(newDoc);await openProject(id,{transientDoc:newDoc,directAttempt});return;}
     await storage.saveProject(id,newDoc);
   }finally{client.close();if(doc!==newDoc)newDoc.destroy();}
   await refreshProjects();directAttempt?.signal.throwIfAborted();await openProject(id,{directAttempt});
+  return id;
 }
 function sourceUndo(id){
   let undo=undoManagers.get(id);if(!undo){undo=new Y.UndoManager(doc.getText(`text:${id}`),{trackedOrigins:new Set([null,CompanionOrigin,AgentOrigin])});undoManagers.set(id,undo);}return undo;
@@ -871,7 +881,7 @@ async function action(name, value = '', detail = {}) {
 }
 installPopups();
 installTreeMenus((id,origin)=>action('file-menu',id,origin));
-window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects();texLinks.start(); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
+window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects();texLinks.start();openLinks.start(); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
 window.addEventListener('keydown', e => {
   if(e.defaultPrevented||document.querySelector('dialog[open]')||e.getModifierState('AltGraph')||composingEvent(e)||editor?.composing&&editor.dom.contains(e.target))return;
   if(state.current&&!document.querySelector('dialog[open]')){
