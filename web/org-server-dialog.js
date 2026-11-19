@@ -186,13 +186,17 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
   return parts;
  }
 
+ // While an action runs every button is disabled, also those of a view drawn before it started
+ // (the view is built asynchronously): a click there would be dropped, not queued.
+ const hold=()=>{if(busy)for(const b of body.querySelectorAll('button'))b.disabled=true;};
  render=()=>{
   if(!dialog)return;
+  hold();
   const scroll=dialog.scrollTop;
   if(!engine.connected){body.replaceChildren(element('p',busy?'Signing in…':'Not signed in to a deployment.','org-help'));}
   else if(drawing)redraw=true;
   else drawing=connected().then(parts=>{if(dialog&&engine.connected){
-   body.replaceChildren(...parts);dialog.scrollTop=scroll;refocus?.();keepFocus();
+   body.replaceChildren(...parts);dialog.scrollTop=scroll;hold();refocus?.();keepFocus();
   }}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;refocus=null;if(redraw){redraw=false;render();}});
   status.textContent=busy?'Working…':feedback;
   keepFocus();
