@@ -1117,7 +1117,7 @@ async fn settings(State(sr): State<Shared>, Path(p): Path<String>, source: Optio
         let mut tx = projects.store.pool.begin().await?;
         sqlx::query("UPDATE sr_projects SET compile = $2, updated = now() WHERE project = $1 AND deleted IS NULL").bind(&p).bind(&request.compile).execute(&mut *tx).await?;
         server_projects::notify(&mut tx, &p).await?;
-        crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.compile_mode", Some(("project", &p)), json!({"mode": request.compile})).await?;
+        crate::audit::record(&mut tx, &caller.org, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.compile_mode", Some(("project", &p)), json!({"mode": request.compile})).await?;
         tx.commit().await
     };
     if let Err(e) = done.await {

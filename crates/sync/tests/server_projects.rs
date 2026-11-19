@@ -9,7 +9,7 @@ use support::{sr::*, sso::*, *};
 
 fn users() -> Value {
     let mut users = people();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-gus", "username": "gus", "password": "pw-gus", "email": "gus@partner.org", "email_verified": true, "name": "Gus", "claims": {"acct": "1"}}));
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-gus", "username": "gus", "password": "pw-gus", "email": "gus@partner.org", "email_verified": true, "name": "Gus", "roles": [MEMBER], "claims": {"acct": "1"}}));
     users
 }
 fn start(blobs: Blobs) -> Sr {
@@ -103,7 +103,7 @@ fn creating_with_an_initial_state_and_an_id_is_idempotent() {
 
 #[test]
 fn roles_decide_who_reads_writes_and_shares() {
-    let sr = Sr::start(Blobs::Fs, users(), json!({}), json!({"guests": "shared", "provider": {"guest": {"claim": "acct", "equals": "1"}}}));
+    let sr = Sr::start(Blobs::Fs, users(), json!({}), json!({"guests": "shared", "provider": {"claims": {"roles": "$.roles", "guest": {"path": "$.acct", "equals": "1"}}}}));
     let (ana, ben, cat, dan, gus) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")), sr.api(&sr.login("cat")), sr.api(&sr.login("dan")), sr.api(&sr.login("gus")));
     let p = ana.create("Shared");
     let doc = Project::new();
@@ -166,7 +166,7 @@ fn account(sr: &Sr, user: &str) -> String {
 #[test]
 fn invitations_wait_for_a_sign_in_with_that_verified_email() {
     let mut users = users();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-unverified-nina", "username": "fake-nina", "password": "pw-fake-nina", "email": "nina@example.org", "email_verified": false, "name": "Not Nina"}));
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-unverified-nina", "username": "fake-nina", "password": "pw-fake-nina", "email": "nina@example.org", "email_verified": false, "name": "Not Nina", "roles": [MEMBER]}));
     let sr = Sr::start(Blobs::Fs, users, json!({}), json!({}));
     let ana = sr.api(&sr.login("alice"));
     let p = ana.create("Invited");
@@ -548,43 +548,42 @@ fn hostile_yjs_updates_are_refused_and_the_service_survives() {
 }
 
 #[test]
-fn invitations_count_an_email_only_at_a_provider_that_vouches_for_it() {
-    // Review H2: with several providers, any one asserting a verified email used to get that
-    // email's shares at once and accept its pending invitations. Now a plain email counts only
-    // at a provider whose `email_domains` include its domain, unless the inviter names the
-    // provider (`provider:email`).
+fn invitations_stay_inside_the_projects_organisation() {
+    // Review H2's concern (another provider asserting a verified email getting its shares) is now
+    // structural: each provider has its own organisation here, an invitation matches only accounts
+    // of its project's organisation, and a pending one is accepted only by a sign-in into it.
     let mut users = users();
     for (name, email) in [("imposter", "victim@example.org"), ("early", "early@example.org"), ("victim", "victim@example.org")] {
-        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name}));
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name, "roles": [MEMBER]}));
     }
-    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": {"email_domains": ["example.org"]}, "more_providers": [{"id": "partner", "label": "Partner account", "email_domains": []}]}));
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({"more_providers": [{"id": "partner", "label": "Partner account"}]}));
     let partner = Client { base: sr.url(), provider: "partner".into(), idp: &sr.env.idp };
     let ana = sr.api(&sr.login("alice"));
     let p = ana.create("Vouched");
-    // A pending invitation is not accepted by another provider's account with that email ...
+    // A pending invitation is not accepted by an account of another organisation with that email ...
     assert_eq!(ana.invite(&p, "victim@example.org", "editor").json()["status"], "pending");
     let imposter = sr.api(partner.login("imposter")["token"].as_str().unwrap());
     assert_eq!(imposter.call("GET", "/v1/sr/projects", None).json()["projects"], json!([]));
     assert_eq!(imposter.log(&p, 0).status, 404);
-    // ... but by the vouching provider's.
+    // ... but by the sign-in into the project's organisation.
     let victim = sr.api(&sr.login("victim"));
     assert_eq!(victim.details(&p).json()["role"], "editor");
-    // An existing account at a provider that does not vouch is not shared at once either.
+    // An existing account of another organisation is not shared at once either.
     let early = sr.api(partner.login("early")["token"].as_str().unwrap());
     assert_eq!(ana.invite(&p, "early@example.org", "viewer").json()["status"], "pending");
     assert_eq!(early.log(&p, 0).status, 404);
-    // Naming the provider shares with that provider's account.
-    let named = ana.invite(&p, "partner:early@example.org", "viewer");
-    assert_eq!((named.status, named.json()["status"].as_str()), (201, Some("shared")));
-    assert_eq!(early.details(&p).json()["role"], "viewer");
-    // Members and invitations show the provider; a domain nobody vouches for must name one.
+    // The `provider:email` form is gone: it is just an address nobody has, and shares nothing.
+    assert_eq!(ana.invite(&p, "partner:early@example.org", "viewer").json()["status"], "pending");
+    assert_eq!(early.log(&p, 0).status, 404);
+    // Members show the provider they signed in with.
     let details = ana.details(&p).json();
     let providers: Vec<(&str, &str)> = details["members"].as_array().unwrap().iter().map(|m| (m["email"].as_str().unwrap(), m["provider"].as_str().unwrap())).collect();
-    assert_eq!(providers, vec![("alice@example.org", "test"), ("victim@example.org", "test"), ("early@example.org", "partner")]);
-    assert_eq!(ana.invite(&p, "gus@partner.org", "viewer").status, 400);
-    let pending = ana.invite(&p, "partner:gus@partner.org", "viewer").json();
-    assert_eq!((pending["status"].as_str(), pending["invitation"]["provider"].as_str()), (Some("pending"), Some("partner")));
-    assert_eq!(ana.invite(&p, "nowhere:gus@partner.org", "viewer").status, 400);
+    assert_eq!(providers, vec![("alice@example.org", "test"), ("victim@example.org", "test")]);
+    // The partner's organisation is another one: its member cannot even name this project's.
+    let test_org = sr.env.org();
+    let partner_org = early.call("GET", "/v1/sr/projects", None).json()["org"].as_str().unwrap().to_owned();
+    assert_ne!(test_org, partner_org);
+    assert_eq!(request("GET", &format!("{}/v1/sr/projects", sr.url()), Some(&early.token), &[("Scribyra-Org", test_org)], vec![]).status, 404);
 }
 
 #[test]
@@ -661,7 +660,7 @@ fn emails_are_normalised_once_and_compared_as_stored() {
     // normalised once (trimmed, Unicode lowercase) when stored and compared as stored.
     let mut users = users();
     for (name, email) in [("emile", "Émile@Example.org"), ("odon", "ÖDÖN@example.org")] {
-        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name}));
+        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": email, "email_verified": true, "name": name, "roles": [MEMBER]}));
     }
     let sr = Sr::start(Blobs::Fs, users, json!({}), json!({}));
     let ana = sr.api(&sr.login("alice"));

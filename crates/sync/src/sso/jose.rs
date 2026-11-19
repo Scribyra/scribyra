@@ -20,9 +20,6 @@ pub const MAX_KEYS: usize = 32;
 /// Clock skew allowed on `exp`, and how far in the future `iat` may lie.
 pub const SKEW_SECONDS: i64 = 120;
 pub const MAX_IAT_AHEAD_SECONDS: i64 = 300;
-/// Group claims are cut to this many entries; longer group names are dropped.
-pub const MAX_GROUPS: usize = 256;
-pub const MAX_GROUP_BYTES: usize = 256;
 const MAX_CLAIM_BYTES: usize = 512;
 pub const BACKCHANNEL_EVENT: &str = "http://schemas.openid.net/event/backchannel-logout";
 
@@ -279,23 +276,26 @@ pub struct Expect<'a> {
     pub nonce: Option<&'a str>,
     /// When not empty, a verified email in one of these domains is required.
     pub email_domains: &'a [String],
-    pub groups_claim: Option<&'a str>,
-    /// The claim and value that mark a guest account at this provider.
-    pub guest: Option<(&'a str, &'a str)>,
     /// Seconds since the Unix epoch.
     pub now: i64,
 }
-/// The identity taken from a checked ID token.
+/// The identity taken from a checked ID token. Organisations and roles are read from the same
+/// token's claims by [`crate::claims::map`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Identity {
     pub subject: String,
     pub email: Option<String>,
+    /// `email_verified: true`; a missing claim is false.
     pub email_verified: bool,
     pub name: Option<String>,
-    pub groups: Vec<String>,
+    /// An `https` picture URL.
+    pub picture: Option<String>,
     pub sid: Option<String>,
-    /// The provider marked this account as a guest (by the configured claim and value).
-    pub guest: bool,
+}
+/// A profile picture URL: `https`, at most 2048 bytes.
+pub fn picture(value: Option<&Value>) -> Option<String> {
+    let text = value?.as_str()?;
+    (text.len() <= 2048 && url::Url::parse(text).is_ok_and(|u| u.scheme() == "https" && u.host().is_some())).then(|| text.to_owned())
 }
 fn number(claims: &Map<String, Value>, name: &str) -> Option<i64> {
     let value = claims.get(name)?;
@@ -328,17 +328,6 @@ fn check_common(claims: &Map<String, Value>, expect: &Expect) -> Result<(), Clai
         return Err(ClaimError::IssuedAt);
     }
     Ok(())
-}
-/// Whether a claim holds the value that marks a guest: the same string, number or boolean, or
-/// an array that contains it.
-fn claim_equals(value: Option<&Value>, want: &str) -> bool {
-    match value {
-        Some(Value::String(s)) => s == want,
-        Some(Value::Number(n)) => n.to_string() == want,
-        Some(Value::Bool(b)) => b.to_string() == want,
-        Some(Value::Array(list)) => list.iter().any(|v| claim_equals(Some(v), want)),
-        _ => false,
-    }
 }
 /// Check an ID token's claims (OpenID Connect Core 1.0, section 3.1.3.7).
 pub fn check_id_token(claims: &Map<String, Value>, expect: &Expect) -> Result<Identity, ClaimError> {
@@ -378,18 +367,7 @@ fn check_id_token_with(claims: &Map<String, Value>, expect: &Expect, refreshed: 
             return Err(ClaimError::EmailDomain);
         }
     }
-    let groups = match expect.groups_claim.and_then(|name| claims.get(name)) {
-        Some(Value::Array(list)) => list
-            .iter()
-            .filter_map(Value::as_str)
-            .filter(|g| !g.is_empty() && g.len() <= MAX_GROUP_BYTES)
-            .take(MAX_GROUPS)
-            .map(str::to_owned)
-            .collect(),
-        _ => vec![],
-    };
-    let guest = expect.guest.is_some_and(|(claim, value)| claim_equals(claims.get(claim), value));
-    Ok(Identity { subject, email, email_verified, name: short(claims, "name"), groups, sid: short(claims, "sid"), guest })
+    Ok(Identity { subject, email, email_verified, name: short(claims, "name"), picture: picture(claims.get("picture")), sid: short(claims, "sid") })
 }
 /// What a back-channel logout token asks to end: a subject, a provider session, or both.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -459,10 +437,10 @@ mod tests {
         format!("{input}.{}", b64_encode(&sig.to_bytes()))
     }
     fn claims() -> Value {
-        json!({"iss":"https://idp.example","aud":"client","sub":"alice","nonce":"n1","iat":1000,"exp":2000,"email":"Alice@Example.org","email_verified":true,"name":"Alice","groups":["a","b"]})
+        json!({"iss":"https://idp.example","aud":"client","sub":"alice","nonce":"n1","iat":1000,"exp":2000,"email":"Alice@Example.org","email_verified":true,"name":"Alice","picture":"https://idp.example/a.png"})
     }
     fn expect() -> Expect<'static> {
-        Expect { issuer: "https://idp.example", client_id: "client", nonce: Some("n1"), email_domains: &[], groups_claim: Some("groups"), guest: None, now: 1500 }
+        Expect { issuer: "https://idp.example", client_id: "client", nonce: Some("n1"), email_domains: &[], now: 1500 }
     }
 
     #[test]
@@ -473,7 +451,7 @@ mod tests {
         let v = verify(&t, &set).unwrap();
         let id = check_id_token(&v.claims, &expect()).unwrap();
         assert_eq!(id.subject, "alice");
-        assert_eq!(id.groups, vec!["a", "b"]);
+        assert_eq!((id.email_verified, id.picture.as_deref()), (true, Some("https://idp.example/a.png")));
         let t = es_token(&ec, json!({"alg":"ES256","kid":"p"}), claims());
         assert!(verify(&t, &set).is_ok());
     }
@@ -630,24 +608,17 @@ mod tests {
         assert_eq!(check_id_token(&c(json!({"email":null})), &domain).unwrap_err(), ClaimError::EmailDomain);
         assert_eq!(check_id_token(&c(json!({"hd":"other.org"})), &domain).unwrap_err(), ClaimError::EmailDomain);
         assert!(check_id_token(&c(json!({"hd":"example.org"})), &domain).is_ok());
-        let groups: Vec<String> = (0..400).map(|i| format!("g{i}")).collect();
-        let id = check_id_token(&c(json!({"groups": groups})), &e).unwrap();
-        assert_eq!(id.groups.len(), MAX_GROUPS);
-        let id = check_id_token(&c(json!({"groups": ["x".repeat(300), "ok"]})), &e).unwrap();
-        assert_eq!(id.groups, vec!["ok"]);
+        // A missing or non-boolean email_verified is false; a picture must be an https URL.
+        assert!(!check_id_token(&c(json!({"email_verified":null})), &e).unwrap().email_verified);
+        assert!(!check_id_token(&c(json!({"email_verified":"true"})), &e).unwrap().email_verified);
+        assert_eq!(check_id_token(&c(json!({"picture":"javascript:alert(1)"})), &e).unwrap().picture, None);
+        assert_eq!(check_id_token(&c(json!({"picture":"http://idp.example/a.png"})), &e).unwrap().picture, None);
         // Several domains: any one of them, and `hd` must name the email's own domain.
         let two = ["example.org".to_string(), "lab.example".to_string()];
         let both = Expect { email_domains: &two, ..expect() };
         assert!(check_id_token(&c(json!({"email":"bob@lab.example"})), &both).is_ok());
         assert_eq!(check_id_token(&c(json!({"email":"bob@lab.example","hd":"example.org"})), &both).unwrap_err(), ClaimError::EmailDomain);
         assert_eq!(check_id_token(&c(json!({"email":"bob@other.example"})), &both).unwrap_err(), ClaimError::EmailDomain);
-        // Guests: the configured claim and value, as a string, number, boolean or in a list.
-        let guest = Expect { guest: Some(("acct", "1")), ..expect() };
-        assert!(!check_id_token(&c(json!({})), &guest).unwrap().guest);
-        assert!(check_id_token(&c(json!({"acct": 1})), &guest).unwrap().guest);
-        assert!(check_id_token(&c(json!({"acct": "1"})), &guest).unwrap().guest);
-        assert!(!check_id_token(&c(json!({"acct": 0})), &guest).unwrap().guest);
-        assert!(check_id_token(&c(json!({"acct": ["x", "1"]})), &guest).unwrap().guest);
         // A refreshed ID token need not carry the nonce; every other claim is checked as at sign-in.
         assert!(check_refreshed_id_token(&c(json!({"nonce":null})), &e).is_ok());
         assert_eq!(check_refreshed_id_token(&c(json!({"nonce":null,"aud":"other"})), &e).unwrap_err(), ClaimError::Audience);

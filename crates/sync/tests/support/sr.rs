@@ -58,7 +58,7 @@ impl Sr {
         self.env.client().login(user)["token"].as_str().unwrap().to_owned()
     }
     pub fn api(&self, token: &str) -> Api {
-        Api { base: self.url(), token: token.to_owned() }
+        Api { base: self.url(), token: token.to_owned(), org: None }
     }
     /// A `scribyra-sync compile-worker` for this deployment (S3 blobs: a filesystem blob directory
     /// belongs to one process), its probes on a free port; `extra` merges into its configuration.
@@ -130,18 +130,30 @@ pub fn request(method: &str, url: &str, token: Option<&str>, headers: &[(&str, S
     Reply { status, headers, body }
 }
 
-/// One person's view of the `/v1/sr/` API.
+/// One person's view of the `/v1/sr/` and `/v1/admin/` APIs, in their only organisation or, with
+/// [`Api::in_org`], in the one each request names (`Scribyra-Org`).
 #[derive(Clone)]
 pub struct Api {
     pub base: String,
     pub token: String,
+    pub org: Option<String>,
 }
 impl Api {
     pub fn on(&self, base: &str) -> Api {
-        Api { base: base.to_owned(), token: self.token.clone() }
+        Api { base: base.to_owned(), ..self.clone() }
+    }
+    /// The same session acting in organisation `org`.
+    pub fn in_org(&self, org: &str) -> Api {
+        Api { org: Some(org.to_owned()), ..self.clone() }
+    }
+    fn with_org(&self, mut headers: Vec<(&'static str, String)>) -> Vec<(&'static str, String)> {
+        if let Some(org) = &self.org {
+            headers.push(("Scribyra-Org", org.clone()));
+        }
+        headers
     }
     pub fn call(&self, method: &str, path: &str, body: Option<Value>) -> Reply {
-        let headers = if body.is_some() { vec![("Content-Type", "application/json".to_string())] } else { vec![] };
+        let headers = self.with_org(if body.is_some() { vec![("Content-Type", "application/json".to_string())] } else { vec![] });
         request(method, &format!("{}{path}", self.base), Some(&self.token), &headers, body.map(|b| b.to_string().into_bytes()).unwrap_or_default())
     }
     /// Creates a project; returns its ID.
@@ -155,7 +167,7 @@ impl Api {
             "POST",
             &format!("{}/v1/sr/projects/{project}/log", self.base),
             Some(&self.token),
-            &[("Scribyra-Client", client.to_owned()), ("Scribyra-Client-Seq", seq.to_string()), ("Content-Type", "application/octet-stream".into())],
+            &self.with_org(vec![("Scribyra-Client", client.to_owned()), ("Scribyra-Client-Seq", seq.to_string()), ("Content-Type", "application/octet-stream".into())]),
             update.to_vec(),
         )
     }
@@ -166,7 +178,7 @@ impl Api {
         self.call("GET", &format!("/v1/sr/projects/{project}"), None)
     }
     pub fn put_object(&self, project: &str, bytes: &[u8]) -> Reply {
-        request("PUT", &format!("{}/v1/sr/projects/{project}/objects/{}", self.base, super::sha256(bytes)), Some(&self.token), &[], bytes.to_vec())
+        request("PUT", &format!("{}/v1/sr/projects/{project}/objects/{}", self.base, super::sha256(bytes)), Some(&self.token), &self.with_org(vec![]), bytes.to_vec())
     }
     pub fn get_object(&self, project: &str, hash: &str) -> Reply {
         self.call("GET", &format!("/v1/sr/projects/{project}/objects/{hash}"), None)

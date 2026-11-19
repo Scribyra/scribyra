@@ -11,8 +11,18 @@
 //!               "redirect_uris": ["http://127.0.0.1:18301/v1/sso/callback/acme"],
 //!               "backchannel_logout_uri": "http://127.0.0.1:18301/v1/sso/backchannel"}],
 //!  "users": [{"sub": "u1", "username": "alice", "password": "…", "email": "alice@example.org",
-//!             "email_verified": true, "name": "Alice", "groups": ["staff"]}]}
+//!             "email_verified": true, "name": "Alice", "roles": ["scribyra:admin"]}]}
 //! ```
+//!
+//! Each user's ID tokens can take the shape of a provider the service has a preset for:
+//! `roles` (a `roles` claim: generic mappings and Entra app roles), `zitadel` (`{"resourceowner":
+//! "<org id>", "project_id": "<id>", "roles": {"<role>": {"<org id>": "<org domain>"}}}`: the
+//! project roles claim, also under the project's own name when `project_id` is set, and the
+//! resource owner claims), `keycloak` (`{"realm_roles": [], "client_roles": {"<client>": []},
+//! "organization": …}`), `entra` (`{"tid": "…", "acct": 0|1}`), `hd` (Google Workspace) and any
+//! other `claims`. `email_verified` is left out of tokens when not given (a missing claim);
+//! `userinfo_only` names profile claims (`email`, `email_verified`, `name`, `picture`) that only
+//! the userinfo endpoint returns.
 //!
 //! `alg` is `RS256` (default), `ES256` or `EdDSA`. The issuer must be the bare origin the
 //! provider is reached at. Prints `{"event":"listening","address":"127.0.0.1:PORT"}` when ready.
@@ -21,9 +31,12 @@
 //! also `login_hint=<username>&test_password=<password>` to skip it), `/login`, `/token`
 //! (authorization code with PKCE S256, client_secret_basic or client_secret_post; refresh
 //! tokens rotate and are refused for disabled users; a refresh returns a new ID token without a
-//! nonce), `/end_session`. A user's `claims` object adds claims to their ID tokens (for example
-//! a guest marker). On a loopback bind only, `/control/disable?user=`, `/control/enable?user=`,
-//! `/control/groups?user=&groups=a,b` (the user's groups from now on), `/control/rotate[?drop=1]`,
+//! nonce), `/userinfo` (with the access token), `/end_session`. A user's `claims` object adds
+//! claims to their ID tokens. On a loopback bind only, `/control/disable?user=`,
+//! `/control/enable?user=`, `/control/roles?user=&roles=a,b` (the user's `roles` from now on),
+//! `POST /control/set?user=` with a JSON object of user fields (for example `zitadel`, `entra`,
+//! `claims`; they replace the user's from the next token on, so a refresh sees changed roles and
+//! organisations), `/control/rotate[?drop=1]`,
 //! `/control/delay?ms=` (refresh grants wait this long before they are answered, so two callers
 //! can race with the same refresh token), `/control/fault?kind=` (the next ID token is defective: `bad_signature`, `wrong_aud`,
 //! `wrong_iss`, `wrong_nonce`, `expired`, `alg_none`, `alg_hs256`, `unknown_kid`,
@@ -68,7 +81,7 @@ struct Client {
     #[serde(default)]
     backchannel_logout_uri: Option<String>,
 }
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, serde::Serialize, Clone)]
 #[serde(deny_unknown_fields)]
 struct User {
     sub: String,
@@ -76,16 +89,28 @@ struct User {
     password: String,
     #[serde(default)]
     email: Option<String>,
+    /// Left out of tokens when `None`.
     #[serde(default)]
-    email_verified: bool,
+    email_verified: Option<bool>,
     #[serde(default)]
     name: Option<String>,
     #[serde(default)]
-    groups: Vec<String>,
+    picture: Option<String>,
+    #[serde(default)]
+    roles: Vec<String>,
+    #[serde(default)]
+    zitadel: Option<Value>,
+    #[serde(default)]
+    keycloak: Option<Value>,
+    #[serde(default)]
+    entra: Option<Value>,
     #[serde(default)]
     hd: Option<String>,
     #[serde(default)]
     claims: serde_json::Map<String, Value>,
+    /// Profile claims served by `/userinfo` only, never in ID tokens.
+    #[serde(default)]
+    userinfo_only: Vec<String>,
     #[serde(default)]
     disabled: bool,
 }
@@ -191,8 +216,10 @@ struct Idp {
     codes: Mutex<HashMap<String, Code>>,
     refresh: Mutex<HashMap<String, Refresh>>,
     disabled: Mutex<HashSet<String>>,
-    /// Groups set through `/control/groups`, replacing a user's configured ones.
-    groups: Mutex<HashMap<String, Vec<String>>>,
+    /// The users, as configured and then changed through `/control/roles` and `/control/set`.
+    users: Mutex<Vec<User>>,
+    /// Access tokens issued (for `/userinfo`): token → username.
+    access: Mutex<HashMap<String, String>>,
     sids: Mutex<HashMap<String, String>>,
     fault: Mutex<Option<String>>,
     /// How long refresh grants wait (`/control/delay`).
@@ -229,7 +256,7 @@ impl Idp {
         keys.0[keys.1].clone()
     }
     fn user(&self, username: &str) -> Option<User> {
-        self.config.users.iter().find(|u| u.username == username).cloned()
+        self.users.lock().unwrap().iter().find(|u| u.username == username).cloned()
     }
     fn enabled(&self, user: &User) -> bool {
         !user.disabled && !self.disabled.lock().unwrap().contains(&user.username)
@@ -243,20 +270,18 @@ impl Idp {
         let fault = if nonce.is_some() { self.fault.lock().unwrap().take() } else { None };
         let fault = fault.as_deref().unwrap_or("");
         let now = now();
-        let groups = self.groups.lock().unwrap().get(&user.username).cloned().unwrap_or_else(|| user.groups.clone());
-        let mut claims = json!({
-            "iss": self.config.issuer, "sub": user.sub, "aud": client_id, "exp": now + 300, "iat": now,
-            "auth_time": now, "sid": sid, "email": user.email, "email_verified": user.email_verified,
-            "name": user.name, "groups": groups,
-        });
+        let mut claims = json!({"iss": self.config.issuer, "sub": user.sub, "aud": client_id, "exp": now + 300, "iat": now, "auth_time": now, "sid": sid});
+        for (k, v) in profile(user) {
+            if !user.userinfo_only.contains(&k) {
+                claims[k] = v;
+            }
+        }
         if let Some(nonce) = nonce {
             claims["nonce"] = json!(nonce);
         }
+        shape(user, &mut claims);
         for (k, v) in &user.claims {
             claims[k] = v.clone();
-        }
-        if let Some(hd) = &user.hd {
-            claims["hd"] = json!(hd);
         }
         match fault {
             "wrong_aud" => claims["aud"] = json!("another-client"),
@@ -344,6 +369,54 @@ impl Idp {
     }
 }
 
+/// A user's profile claims (those given).
+fn profile(user: &User) -> serde_json::Map<String, Value> {
+    let mut out = serde_json::Map::new();
+    for (k, v) in [("email", user.email.clone().map(Value::from)), ("email_verified", user.email_verified.map(Value::from)), ("name", user.name.clone().map(Value::from)), ("picture", user.picture.clone().map(Value::from))] {
+        if let Some(v) = v {
+            out.insert(k.to_owned(), v);
+        }
+    }
+    out
+}
+/// The claims of the provider shapes a user has (see the module documentation).
+fn shape(user: &User, claims: &mut Value) {
+    if !user.roles.is_empty() {
+        claims["roles"] = json!(user.roles);
+    }
+    if let Some(z) = &user.zitadel {
+        let roles = z.get("roles").cloned().unwrap_or(json!({}));
+        claims["urn:zitadel:iam:org:project:roles"] = roles.clone();
+        if let Some(project) = z.get("project_id").and_then(Value::as_str) {
+            claims[format!("urn:zitadel:iam:org:project:{project}:roles")] = roles;
+        }
+        if let Some(owner) = z.get("resourceowner") {
+            claims["urn:zitadel:iam:user:resourceowner:id"] = owner.clone();
+            claims["urn:zitadel:iam:user:resourceowner:name"] = z.get("resourceowner_name").cloned().unwrap_or(owner.clone());
+        }
+    }
+    if let Some(k) = &user.keycloak {
+        if let Some(realm) = k.get("realm_roles") {
+            claims["realm_access"] = json!({"roles": realm});
+        }
+        if let Some(Value::Object(clients)) = k.get("client_roles") {
+            claims["resource_access"] = Value::Object(clients.iter().map(|(c, r)| (c.clone(), json!({"roles": r}))).collect());
+        }
+        if let Some(org) = k.get("organization") {
+            claims["organization"] = org.clone();
+        }
+    }
+    if let Some(e) = &user.entra {
+        for key in ["tid", "acct", "oid"] {
+            if let Some(v) = e.get(key) {
+                claims[key] = v.clone();
+            }
+        }
+    }
+    if let Some(hd) = &user.hd {
+        claims["hd"] = json!(hd);
+    }
+}
 fn login_form(q: &HashMap<String, String>, message: &str) -> String {
     let hidden: String = ["client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge", "code_challenge_method"]
         .iter()
@@ -364,6 +437,7 @@ async fn discovery(State(idp): State<Shared>) -> Json<Value> {
         "authorization_endpoint": format!("{base}/authorize"),
         "token_endpoint": format!("{base}/token"),
         "jwks_uri": format!("{base}/jwks"),
+        "userinfo_endpoint": format!("{base}/userinfo"),
         "end_session_endpoint": format!("{base}/end_session"),
         "response_types_supported": ["code"],
         "subject_types_supported": ["public"],
@@ -450,15 +524,27 @@ async fn token(State(idp): State<Shared>, headers: HeaderMap, Form(form): Form<H
     };
     let refresh = random_hex();
     idp.refresh.lock().unwrap().insert(refresh.clone(), Refresh { client_id: client.client_id.clone(), username: user.username.clone() });
-    let mut body = json!({"access_token": random_hex(), "token_type": "Bearer", "expires_in": 300, "refresh_token": refresh});
+    let access = random_hex();
+    idp.access.lock().unwrap().insert(access.clone(), user.username.clone());
+    let mut body = json!({"access_token": access, "token_type": "Bearer", "expires_in": 300, "refresh_token": refresh});
     body["id_token"] = json!(idp.id_token(&client.client_id, &user, nonce.as_deref(), &sid));
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
+}
+/// OpenID Connect Core 1.0, section 5.3: the profile of the access token's user (with the claims
+/// only the userinfo endpoint returns).
+async fn userinfo(State(idp): State<Shared>, headers: HeaderMap) -> Response {
+    let token = headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).unwrap_or("");
+    let username = idp.access.lock().unwrap().get(token).cloned();
+    let Some(user) = username.and_then(|u| idp.user(&u)).filter(|u| idp.enabled(u)) else { return oauth_error(StatusCode::UNAUTHORIZED, "invalid_token") };
+    let mut body = profile(&user);
+    body.insert("sub".into(), json!(user.sub));
+    Json(Value::Object(body)).into_response()
 }
 async fn end_session() -> Response {
     page(StatusCode::OK, "<p>Signed out.</p>".into())
 }
 
-async fn control(State(idp): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, axum::extract::Path(action): axum::extract::Path<String>, Query(q): Query<HashMap<String, String>>) -> Response {
+async fn control(State(idp): State<Shared>, ConnectInfo(peer): ConnectInfo<SocketAddr>, axum::extract::Path(action): axum::extract::Path<String>, Query(q): Query<HashMap<String, String>>, body: axum::body::Bytes) -> Response {
     if !peer.ip().is_loopback() {
         return StatusCode::FORBIDDEN.into_response();
     }
@@ -470,9 +556,24 @@ async fn control(State(idp): State<Shared>, ConnectInfo(peer): ConnectInfo<Socke
         "enable" => {
             idp.disabled.lock().unwrap().remove(&arg("user"));
         }
-        "groups" => {
-            let groups = arg("groups").split(',').filter(|g| !g.is_empty()).map(str::to_owned).collect();
-            idp.groups.lock().unwrap().insert(arg("user"), groups);
+        "roles" => {
+            let roles: Vec<String> = arg("roles").split(',').filter(|g| !g.is_empty()).map(str::to_owned).collect();
+            let mut users = idp.users.lock().unwrap();
+            let Some(user) = users.iter_mut().find(|u| u.username == arg("user")) else { return StatusCode::NOT_FOUND.into_response() };
+            user.roles = roles;
+        }
+        "set" => {
+            let Ok(Value::Object(fields)) = serde_json::from_slice::<Value>(&body) else { return StatusCode::BAD_REQUEST.into_response() };
+            let mut users = idp.users.lock().unwrap();
+            let Some(user) = users.iter_mut().find(|u| u.username == arg("user")) else { return StatusCode::NOT_FOUND.into_response() };
+            let mut merged = serde_json::to_value(&*user).unwrap();
+            for (k, v) in fields {
+                merged[k] = v;
+            }
+            match serde_json::from_value::<User>(merged) {
+                Ok(changed) => *user = changed,
+                Err(_) => return StatusCode::BAD_REQUEST.into_response(),
+            }
         }
         "delay" => {
             *idp.delay.lock().unwrap() = Duration::from_millis(arg("ms").parse().unwrap_or(0));
@@ -562,15 +663,17 @@ async fn main() {
     let loopback = config.bind.ip().is_loopback();
     let listener = tokio::net::TcpListener::bind(config.bind).await.expect("bind");
     let address = listener.local_addr().unwrap();
+    let users = config.users.clone();
     let idp = Arc::new(Idp {
         config,
+        users: Mutex::new(users),
+        access: Mutex::default(),
         alg,
         keys: Mutex::new((keys, current)),
         rotated_rsa: Mutex::new(false),
         codes: Mutex::default(),
         refresh: Mutex::default(),
         disabled: Mutex::default(),
-        groups: Mutex::default(),
         sids: Mutex::default(),
         fault: Mutex::default(),
         delay: Mutex::default(),
@@ -581,6 +684,7 @@ async fn main() {
         .route("/authorize", get(authorize))
         .route("/login", post(login))
         .route("/token", post(token))
+        .route("/userinfo", get(userinfo))
         .route("/end_session", get(end_session));
     if loopback {
         app = app.route("/control/{action}", get(control).post(control));

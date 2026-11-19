@@ -6,6 +6,7 @@
 pub mod admin;
 pub mod audit;
 pub mod blobs;
+pub mod claims;
 pub mod compiles;
 pub mod config;
 pub mod deploy;

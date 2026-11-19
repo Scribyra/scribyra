@@ -210,7 +210,7 @@ const DEPLOYMENT_FIELDS: [(&str, bool); 12] = [
     ("compile", true),
     ("link_sharing", false),
     ("guests", true),
-    ("admins", false),
+    ("notify_on_admin_access", false),
     ("providers", false),
     ("quotas", false),
     ("audit_retention_days", false),
@@ -485,13 +485,14 @@ pub enum Compile {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Guests {
-    /// Provider guest accounts are refused at sign-in.
+    /// Provider guest accounts are refused at sign-in (always, in end-to-end mode).
     #[default]
     Off,
     /// Guest accounts may open what is shared with them.
     Shared,
 }
-/// The organisation's policy (design section 2). One deployment serves one organisation.
+/// The deployment's policy (design section 2). Its organisations, people and roles come from the
+/// providers' tokens (section 3); the configuration lists no administrators.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Deployment {
@@ -506,9 +507,9 @@ pub struct Deployment {
     pub link_sharing: bool,
     #[serde(default)]
     pub guests: Guests,
-    /// Verified emails, or `issuer#subject`, that are administrators whatever groups say.
-    #[serde(default)]
-    pub admins: Vec<String>,
+    /// Members see when an administrator opened their project (it is audited either way).
+    #[serde(default = "yes")]
+    pub notify_on_admin_access: bool,
     pub providers: Vec<Provider>,
     #[serde(default)]
     pub quotas: Quotas,
@@ -533,12 +534,50 @@ impl Config {
         self.audit_retention_seconds.unwrap_or_else(|| self.deployment.as_ref().map_or(400, |d| d.audit_retention_days) as u64 * 24 * 3600)
     }
 }
-/// How a provider marks guest accounts: a claim and the value that means "guest".
+/// How a provider's claims name organisations, roles and guests (design section 3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Preset {
+    /// Organisations and roles from `urn:zitadel:iam:org:project[:{id}]:roles`; a role granted by
+    /// another organisation than the user's own makes them a guest there.
+    Zitadel,
+    /// Roles from `realm_access` and `resource_access.{client_id}`; organisations from
+    /// `organization` with `keycloak_organizations`, else one per provider.
+    Keycloak,
+    /// The tenant (`tid`) is the organisation, app `roles` the roles, `acct = 1` a guest.
+    Entra,
+    /// The Workspace domain (`hd`) is the organisation; everyone is a member and administrators are
+    /// `admin_subjects` (Google's tokens carry no roles).
+    Google,
+}
+/// A generic claims mapping: JSON paths into the ID token (see [`crate::claims::ClaimPath`]).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimRules {
+    /// The organisation's identifier; without it the provider has one organisation.
+    #[serde(default)]
+    pub organisation: Option<String>,
+    #[serde(default)]
+    pub organisation_name: Option<String>,
+    /// A string or a list of strings: the provider's role names.
+    pub roles: String,
+    #[serde(default)]
+    pub guest: Option<GuestRule>,
+}
+/// A claim (JSON path) and the value that marks a guest.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct GuestRule {
-    pub claim: String,
+    pub path: String,
     pub equals: String,
+}
+/// Provider role names for each deployment role; the highest a person holds wins.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct RoleNames {
+    pub admin: Vec<String>,
+    pub member: Vec<String>,
+    pub guest: Vec<String>,
 }
 /// One OpenID Connect provider. Its redirect URI is `<public_url>/v1/sso/callback/<id>`.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -549,23 +588,33 @@ pub struct Provider {
     pub issuer: String,
     pub client_id: String,
     pub client_secret_file: PathBuf,
+    /// When not empty, only verified emails in these domains sign in (a filter, never a role).
     #[serde(default)]
     pub email_domains: Vec<String>,
+    /// Exactly one of `preset` and `claims`.
     #[serde(default)]
-    pub groups_claim: Option<String>,
+    pub preset: Option<Preset>,
     #[serde(default)]
-    pub admin_groups: Vec<String>,
+    pub claims: Option<ClaimRules>,
     #[serde(default)]
-    pub member_groups: Vec<String>,
+    pub roles: RoleNames,
+    /// Zitadel: the project whose roles count (its roles claim and audience scope).
     #[serde(default)]
-    pub guest: Option<GuestRule>,
+    pub zitadel_project_id: Option<String>,
+    /// Keycloak 26 organisations: ask for and read the `organization` claim.
+    #[serde(default)]
+    pub keycloak_organizations: bool,
+    /// Google: the exact `sub` values of administrators (the only identities the configuration
+    /// names, because Google's tokens carry no roles).
+    #[serde(default)]
+    pub admin_subjects: Vec<String>,
     #[serde(default)]
     pub offline_access: bool,
     #[serde(default = "session_hours")]
     pub session_hours: u32,
     #[serde(default = "recheck_minutes")]
     pub recheck_minutes: u32,
-    /// Extra scopes beyond `openid email profile` (and `offline_access` when set).
+    /// Extra scopes beyond `openid email profile`, `offline_access` when set, and the preset's.
     #[serde(default)]
     pub scopes: Vec<String>,
 }
@@ -584,13 +633,25 @@ impl Provider {
         }
         Ok(secret)
     }
-    /// The scopes a sign-in asks for.
+    /// The scopes a sign-in asks for: the preset adds what its claims need (Zitadel's roles and
+    /// project audience, Entra's `offline_access`, Keycloak's `organization`).
     pub fn scope(&self) -> String {
         let mut scope = String::from("openid email profile");
-        if self.offline_access {
+        if self.offline_access || self.preset == Some(Preset::Entra) {
             scope.push_str(" offline_access");
         }
-        for extra in &self.scopes {
+        let mut preset = Vec::new();
+        match self.preset {
+            Some(Preset::Zitadel) => {
+                if let Some(id) = &self.zitadel_project_id {
+                    preset.push(format!("urn:zitadel:iam:org:project:id:{id}:aud"));
+                }
+                preset.push("urn:zitadel:iam:org:projects:roles".to_owned());
+            }
+            Some(Preset::Keycloak) if self.keycloak_organizations => preset.push("organization".to_owned()),
+            _ => {}
+        }
+        for extra in preset.iter().chain(&self.scopes) {
             if !scope.split(' ').any(|s| s == extra) {
                 scope.push(' ');
                 scope.push_str(extra);
@@ -640,24 +701,60 @@ impl Default for CompileLimits {
 fn short_text(text: &str, max: usize) -> bool {
     !text.trim().is_empty() && text.len() <= max && !text.chars().any(char::is_control)
 }
-fn claim_name(text: &str) -> bool {
-    !text.is_empty() && text.len() <= 128 && text.bytes().all(|b| b.is_ascii_alphanumeric() || b"_-.:/".contains(&b))
-}
 fn domain_name(text: &str) -> bool {
     text.len() <= 253 && text.contains('.') && !text.starts_with(['.', '-']) && !text.ends_with(['.', '-']) && text.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-')
 }
-/// An `admins` entry: a lowercase email, `provider:email`, or `issuer#subject`.
-fn admin_entry(text: &str, providers: &[Provider]) -> bool {
-    if let Some((issuer, subject)) = text.split_once('#') {
-        return crate::sso::secure_url(issuer) && short_text(subject, 255);
+impl Provider {
+    /// The claims mapping's rules; the error names the field.
+    fn validate_claims(&self) -> Result<(), &'static str> {
+        let path = |p: &str| crate::claims::ClaimPath::parse(p).is_some();
+        match (self.preset, &self.claims) {
+            (None, None) | (Some(_), Some(_)) => return Err("deployment.providers[] needs exactly one of preset (zitadel, keycloak, entra, google) and claims"),
+            (None, Some(c)) => {
+                let paths = [Some(&c.roles), c.organisation.as_ref(), c.organisation_name.as_ref(), c.guest.as_ref().map(|g| &g.path)];
+                if !paths.into_iter().flatten().all(|p| path(p)) {
+                    return Err("deployment.providers[].claims must be JSON paths such as $.roles or $[\"urn:example:roles\"]");
+                }
+                if c.guest.as_ref().is_some_and(|g| !short_text(&g.equals, 256)) {
+                    return Err("deployment.providers[].claims.guest needs a path and a value");
+                }
+                if c.organisation_name.is_some() && c.organisation.is_none() {
+                    return Err("deployment.providers[].claims.organisation_name needs claims.organisation");
+                }
+            }
+            _ => {}
+        }
+        let r = &self.roles;
+        let names = r.admin.iter().chain(&r.member).chain(&r.guest);
+        if r.admin.len() + r.member.len() + r.guest.len() > 256 || !names.clone().all(|n| short_text(n, 256)) {
+            return Err("deployment.providers[].roles must map provider role names (at most 256)");
+        }
+        if self.preset == Some(Preset::Google) {
+            if !(r.admin.is_empty() && r.member.is_empty() && r.guest.is_empty()) {
+                return Err("deployment.providers[].roles: Google's tokens carry no roles; name administrators in admin_subjects");
+            }
+        } else {
+            if r.admin.is_empty() && r.member.is_empty() {
+                return Err("deployment.providers[].roles must map at least one provider role to admin or member");
+            }
+            if !self.admin_subjects.is_empty() {
+                return Err("deployment.providers[].admin_subjects is for the google preset only (other providers name roles)");
+            }
+        }
+        if self.admin_subjects.len() > 256 || !self.admin_subjects.iter().all(|s| short_text(s, 255)) {
+            return Err("deployment.providers[].admin_subjects must list subject identifiers");
+        }
+        if self.zitadel_project_id.is_some() && self.preset != Some(Preset::Zitadel) {
+            return Err("deployment.providers[].zitadel_project_id is for the zitadel preset only");
+        }
+        if self.zitadel_project_id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_digit())) {
+            return Err("deployment.providers[].zitadel_project_id must be a Zitadel project ID (digits)");
+        }
+        if self.keycloak_organizations && self.preset != Some(Preset::Keycloak) {
+            return Err("deployment.providers[].keycloak_organizations is for the keycloak preset only");
+        }
+        Ok(())
     }
-    // A plain email must be vouched for by a provider's email_domains; otherwise any provider
-    // could make an administrator by claiming it, so it has to name its provider.
-    let (text, vouched) = match text.split_once(':') {
-        Some((id, email)) => (email, providers.iter().any(|p| p.id == id)),
-        None => (text, text.rsplit_once('@').is_some_and(|(_, domain)| providers.iter().any(|p| p.email_domains.iter().any(|d| d == domain)))),
-    };
-    vouched && text.len() <= 254 && text.split_once('@').is_some_and(|(local, domain)| !local.is_empty() && !domain.contains('@') && domain_name(domain) && !local.chars().any(|c| c.is_whitespace() || c.is_control()) && text == text.to_lowercase())
 }
 impl Deployment {
     /// Field and cross-field rules; the error names the field.
@@ -685,19 +782,7 @@ impl Deployment {
             if p.email_domains.len() > 64 || !p.email_domains.iter().all(|d| domain_name(d)) {
                 return Err("deployment.providers[].email_domains must be lowercase domain names such as example.org");
             }
-            if p.groups_claim.as_deref().is_some_and(|c| !claim_name(c)) {
-                return Err("deployment.providers[].groups_claim must be a claim name");
-            }
-            let groups = p.admin_groups.iter().chain(&p.member_groups);
-            if p.admin_groups.len() + p.member_groups.len() > 256 || !groups.clone().all(|g| short_text(g, 256)) {
-                return Err("deployment.providers[].admin_groups and member_groups must be group names");
-            }
-            if (!p.admin_groups.is_empty() || !p.member_groups.is_empty()) && p.groups_claim.is_none() {
-                return Err("deployment.providers[].admin_groups and member_groups need groups_claim");
-            }
-            if p.guest.as_ref().is_some_and(|g| !claim_name(&g.claim) || !short_text(&g.equals, 256)) {
-                return Err("deployment.providers[].guest needs a claim name and a value");
-            }
+            p.validate_claims()?;
             if !(1..=720).contains(&p.session_hours) {
                 return Err("deployment.providers[].session_hours must be 1-720");
             }
@@ -708,8 +793,8 @@ impl Deployment {
                 return Err("deployment.providers[].scopes must be at most 16 scope names");
             }
         }
-        if self.admins.len() > 256 || !self.admins.iter().all(|a| admin_entry(a, &self.providers)) {
-            return Err("deployment.admins must list provider:email (a configured provider), an email in a provider's email_domains, or issuer#subject, all lowercase");
+        if self.encryption == Encryption::E2ee && self.guests != Guests::Off {
+            return Err("deployment.guests must be \"off\" in an end-to-end deployment");
         }
         let q = &self.quotas;
         if q.deployment_bytes == 0 || q.project_bytes == 0 || q.member_bytes == 0 || q.project_bytes > q.deployment_bytes || q.member_bytes > q.deployment_bytes {
@@ -758,7 +843,7 @@ mod tests {
         Ok(config)
     }
     fn provider() -> serde_json::Value {
-        json!({"id": "acme", "label": "Acme account", "issuer": "https://login.acme.org/realms/lab", "client_id": "scribyra", "client_secret_file": "acme-secret"})
+        json!({"id": "acme", "label": "Acme account", "issuer": "https://login.acme.org/realms/lab", "client_id": "scribyra", "client_secret_file": "acme-secret", "preset": "keycloak", "roles": {"admin": ["scribyra-admin"], "member": ["scribyra"]}})
     }
     fn deployment(extra: serde_json::Value) -> serde_json::Value {
         let mut d = json!({"name": "Acme Lab", "providers": [provider()]});
@@ -772,7 +857,7 @@ mod tests {
     fn defaults_follow_the_design() {
         let c = config(deployment(json!({}))).unwrap();
         let d = c.deployment.unwrap();
-        assert_eq!((d.encryption, d.offline, d.compile, d.link_sharing, d.guests), (Encryption::Server, true, Compile::Browser, false, Guests::Off));
+        assert_eq!((d.encryption, d.offline, d.compile, d.link_sharing, d.guests, d.notify_on_admin_access), (Encryption::Server, true, Compile::Browser, false, Guests::Off, true));
         assert_eq!((d.audit_retention_days, d.quotas.project_bytes, d.compile_limits.passes), (400, 1 << 30, 4));
         let p = &d.providers[0];
         assert_eq!((p.session_hours, p.recheck_minutes, p.offline_access, p.scope()), (12, 10, false, "openid email profile".to_string()));
@@ -789,15 +874,11 @@ mod tests {
         assert!(refused(json!({"audit_retention_days": 29})).contains("audit_retention_days"));
         assert!(refused(json!({"audit_retention_days": 3651})).contains("audit_retention_days"));
         config(deployment(json!({"audit_retention_days": 30}))).unwrap();
-        assert!(refused(json!({"admins": ["not an email"]})).contains("deployment.admins"));
-        config(deployment(json!({"admins": ["acme:it-admin@acme.org", "https://login.acme.org/realms/lab#f81d4fae"]}))).unwrap();
-        // A plain email needs a provider whose email_domains vouch for it (review M1).
-        assert!(refused(json!({"admins": ["it-admin@acme.org"]})).contains("deployment.admins"));
-        assert!(refused(json!({"admins": ["other:it-admin@acme.org"]})).contains("deployment.admins"));
-        let mut vouching = provider();
-        vouching["email_domains"] = json!(["acme.org"]);
-        config(deployment(json!({"admins": ["it-admin@acme.org"], "providers": [vouching]}))).unwrap();
-        assert!(refused(json!({"admins": ["ftp://login.acme.org#x"]})).contains("deployment.admins"));
+        // There is no list of administrators any more (design decision 9): roles come from tokens.
+        assert!(refused(json!({"admins": ["acme:it-admin@acme.org"]})).contains("unknown field"));
+        // End-to-end deployments admit no guests.
+        assert!(refused(json!({"encryption": "e2ee", "guests": "shared"})).contains("deployment.guests"));
+        config(deployment(json!({"guests": "shared", "notify_on_admin_access": false}))).unwrap();
         // Server compile needs server-readable encryption and a TeX Live tree.
         assert!(refused(json!({"compile": "server"})).contains("needs texlive"));
         assert!(refused(json!({"compile": "both", "encryption": "e2ee", "texlive": "/tex"})).contains("needs encryption"));
@@ -836,23 +917,64 @@ mod tests {
         assert!(refused("client_id", json!("has space")).contains(".client_id"));
         assert!(refused("email_domains", json!(["Acme.org"])).contains(".email_domains"));
         assert!(refused("email_domains", json!(["acme"])).contains(".email_domains"));
-        assert!(refused("groups_claim", json!("bad claim")).contains(".groups_claim"));
-        assert!(refused("member_groups", json!(["staff"])).contains("need groups_claim"));
-        assert!(refused("guest", json!({"claim": "acct", "equals": ""})).contains(".guest"));
         assert!(refused("session_hours", json!(721)).contains(".session_hours"));
         assert!(refused("recheck_minutes", json!(0)).contains(".recheck_minutes"));
         assert!(refused("scopes", json!(["a b"])).contains(".scopes"));
         assert!(refused("required", json!(true)).contains("unknown field"));
+        for removed in ["groups_claim", "admin_groups", "member_groups", "guest"] {
+            assert!(refused(removed, json!(["x"])).contains("unknown field"), "{removed}");
+        }
         let mut p = provider();
-        p["groups_claim"] = json!("roles");
-        p["admin_groups"] = json!(["scribyra-admins"]);
-        p["member_groups"] = json!(["scribyra"]);
-        p["guest"] = json!({"claim": "acct", "equals": "1"});
         p["email_domains"] = json!(["acme.org", "lab.acme.org"]);
         p["offline_access"] = json!(true);
         p["scopes"] = json!(["groups"]);
         let c = config(deployment(json!({"providers": [p], "guests": "shared"}))).unwrap();
         assert_eq!(c.deployment.unwrap().providers[0].scope(), "openid email profile offline_access groups");
+    }
+
+    #[test]
+    fn claims_mapping_rules_and_preset_scopes() {
+        let with = |changes: serde_json::Value| {
+            let mut p = provider();
+            for (k, v) in changes.as_object().unwrap() {
+                if v.is_null() {
+                    p.as_object_mut().unwrap().remove(k);
+                } else {
+                    p[k] = v.clone();
+                }
+            }
+            config(deployment(json!({"providers": [p]})))
+        };
+        let refused = |changes: serde_json::Value| with(changes).err().expect("refused");
+        let scope = |changes: serde_json::Value| with(changes).unwrap().deployment.unwrap().providers[0].scope();
+        // Exactly one of a preset and a generic mapping.
+        assert!(refused(json!({"preset": null})).contains("exactly one of preset"));
+        assert!(refused(json!({"claims": {"roles": "$.roles"}})).contains("exactly one of preset"));
+        assert!(refused(json!({"preset": "okta"})).contains("unknown variant"));
+        // Generic paths: dotted keys and bracket-quoted keys only.
+        with(json!({"preset": null, "claims": {"roles": "$[\"urn:zitadel:iam:org:project:roles\"]", "organisation": "$.org.id", "organisation_name": "$.org[\"display.name\"]", "guest": {"path": "$.acct", "equals": "1"}}})).unwrap();
+        for bad in ["roles", "$", "$.", "$..roles", "$.roles[*]", "$.roles[0]", "$[\"a\"", "$['a']", "$.a b", "$.[\"a\"]"] {
+            assert!(refused(json!({"preset": null, "claims": {"roles": bad}})).contains("JSON paths"), "{bad}");
+        }
+        assert!(refused(json!({"preset": null, "claims": {"roles": "$.r", "organisation_name": "$.n"}})).contains("needs claims.organisation"));
+        // Roles: at least one admin or member mapping, except for Google, which has none.
+        assert!(refused(json!({"roles": {"guest": ["g"]}})).contains("at least one provider role"));
+        assert!(refused(json!({"roles": {"admin": [""]}})).contains(".roles"));
+        assert!(refused(json!({"roles": {"owner": ["x"]}})).contains("unknown field"));
+        assert!(refused(json!({"preset": "google"})).contains("admin_subjects"));
+        with(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"]})).unwrap();
+        assert!(refused(json!({"admin_subjects": ["1043"]})).contains("google preset only"));
+        // Preset options belong to their preset.
+        assert!(refused(json!({"zitadel_project_id": "1"})).contains("zitadel preset only"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_id": "abc"})).contains("(digits)"));
+        assert!(refused(json!({"keycloak_organizations": true, "preset": "entra"})).contains("keycloak preset only"));
+        // Each preset asks for the scopes its claims need.
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_id": "273800000000000001"})), "openid email profile urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "zitadel"})), "openid email profile urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "entra"})), "openid email profile offline_access");
+        assert_eq!(scope(json!({"keycloak_organizations": true})), "openid email profile organization");
+        assert_eq!(scope(json!({})), "openid email profile");
+        assert_eq!(scope(json!({"preset": "google", "roles": null})), "openid email profile");
     }
 
     #[test]

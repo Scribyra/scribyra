@@ -17,7 +17,7 @@ fn env(alg: &str, provider: Value, service: Value) -> Env {
 
 #[test]
 fn rs256_sign_in_me_logout_and_replays() {
-    let env = env("RS256", json!({"groups_claim": "groups"}), json!({}));
+    let env = env("RS256", json!({}), json!({}));
     let c = env.client();
     let org = env.org();
     // What the app learns before sign-in: names and labels, never issuers or client settings.
@@ -45,7 +45,11 @@ fn rs256_sign_in_me_logout_and_replays() {
     assert_eq!((login["provider"].as_str(), login["role"].as_str()), (Some("test"), Some("admin")));
     assert_eq!(login["state"], "unlinked");
     assert_eq!(login["person"], Value::Null);
-    assert_eq!(login["subject"], json!({"email": "alice@example.org", "name": "Alice Example", "groups": ["staff", "admins"]}));
+    assert_eq!(login["subject"], json!({"email": "alice@example.org", "name": "Alice Example"}));
+    // Identity and organisations come from the provider's token: one organisation (the provider
+    // names none), which took the deployment's ID, and alice's role in it.
+    assert_eq!(login["orgs"], json!([{"id": org, "name": "Test account", "provider": "test", "role": "admin", "guest": false}]));
+    assert_eq!((login["email"].as_str(), login["emailVerified"].as_bool(), login["picture"].as_str()), (Some("alice@example.org"), Some(true), None));
     let token = login["token"].as_str().unwrap().to_owned();
     assert_eq!(token.len(), 64);
     let expires = login["expires"].as_u64().unwrap();
@@ -88,8 +92,7 @@ fn es256_and_eddsa_sign_in() {
         let c = env.client();
         let login = c.login("alice");
         assert_eq!(login["subject"]["email"], "alice@example.org");
-        // No groups claim configured: groups are not read.
-        assert_eq!(login["subject"]["groups"], json!([]));
+        assert_eq!(login["orgs"][0]["role"], "admin");
         assert_eq!(c.me(login["token"].as_str().unwrap()).status, 200);
     }
 }
@@ -278,72 +281,58 @@ fn scopes_and_several_providers() {
     let query: std::collections::HashMap<String, String> = url::Url::parse(&started.url).unwrap().query_pairs().into_owned().collect();
     assert_eq!(query["scope"], "openid email profile");
     let login = partner.login("alice");
-    // `test:alice@example.org` is an administrator at `test` only: the same email at another
-    // provider is someone else as far as the admins list knows (review M1).
-    assert_eq!((login["provider"].as_str(), login["role"].as_str()), (Some("partner"), Some("member")));
+    // Each provider vouches for its own organisation only: alice's role from `partner` is in
+    // partner's organisation, never in test's (review M1's concern, now by construction).
+    assert_eq!((login["provider"].as_str(), login["role"].as_str(), login["orgs"].as_array().unwrap().len()), (Some("partner"), Some("admin"), 1));
     // The same email at two providers is two accounts: each its own subject at its issuer.
     let first = c.login("alice");
     assert_eq!(postgres().psql(service.database_url(), "SELECT count(DISTINCT issuer) FROM sso_logins WHERE subject = 'sub-alice'"), "2");
+    assert_eq!(postgres().psql(service.database_url(), "SELECT count(*) FROM accounts WHERE subject = 'sub-alice'"), "2");
     assert_eq!((first["provider"].as_str(), first["role"].as_str()), (Some("test"), Some("admin")));
+    assert_ne!(first["orgs"][0]["id"], login["orgs"][0]["id"]);
 }
 
 #[test]
-fn guests_admin_groups_and_member_groups_decide_who_signs_in_and_as_what() {
+fn guests_and_mapped_roles_decide_who_signs_in_and_as_what() {
     let mut users = default_users();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-gus", "username": "gus", "password": "pw-gus", "email": "gus@partner.example", "email_verified": true, "name": "Gus", "groups": ["staff"], "claims": {"acct": 1}}));
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-erin", "username": "erin", "password": "pw-erin", "email": "erin@example.org", "email_verified": true, "name": "Erin", "groups": ["staff"]}));
-    let provider = json!({"groups_claim": "groups", "admin_groups": ["admins"], "member_groups": ["staff"], "guest": {"claim": "acct", "equals": "1"}});
-    // Guests off (the default): a guest account is refused at sign-in, whatever its groups.
-    let env = Env::start("RS256", users.clone(), json!({}), json!({"admins": [], "provider": provider}));
+    users.as_array_mut().unwrap().push(user("gus", &[ADMIN], json!({"email": "gus@partner.example", "claims": {"acct": 1}})));
+    users.as_array_mut().unwrap().push(user("erin", &[MEMBER], json!({})));
+    users.as_array_mut().unwrap().push(user("olga", &["other-app:admin"], json!({})));
+    let provider = json!({"claims": {"roles": "$.roles", "guest": {"path": "$.acct", "equals": "1"}}});
+    // Guests off (the default): a guest account is refused at sign-in, whatever its roles.
+    let env = Env::start("RS256", users.clone(), json!({}), json!({"provider": provider}));
     let c = env.client();
     assert_eq!(c.sign_in("gus").0, Outcome::Error("guest".into()));
-    // admin_groups make administrators; member_groups admit members; anyone else is refused.
+    // Mapped roles decide: the highest wins; someone with no mapped role is refused.
     assert_eq!(c.login("alice")["role"], "admin");
     assert_eq!(c.login("erin")["role"], "member");
-    assert_eq!(c.sign_in("bob").0, Outcome::Error("not_member".into()));
-    assert_eq!(c.sign_in("dave").0, Outcome::Error("not_member".into()));
-    // The admins list names people whatever their groups: by verified email or issuer#subject.
-    let listed = Env::start("RS256", users.clone(), json!({}), json!({"admins": ["test:bob@other.org"], "provider": provider}));
-    let c = listed.client();
-    assert_eq!(c.login("bob")["role"], "admin");
-    // A plain email is matched only through a provider whose email_domains include it (review M1):
-    // erin's verified example.org address makes her an administrator at the provider that vouches
-    // for example.org, not at one that would accept any email.
-    let mut vouching = provider.clone();
-    vouching["email_domains"] = json!(["example.org", "other.org"]);
-    let domains = Env::start("RS256", users.clone(), json!({}), json!({"admins": ["erin@example.org"], "provider": vouching}));
-    assert_eq!(domains.client().login("erin")["role"], "admin");
-    assert_eq!(scribyra_sync::sso::admit(&serde_json::from_value(deployment(&domains.idp, json!({"admins": ["erin@example.org"], "provider": vouching}))).unwrap(), &serde_json::from_value(json!({"id": "other", "label": "Other", "issuer": "https://other.example", "client_id": "x", "client_secret_file": "/x"})).unwrap(), "s", Some("erin@example.org"), true, &[], false), Ok(scribyra_sync::sso::Role::Member));
-    assert_eq!(c.login("erin")["role"], "member");
-    // Guests "shared": a guest signs in as a guest, never as an administrator.
-    let shared = Env::start("RS256", users, json!({}), json!({"guests": "shared", "admins": ["test:gus@partner.example"], "provider": provider}));
-    let c = shared.client();
-    assert_eq!(c.login("gus")["role"], "guest");
+    assert_eq!(c.sign_in("olga").0, Outcome::Error("no_role".into()));
+    // Guests "shared" (server-readable deployments only): a guest signs in as a guest, never as
+    // an administrator, whatever role the token names.
+    let shared = Env::start("RS256", users, json!({"service_key_file": write_key()}), json!({"encryption": "server", "guests": "shared", "provider": provider}));
+    let login = shared.client().login("gus");
+    assert_eq!((login["role"].as_str(), login["orgs"][0]["guest"].as_bool()), (Some("guest"), Some(true)));
     // Nothing about the refusals reaches the logs but their codes.
     let logs = env.service.logs.lock().unwrap().clone();
-    assert!(logs.contains("\"reason\":\"guest\"") && logs.contains("\"reason\":\"not_member\""), "{logs}");
+    assert!(logs.contains("\"reason\":\"guest\"") && logs.contains("\"reason\":\"no_role\""), "{logs}");
     assert!(!logs.contains("gus@partner.example"));
+    // The refusals are audited in the deployment's chain, by code.
+    let refused = postgres().psql(env.service.database_url(), "SELECT string_agg(detail->>'reason', ',' ORDER BY seq) FROM audit_log WHERE org = '' AND action = 'session.refused'");
+    assert_eq!(refused, "guest,no_role");
 }
-
-#[test]
-fn an_admin_listed_by_issuer_and_subject() {
-    let port = free_port();
-    let public = format!("http://127.0.0.1:{port}");
-    let idp = Idp::start("RS256", &public, default_users());
-    let deployment = deployment(&idp, json!({"admins": [format!("{}#sub-carol", idp.issuer)]}));
-    let service = Service::new(json!({"bind": format!("127.0.0.1:{port}"), "public_url": public, "origins": [APP], "deployment": deployment}));
-    let c = Client { base: service.url.clone(), provider: "test".into(), idp: &idp };
-    // Carol's email is not verified, so only her subject can name her.
-    assert_eq!(c.login("carol")["role"], "admin");
-    assert_eq!(c.login("alice")["role"], "member");
+/// A fresh master key file (for a server-readable deployment), left in the temporary directory.
+fn write_key() -> String {
+    let path = temp_dir("scribyra-key-").join("master.key");
+    std::fs::write(&path, random_bytes(32)).unwrap();
+    path.display().to_string()
 }
 
 /// The library in-process: the background recheck keeps a login while the provider accepts its
-/// (rotating) refresh token; a refreshed ID token's groups are applied (an account that leaves
-/// the member groups loses its logins); a user disabled at the provider is revoked and blocked
+/// (rotating) refresh token; a refreshed ID token's roles are applied (an account whose role the
+/// provider takes away loses its logins); a user disabled at the provider is revoked and blocked
 /// and the revocation hook fires. Also logout and linking.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
+async fn recheck_applies_roles_revokes_disabled_users_and_fires_the_hook() {
     use scribyra_sync::{config::Config, listener, service, sso::LinkError, store::Store};
     use std::sync::Arc;
     let port = free_port();
@@ -351,9 +340,9 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     let dir = temp_dir("scribyra-sso-lib-");
     let public2 = public.clone();
     let mut users = default_users();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-erin", "username": "erin", "password": "pw-erin", "email": "erin@example.org", "email_verified": true, "name": "Erin"}));
+    users.as_array_mut().unwrap().push(user("erin", &[], json!({})));
     let idp = tokio::task::spawn_blocking(move || Idp::start("ES256", &public2, users)).await.unwrap();
-    let deployment = deployment(&idp, json!({"provider": {"offline_access": true, "groups_claim": "groups", "member_groups": ["staff"]}}));
+    let deployment = deployment(&idp, json!({"provider": {"offline_access": true}}));
     let config = Config {
         bind: format!("127.0.0.1:{port}").parse().unwrap(),
         data: dir.join("data"),
@@ -370,6 +359,7 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     let store = Store::open(config.clone()).await.unwrap();
     let org = store.org.clone().unwrap();
     let s = service::state(store).unwrap();
+    s.sso.prepare().await.unwrap();
     let app = service::router(s.clone());
     let tcp = tokio::net::TcpListener::bind(config.bind).await.unwrap();
     tokio::spawn(axum::serve(listener::Listener { tcp, slots: Arc::new(tokio::sync::Semaphore::new(64)) }, app.into_make_service_with_connect_info::<listener::Connection>()).into_future());
@@ -392,23 +382,23 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     let login = s.sso.login(&token).await.unwrap().unwrap();
     assert_eq!((login.org.as_str(), login.provider.as_str(), login.subject.as_str(), login.email.as_deref()), (org.as_str(), "test", "sub-alice", Some("alice@example.org")));
     assert!(login.email_verified);
-    assert_eq!(login.role, scribyra_sync::sso::Role::Admin);
+    assert_eq!(login.orgs.iter().map(|m| (m.org.as_str(), m.role)).collect::<Vec<_>>(), vec![(org.as_str(), scribyra_sync::sso::Role::Admin)]);
     assert_eq!(s.sso.login(&random_hex(32)).await.unwrap(), None);
     assert_eq!(s.sso.login("short").await.unwrap(), None);
 
     // Linking.
     let uuid = || { let h = random_hex(16); format!("{}-{}-{}-{}-{}", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]) };
     let (person, other) = (uuid(), uuid());
-    assert_eq!(s.sso.linked_person(&login).await.unwrap(), None);
-    s.sso.link(&login, &person).await.unwrap();
-    s.sso.link(&login, &person).await.unwrap();
-    assert_eq!(s.sso.link(&login, &other).await, Err(LinkError::Conflict));
-    assert_eq!(s.sso.link(&login, "nothex").await, Err(LinkError::Invalid));
-    assert_eq!(s.sso.link(&login, &random_hex(32)).await, Err(LinkError::Invalid));
+    assert_eq!(s.sso.linked_person(&org, &login).await.unwrap(), None);
+    s.sso.link(&org, &login, &person).await.unwrap();
+    s.sso.link(&org, &login, &person).await.unwrap();
+    assert_eq!(s.sso.link(&org, &login, &other).await, Err(LinkError::Conflict));
+    assert_eq!(s.sso.link(&org, &login, "nothex").await, Err(LinkError::Invalid));
+    assert_eq!(s.sso.link(&org, &login, &random_hex(32)).await, Err(LinkError::Invalid));
     let mut stranger = login.clone();
     stranger.subject = "sub-someone-else".into();
-    assert_eq!(s.sso.link(&stranger, &person).await, Err(LinkError::Conflict));
-    assert_eq!(s.sso.linked_person(&login).await.unwrap(), Some((person.clone(), false)));
+    assert_eq!(s.sso.link(&org, &stranger, &person).await, Err(LinkError::Conflict));
+    assert_eq!(s.sso.linked_person(&org, &login).await.unwrap(), Some((person.clone(), false)));
     let me = blocking(Box::new(move |c| c.me(&token2).json())).await.unwrap();
     assert_eq!((me["state"].as_str(), me["person"].as_str()), (Some("linked"), Some(person.as_str())));
 
@@ -435,21 +425,24 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     tokio::time::sleep(Duration::from_millis(2500)).await;
     assert!(s.sso.login(&token).await.unwrap().is_some());
 
-    // Erin is outside the member groups: refused at sign-in. Once the provider puts her in them
-    // she signs in; when it takes her out again, the next recheck revokes her login.
-    assert_eq!(blocking(Box::new(|c| json!(format!("{:?}", c.sign_in("erin").0)))).await.unwrap(), json!("Error(\"not_member\")"));
-    assert_eq!(control("groups?user=erin&groups=staff").await, 200);
+    // Erin has no Scribyra role: refused at sign-in. Once the provider grants her one she signs
+    // in; when it takes it away again, the next recheck revokes her login.
+    assert_eq!(blocking(Box::new(|c| json!(format!("{:?}", c.sign_in("erin").0)))).await.unwrap(), json!("Error(\"no_role\")"));
+    assert_eq!(control("roles?user=erin&roles=scribyra:member").await, 200);
     let erin = blocking(Box::new(|c| c.login("erin"))).await.unwrap()["token"].as_str().unwrap().to_owned();
-    assert_eq!(s.sso.login(&erin).await.unwrap().unwrap().groups, vec!["staff".to_string()]);
-    assert_eq!(control("groups?user=erin&groups=").await, 200);
+    assert_eq!(s.sso.login(&erin).await.unwrap().unwrap().orgs[0].role, scribyra_sync::sso::Role::Member);
+    assert_eq!(control("roles?user=erin&roles=").await, 200);
     due().await.unwrap();
     let deadline = Instant::now() + Duration::from_secs(20);
     while s.sso.login(&erin).await.unwrap().is_some() {
-        assert!(Instant::now() < deadline, "Erin kept her login after leaving the member groups");
+        assert!(Instant::now() < deadline, "Erin kept her login after the provider took her role away");
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
     assert!(s.store.config.deployment.is_some());
-    assert!(s.sso.login(&token).await.unwrap().is_some(), "an administrator by the admins list stays");
+    assert!(s.sso.login(&token).await.unwrap().is_some(), "alice keeps her role and her login");
+    // The membership stays (her projects stay in the organisation), without a role.
+    let erin_role: Option<String> = sqlx::query_scalar("SELECT m.role FROM memberships m JOIN accounts a USING (account) WHERE a.subject = 'sub-erin'").fetch_one(&s.store.pool).await.unwrap();
+    assert_eq!(erin_role, None);
 
     // Disable alice at the provider: the next recheck revokes, blocks and fires.
     assert_eq!(control("disable?user=alice").await, 200);
@@ -457,7 +450,7 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     let fired = tokio::time::timeout(Duration::from_secs(20), hook.recv()).await.expect("no revocation fired").unwrap();
     assert_eq!(fired, (org.clone(), person.clone()));
     assert_eq!(s.sso.login(&token).await.unwrap(), None);
-    assert_eq!(s.sso.linked_person(&login).await.unwrap(), Some((person.clone(), true)));
+    assert_eq!(s.sso.linked_person(&org, &login).await.unwrap(), Some((person.clone(), true)));
     let token1 = token.clone();
     assert_eq!(blocking(Box::new(move |c| json!(c.me(&token1).status))).await.unwrap(), 401);
     // Re-enabled at the provider, alice can sign in again but her link stays blocked until an
@@ -466,8 +459,8 @@ async fn recheck_applies_groups_revokes_disabled_users_and_fires_the_hook() {
     let again = blocking(Box::new(|c| c.login("alice"))).await.unwrap();
     assert_eq!(again["state"], "blocked");
     s.sso.unlink(&org, &person).await.unwrap();
-    assert_eq!(s.sso.linked_person(&login).await.unwrap(), None);
-    s.sso.link(&login, &other).await.unwrap();
+    assert_eq!(s.sso.linked_person(&org, &login).await.unwrap(), None);
+    s.sso.link(&org, &login, &other).await.unwrap();
     drop(s);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -609,7 +609,7 @@ pub fn router(s: Shared) -> Router {
             CorsLayer::new()
                 .allow_origin(origins)
                 .allow_methods([Method::GET, Method::HEAD, Method::PUT, Method::POST, Method::PATCH, Method::DELETE, Method::OPTIONS])
-                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::HeaderName::from_static("scribyra-client"), header::HeaderName::from_static("scribyra-client-seq")])
+                .allow_headers([header::CONTENT_TYPE, header::AUTHORIZATION, header::HeaderName::from_static("scribyra-client"), header::HeaderName::from_static("scribyra-client-seq"), header::HeaderName::from_static(crate::sso::ORG_HEADER)])
                 .expose_headers(["scribyra-log-head", "scribyra-log-floor", "scribyra-snapshot-seq", "scribyra-compile-job", "scribyra-compile-seq", "scribyra-audit-head", "content-disposition", "retry-after"].map(header::HeaderName::from_static))
                 .max_age(Duration::from_secs(3600)),
         )
@@ -630,7 +630,10 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
         println!("{}", serde_json::json!({"event": "audit_protection", "state": protection}));
         let retention = crate::audit::set_retention(&s.store.pool, config.audit_retention()).await?;
         let detail = serde_json::json!({"policy": policy, "encryption": deployment.encryption.as_str(), "schema": schema, "version": env!("CARGO_PKG_VERSION"), "auditRetention": retention, "auditProtection": protection});
-        crate::audit::record_now(&s.store.pool, &crate::audit::Actor::system(), "deployment.start", Some(("deployment", org)), detail).await?;
+        crate::audit::record_now(&s.store.pool, &[], &crate::audit::Actor::system(), "deployment.start", Some(("deployment", org)), detail).await?;
+        // Providers whose tokens name no organisation have one each, made now in the configured
+        // order (so the first takes the deployment's ID).
+        s.sso.prepare().await?;
         tokio::spawn(crate::audit::retain(s.store.pool.clone(), config.audit_purge_seconds));
     }
     println!(

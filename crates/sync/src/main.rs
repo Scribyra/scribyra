@@ -1,15 +1,16 @@
 use scribyra_sync::{config::Config, migrate_sqlite, service, store::Store};
 use std::{path::PathBuf, process::ExitCode, str::FromStr};
 
-const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | audit verify [<seq>:<hash>] | account unblock <email|provider:email|account> | migrate-sqlite <old-data-dir>";
+const USAGE: &str = "usage: scribyra-sync [serve] | migrate | compile-worker | verify | audit verify [--org <org>] [<seq>:<hash>] | account unblock <email|provider:email|account> | migrate-sqlite <old-data-dir>";
 
 enum Command {
     Serve,
     Migrate,
     CompileWorker,
     Verify,
-    /// Checks the audit log's hash chain; optionally that an exported head is in it.
-    AuditVerify(Option<(i64, String)>),
+    /// Checks the audit log's hash chains (every one, or one organisation's); optionally that an
+    /// exported head is in that organisation's chain.
+    AuditVerify(Option<String>, Option<(i64, String)>),
     /// Lets one account sign in again (when no administrator can), recorded as `system`.
     AccountUnblock(String),
     MigrateSqlite(PathBuf),
@@ -21,11 +22,21 @@ fn parse(args: &[String]) -> Option<Command> {
         [cmd] if cmd == scribyra_sync::deploy::COMMAND_MIGRATE => Some(Command::Migrate),
         [cmd] if cmd == scribyra_sync::deploy::COMMAND_COMPILE_WORKER => Some(Command::CompileWorker),
         [cmd] if cmd == "verify" => Some(Command::Verify),
-        [cmd, sub] if cmd == "audit" && sub == "verify" => Some(Command::AuditVerify(None)),
-        [cmd, sub, head] if cmd == "audit" && sub == "verify" => {
-            let (seq, hash) = head.split_once(':')?;
-            let valid = hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
-            Some(Command::AuditVerify(Some((seq.parse().ok()?, hash.to_owned())))).filter(|_| valid)
+        [cmd, sub, rest @ ..] if cmd == "audit" && sub == "verify" => {
+            let head = |head: &str| {
+                let (seq, hash) = head.split_once(':')?;
+                let valid = hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+                Some((seq.parse().ok()?, hash.to_owned())).filter(|_| valid)
+            };
+            let org = |org: &str| Some(org.to_owned()).filter(|o| o.len() == 64 && o.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)));
+            match rest {
+                [] => Some(Command::AuditVerify(None, None)),
+                [flag, o] if flag == "--org" => Some(Command::AuditVerify(Some(org(o)?), None)),
+                [flag, o, h] if flag == "--org" => Some(Command::AuditVerify(Some(org(o)?), Some(head(h)?))),
+                // A head names one chain: without --org, the deployment's own.
+                [h] => Some(Command::AuditVerify(Some(String::new()), Some(head(h)?))),
+                _ => None,
+            }
         }
         [cmd, sub, who] if cmd == "account" && sub == "unblock" => Some(Command::AccountUnblock(who.clone())),
         [cmd, dir] if cmd == "migrate-sqlite" => Some(Command::MigrateSqlite(dir.into())),
@@ -52,13 +63,22 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
         println!("{}", serde_json::json!({"event": "migrated", "applied": applied, "schema": schema, "auditProtection": protection}));
         return Ok(ExitCode::SUCCESS);
     }
-    if let Command::AuditVerify(expect) = &command {
-        // Reads only: no ownership, no migrations, so it runs beside serving replicas.
+    if let Command::AuditVerify(org, expect) = &command {
+        // Reads only: no ownership, no migrations, so it runs beside serving replicas. One line
+        // per chain checked (every chain without --org).
         let options = sqlx::postgres::PgConnectOptions::from_str(&config.database_url().map_err(|e| e.to_string())?)?.application_name("scribyra-sync-audit");
         let pool = sqlx::postgres::PgPoolOptions::new().max_connections(1).connect_with(options).await?;
-        let report = scribyra_sync::audit::verify(&pool, expect.as_ref().map(|(s, h)| (*s, h.as_str())), config.audit_retention()).await?;
-        println!("{}", report.json());
-        return Ok(if report.ok() { ExitCode::SUCCESS } else { ExitCode::FAILURE });
+        let chains = match org {
+            Some(org) => vec![org.clone()],
+            None => scribyra_sync::audit::chains(&pool).await?,
+        };
+        let mut ok = true;
+        for chain in chains {
+            let report = scribyra_sync::audit::verify(&pool, &chain, expect.as_ref().map(|(s, h)| (*s, h.as_str())), config.audit_retention()).await?;
+            println!("{}", report.json());
+            ok &= report.ok();
+        }
+        return Ok(if ok { ExitCode::SUCCESS } else { ExitCode::FAILURE });
     }
     if let Command::AccountUnblock(who) = &command {
         // Like `audit verify`: no ownership, so it runs beside serving replicas.
@@ -79,7 +99,7 @@ async fn run(command: Command) -> Result<ExitCode, scribyra_sync::store::Error> 
     match command {
         Command::Serve => service::serve(store).await.map(|()| ExitCode::SUCCESS),
         Command::CompileWorker => scribyra_sync::compiles::run_worker(store).await.map(|()| ExitCode::SUCCESS),
-        Command::Migrate | Command::AuditVerify(_) | Command::AccountUnblock(_) => unreachable!(),
+        Command::Migrate | Command::AuditVerify(..) | Command::AccountUnblock(_) => unreachable!(),
         Command::Verify => {
             let report = store.verify().await?;
             println!(

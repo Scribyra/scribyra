@@ -74,15 +74,28 @@ pub fn idp_binary() -> &'static PathBuf {
     })
 }
 
-/// Default users: alice (verified, example.org, groups), bob (verified, other.org), carol
-/// (unverified, example.org), dave (verified example.org email but Google `hd` other.org).
+/// The provider role names the default test provider maps (generic `$.roles`).
+pub const ADMIN: &str = "scribyra:admin";
+pub const MEMBER: &str = "scribyra:member";
+pub const GUEST: &str = "scribyra:guest";
+/// Default users: alice (verified, example.org, the provider's administrator), bob (verified,
+/// other.org), carol (unverified, example.org), dave (verified example.org email but Google `hd`
+/// other.org); everyone but alice a member.
 pub fn default_users() -> Value {
     json!([
-        {"sub": "sub-alice", "username": "alice", "password": "pw-alice", "email": "alice@example.org", "email_verified": true, "name": "Alice Example", "groups": ["staff", "admins"]},
-        {"sub": "sub-bob", "username": "bob", "password": "pw-bob", "email": "bob@other.org", "email_verified": true, "name": "Bob Other"},
-        {"sub": "sub-carol", "username": "carol", "password": "pw-carol", "email": "carol@example.org", "email_verified": false, "name": "Carol"},
-        {"sub": "sub-dave", "username": "dave", "password": "pw-dave", "email": "dave@example.org", "email_verified": true, "hd": "other.org"},
+        {"sub": "sub-alice", "username": "alice", "password": "pw-alice", "email": "alice@example.org", "email_verified": true, "name": "Alice Example", "roles": [ADMIN, MEMBER]},
+        {"sub": "sub-bob", "username": "bob", "password": "pw-bob", "email": "bob@other.org", "email_verified": true, "name": "Bob Other", "roles": [MEMBER]},
+        {"sub": "sub-carol", "username": "carol", "password": "pw-carol", "email": "carol@example.org", "email_verified": false, "name": "Carol", "roles": [MEMBER]},
+        {"sub": "sub-dave", "username": "dave", "password": "pw-dave", "email": "dave@example.org", "email_verified": true, "hd": "other.org", "roles": [MEMBER]},
     ])
+}
+/// A verified member `<name>@example.org` with these provider roles (and any extra fields).
+pub fn user(name: &str, roles: &[&str], extra: Value) -> Value {
+    let mut u = json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": format!("{name}@example.org"), "email_verified": true, "name": name, "roles": roles});
+    for (k, v) in extra.as_object().unwrap() {
+        u[k] = v.clone();
+    }
+    u
 }
 
 /// A running `test-idp` (killed and its directory removed on drop).
@@ -131,6 +144,12 @@ impl Idp {
     pub fn control(&self, path: &str) -> Http {
         fetch(&format!("{}/control/{path}", self.issuer), None)
     }
+    /// Changes a user's fields from the next token on (`/control/set`): their roles, provider
+    /// shapes or claims.
+    pub fn set(&self, user: &str, fields: Value) {
+        let reply = post_json(&format!("{}/control/set?user={user}", self.issuer), None, &fields);
+        assert_eq!(reply.status, 200, "{}", reply.body);
+    }
     /// Write the client secret to a file for a provider's `client_secret_file`.
     pub fn secret_file(&self) -> PathBuf {
         let path = self.dir.join("client-secret");
@@ -150,22 +169,28 @@ impl Drop for Idp {
 pub fn people() -> Value {
     let mut users = default_users();
     for name in ["ben", "cat", "dan", "erin", "gina", "mallory", "nina", "omar", "pia", "quinn"] {
-        users.as_array_mut().unwrap().push(json!({"sub": format!("sub-{name}"), "username": name, "password": format!("pw-{name}"), "email": format!("{name}@example.org"), "email_verified": true, "name": name}));
+        users.as_array_mut().unwrap().push(user(name, &[MEMBER], json!({})));
     }
     users
 }
-/// The `deployment` object for a service that signs in with `idp` (provider `test`): end to end
-/// encrypted, alice@example.org an administrator. `extra` replaces top-level fields; its
-/// `provider` object is merged into the provider, and each object of `more_providers` into a
-/// copy of it (another provider at the same issuer, such as `partner`).
+/// The `deployment` object for a service that signs in with `idp` (provider `test`, a generic
+/// mapping of the `roles` claim with one organisation): end to end encrypted, so alice (whose
+/// token has [`ADMIN`]) is its administrator. `extra` replaces top-level fields; its `provider`
+/// object is merged into the provider (a `null` removes a field), and each object of
+/// `more_providers` into a copy of it (another provider at the same issuer, such as `partner`).
 pub fn deployment(idp: &Idp, extra: Value) -> Value {
-    let mut provider = json!({"id": "test", "label": "Test account", "issuer": idp.issuer, "client_id": CLIENT_ID, "client_secret_file": idp.secret_file()});
-    let mut deployment = json!({"name": "Test Lab", "encryption": "e2ee", "admins": ["test:alice@example.org"]});
+    let mut provider = json!({"id": "test", "label": "Test account", "issuer": idp.issuer, "client_id": CLIENT_ID, "client_secret_file": idp.secret_file(),
+                              "claims": {"roles": "$.roles"}, "roles": {"admin": [ADMIN], "member": [MEMBER], "guest": [GUEST]}});
+    let mut deployment = json!({"name": "Test Lab", "encryption": "e2ee"});
     let mut more = Vec::new();
     for (k, v) in extra.as_object().unwrap() {
         if k == "provider" {
             for (pk, pv) in v.as_object().unwrap() {
-                provider[pk] = pv.clone();
+                if pv.is_null() {
+                    provider.as_object_mut().unwrap().remove(pk);
+                } else {
+                    provider[pk] = pv.clone();
+                }
             }
         } else if k == "more_providers" {
             more = v.as_array().unwrap().clone();
@@ -177,7 +202,11 @@ pub fn deployment(idp: &Idp, extra: Value) -> Value {
     for m in more {
         let mut p = provider.clone();
         for (pk, pv) in m.as_object().unwrap() {
-            p[pk] = pv.clone();
+            if pv.is_null() {
+                p.as_object_mut().unwrap().remove(pk);
+            } else {
+                p[pk] = pv.clone();
+            }
         }
         providers.push(p);
     }
@@ -274,6 +303,17 @@ impl Client<'_> {
     }
     pub fn me(&self, token: &str) -> Http {
         fetch(&self.url("/v1/sso/me"), Some(token))
+    }
+    /// The refusal a redeem answers with: (status, code).
+    pub fn refused(&self, user: &str) -> (u16, String) {
+        let (outcome, verifier) = self.sign_in(user);
+        match outcome {
+            Outcome::Grant { grant, .. } => {
+                let reply = self.redeem(&grant, &verifier);
+                (reply.status, reply.json()["code"].as_str().unwrap_or_default().to_owned())
+            }
+            Outcome::Error(code) => (302, code),
+        }
     }
     pub fn logout(&self, token: &str) -> Http {
         post_json(&self.url("/v1/sso/logout"), Some(token), &json!({}))

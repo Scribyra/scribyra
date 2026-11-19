@@ -39,11 +39,15 @@ fn invalid_deployments_are_refused_at_start_naming_the_field() {
         (provider("id", json!("Not-Lower")), "deployment.providers[].id"),
         (provider("issuer", json!("http://idp.example.org")), "deployment.providers[].issuer"),
         (provider("email_domains", json!(["Example.org"])), "deployment.providers[].email_domains"),
-        (provider("admin_groups", json!(["admins"])), "need groups_claim"),
+        (provider("admin_groups", json!(["admins"])), "unknown field"),
+        (provider("claims", json!({"roles": "roles"})), "deployment.providers[].claims must be JSON paths"),
+        (provider("roles", json!({"guest": ["g"]})), "deployment.providers[].roles must map at least one"),
+        (provider("preset", json!("entra")), "deployment.providers[] needs exactly one of preset"),
         (provider("session_hours", json!(0)), "deployment.providers[].session_hours"),
         (provider("recheck_minutes", json!(2000)), "deployment.providers[].recheck_minutes"),
         (provider("unknown", json!(1)), "unknown field"),
-        (with(json!({"admins": ["Alice@Example.org"]})), "deployment.admins"),
+        (with(json!({"admins": ["alice@example.org"]})), "unknown field"),
+        (with(json!({"guests": "shared"})), "deployment.guests must be"),
         (with(json!({"audit_retention_days": 10})), "deployment.audit_retention_days"),
         (with(json!({"compile": "server", "texlive": "/tex"})), "needs encryption \\\"server\\\""),
         (with(json!({"encryption": "server", "compile": "both"})), "needs texlive"),
@@ -153,7 +157,7 @@ fn the_genesis_is_accepted_once_and_only_from_an_administrators_sign_in() {
     let ben = client.login("ben");
     assert_eq!(ben["role"], "member");
     let refused = post_with_login(&base, &org, &genesis, ben["token"].as_str().unwrap());
-    assert_eq!((refused.status, refused.json()["error"].as_str()), (403, Some("only a deployment administrator can create the organisation")));
+    assert_eq!((refused.status, refused.json()["error"].as_str()), (403, Some("only an administrator of this organisation can create it")));
     assert_eq!(send("POST", &format!("{base}/v1/orgs/{org}/events"), Some(&random_hex(32)), "application/json", genesis.as_bytes()).status, 403);
     // A join request before the genesis has nothing to join.
     let early = Device::new();

@@ -3,9 +3,11 @@
 //! logs. The service checks every signature and membership rule with the same Rust code as the
 //! browser (`scribyra_core::orgsync`) but never holds a project key or decrypts anything.
 //!
-//! The routes serve the deployment's one organisation, and only when the deployment is end to
-//! end encrypted. Nothing here signs anyone in by itself: a device session needs a live login of
-//! the person the device belongs to, and the genesis needs a configured administrator's login.
+//! The routes serve the deployment's organisations (one end-to-end organisation per organisation
+//! the providers name, with the same ID), and only when the deployment is end to end encrypted.
+//! Nothing here signs anyone in by itself: a device session needs a live login of the person the
+//! device belongs to that holds a role in that organisation, and the genesis needs the login of
+//! someone the provider makes an administrator of it. End-to-end deployments admit no guests.
 use crate::store::{GLOBAL_SCOPE, PutOutcome, Quota, Store, StoreError, namespace_scope, object_key};
 use crate::blobs::{BlobKey, Bytes};
 use axum::{
@@ -43,8 +45,8 @@ pub struct Orgs {
     store: Arc<Store>,
     sso: Arc<crate::sso::Sso>,
     public_url: Option<String>,
-    /// The deployment's organisation, when the deployment is end to end encrypted.
-    org: Option<String>,
+    /// Whether the deployment is end to end encrypted (otherwise these routes do not exist).
+    e2ee: bool,
     /// Open challenges: (org, client address, expiry).
     challenges: Mutex<HashMap<String, (String, Option<std::net::IpAddr>, Instant)>>,
     sessions: Mutex<HashMap<String, Session>>,
@@ -88,6 +90,11 @@ fn random_hex() -> String {
     getrandom::fill(&mut bytes).expect("operating system randomness");
     core::hex(&bytes)
 }
+/// Whether the login's account holds a role (never a guest's: end-to-end organisations have no
+/// guests) in this organisation.
+fn member_of(login: &crate::sso::Login, org: &str) -> bool {
+    login.membership(org).is_some_and(|m| m.role != crate::sso::Role::Guest)
+}
 pub fn org_scope(org: &str) -> String {
     format!("org:{org}")
 }
@@ -104,10 +111,9 @@ impl Orgs {
     pub fn new(store: Arc<Store>, sso: Arc<crate::sso::Sso>) -> Shared {
         let public_url = store.config.public_url.clone();
         let e2ee = store.config.deployment.as_ref().is_some_and(|d| d.encryption == crate::config::Encryption::E2ee);
-        let org = store.org.clone().filter(|_| e2ee);
         let mut revocations = sso.revocations();
         let downloads = Arc::new(tokio::sync::Semaphore::new(store.config.response_bytes));
-        let orgs = Arc::new(Self { store, sso, public_url, org, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default(), downloads });
+        let orgs = Arc::new(Self { store, sso, public_url, e2ee, challenges: Mutex::default(), sessions: Mutex::default(), states: Mutex::default(), changes: Mutex::default(), downloads });
         // When the identity provider disables someone, or they sign out, their device sessions
         // close at once.
         let weak = Arc::downgrade(&orgs);
@@ -145,19 +151,19 @@ impl Orgs {
             tx.send_modify(|n| *n += 1);
         }
     }
-    /// The per-organisation state slot. Only the deployment's organisation has one (and only in
+    /// The per-organisation state slot. Only the deployment's organisations have one (and only in
     /// an end-to-end deployment), and the cache drops idle entries once it is full.
     async fn slot(&self, org: &str) -> Result<Arc<tokio::sync::Mutex<Option<OrgState>>>, Response> {
         if !core::is_hex(org, 32) {
             return Err(error(StatusCode::BAD_REQUEST, "invalid organisation"));
         }
-        if self.org.as_deref() != Some(org) {
+        if !self.e2ee {
             return Err(error(StatusCode::NOT_FOUND, "unknown organisation"));
         }
         if let Some(slot) = self.states.lock().unwrap().get(org) {
             return Ok(slot.clone());
         }
-        let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM orgs WHERE org = $1").bind(org).fetch_optional(&self.store.pool).await.map_err(internal)?;
+        let exists: Option<i32> = sqlx::query_scalar("SELECT 1 FROM orgs JOIN organisations USING (org) WHERE org = $1").bind(org).fetch_optional(&self.store.pool).await.map_err(internal)?;
         if exists.is_none() {
             return Err(error(StatusCode::NOT_FOUND, "unknown organisation"));
         }
@@ -187,7 +193,7 @@ impl Orgs {
     }
     fn session(&self, headers: &HeaderMap) -> Result<Session, Response> {
         // Only an end-to-end deployment has these routes at all.
-        if self.org.is_none() {
+        if !self.e2ee {
             return Err(error(StatusCode::NOT_FOUND, "unknown organisation"));
         }
         let token = headers
@@ -207,11 +213,12 @@ impl Orgs {
             None => Err(error(StatusCode::UNAUTHORIZED, "sign in required")),
         }
     }
-    /// The SSO login presented with `Authorization: ScribyraSSO <token>`, if any, for this org.
+    /// The SSO login presented with `Authorization: ScribyraSSO <token>`, if any, of an account
+    /// that holds a role in this organisation.
     async fn sso_login(&self, headers: &HeaderMap, org: &str) -> Result<Option<crate::sso::Login>, Response> {
         let Some(token) = crate::sso::bearer(headers) else { return Ok(None) };
         match self.sso.login(token).await {
-            Ok(Some(login)) if login.org == org => Ok(Some(login)),
+            Ok(Some(login)) if member_of(&login, org) => Ok(Some(login)),
             Ok(Some(_)) => Err(error(StatusCode::FORBIDDEN, "this single sign-on belongs to another organisation")),
             Ok(None) => Err(error(StatusCode::UNAUTHORIZED, "single sign-on expired")),
             Err(_) => Err(StatusCode::INTERNAL_SERVER_ERROR.into_response()),
@@ -223,7 +230,7 @@ impl Orgs {
         let Some(login) = self.sso_login(headers, org).await? else {
             return Err(error(StatusCode::FORBIDDEN, "single sign-on is required"));
         };
-        match self.sso.linked_person(&login).await {
+        match self.sso.linked_person(org, &login).await {
             Ok(None) => {}
             // A retried join of the same person (linked by an attempt whose answer was lost).
             Ok(Some((linked, false))) if Some(linked.as_str()) == person => {}
@@ -314,14 +321,14 @@ async fn session(State(o): State<Shared>, Json(request): Json<SessionRequest>) -
     };
     drop(guard);
     let login = match o.sso.login(&request.sso).await {
-        Ok(Some(login)) if login.org == org => login,
+        Ok(Some(login)) if member_of(&login, &org) => login,
         Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "this single sign-on belongs to another organisation"),
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "single sign-on is required"),
         Err(_) => return StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     };
     // The login must be the identity linked to this key's person (linked when they joined), and
     // not blocked by the identity provider.
-    match o.sso.linked_person(&login).await {
+    match o.sso.linked_person(&org, &login).await {
         Ok(Some((p, false))) if p == person => {}
         Ok(Some((p, true))) if p == person => return error(StatusCode::FORBIDDEN, "disabled at your organisation's identity provider"),
         Ok(_) => return error(StatusCode::FORBIDDEN, "this single sign-on identity is not linked to this member"),
@@ -426,8 +433,8 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
             Ok(login) => login,
             Err(r) => return r,
         };
-        if login.role != crate::sso::Role::Admin {
-            return error(StatusCode::FORBIDDEN, "only a deployment administrator can create the organisation");
+        if login.membership(&org).map(|m| m.role) != Some(crate::sso::Role::Admin) {
+            return error(StatusCode::FORBIDDEN, "only an administrator of this organisation can create it");
         }
         joining_login = Some(login);
     } else {
@@ -464,7 +471,7 @@ async fn append_event(State(o): State<Shared>, Path(org): Path<String>, headers:
         // The identity is linked in the event's own transaction (a refused link refuses it, and
         // a refused event leaves no link), so one identity can never end up behind two people.
         if let (Some(login), Some(person)) = (&joining_login, value["body"]["person"].as_str()) {
-            match crate::sso::Sso::link_in(&mut tx, login, person).await {
+            match crate::sso::Sso::link_in(&mut tx, &org, login, person).await {
                 Ok(()) => {}
                 Err(crate::sso::LinkError::Store(_)) => {
                     tx.rollback().await?;
@@ -1181,7 +1188,7 @@ async fn sso_link_request(State(o): State<Shared>, Path(org): Path<String>, head
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "single sign-on is required"),
         Err(r) => return r,
     };
-    let person = match o.sso.linked_person(&login).await {
+    let person = match o.sso.linked_person(&org, &login).await {
         Ok(Some((person, false))) => person,
         Ok(Some(_)) => return error(StatusCode::FORBIDDEN, "disabled at your organisation's identity provider"),
         Ok(None) => return error(StatusCode::FORBIDDEN, "this single sign-on identity is not a member yet"),

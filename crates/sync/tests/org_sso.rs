@@ -182,7 +182,7 @@ fn unverified_emails_are_never_shown_as_identities() {
     // Review H1: a provider may send any `email` with `email_verified: false`; it must not appear
     // as the person's identity to the administrator who approves them, or anywhere else.
     let mut users = people();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-mimic", "username": "mimic", "password": "pw-mimic", "email": "ceo@example.org", "email_verified": false, "name": "Not the CEO"}));
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-mimic", "username": "mimic", "password": "pw-mimic", "email": "ceo@example.org", "email_verified": false, "name": "Not the CEO", "roles": [MEMBER]}));
     let env = Env::start("RS256", users, json!({}), json!({}));
     let client = env.client();
     let mut org = Org::create(&env, "alice");

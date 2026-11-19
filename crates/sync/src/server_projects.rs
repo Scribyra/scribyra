@@ -282,29 +282,31 @@ impl Projects {
         }
     }
 
-    /// Creates an empty project owned by `owner`. A repeat by the same owner is `Ok(false)` (the
-    /// project exists); an ID someone else holds is `Err(Conflict)` (with IDs derived from the
-    /// owner, only by a SHA-256 collision).
-    pub async fn create(&self, id: &str, owner: &str, name: &str, actor: &crate::audit::Actor) -> Result<bool, AppendError> {
+    /// Creates an empty project of organisation `org` owned by `owner`. A repeat by the same owner
+    /// in the same organisation is `Ok(false)` (the project exists); an ID someone else holds is
+    /// `Err(Conflict)` (with IDs derived from the owner and organisation, only by a SHA-256
+    /// collision).
+    pub async fn create(&self, org: &str, id: &str, owner: &str, name: &str, actor: &crate::audit::Actor) -> Result<bool, AppendError> {
         let key = random_bytes::<32>();
         let mut tx = self.pool().begin().await?;
-        let inserted = sqlx::query("INSERT INTO sr_projects (project, owner, name, data_key_wrapped) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING")
+        let inserted = sqlx::query("INSERT INTO sr_projects (project, owner, name, data_key_wrapped, org) VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING")
             .bind(id)
             .bind(owner)
             .bind(name)
             .bind(self.wrap(id, &key))
+            .bind(org)
             .execute(&mut *tx)
             .await?;
         if inserted.rows_affected() == 0 {
-            let existing: Option<(String, bool)> = sqlx::query_as("SELECT owner, deleted IS NULL FROM sr_projects WHERE project = $1").bind(id).fetch_optional(&mut *tx).await?;
+            let existing: Option<(String, bool, String)> = sqlx::query_as("SELECT owner, deleted IS NULL, org FROM sr_projects WHERE project = $1").bind(id).fetch_optional(&mut *tx).await?;
             return match existing {
-                Some((o, true)) if o == owner => Ok(false),
+                Some((o, true, in_org)) if o == owner && in_org == org => Ok(false),
                 _ => Err(AppendError::Conflict),
             };
         }
         notify(&mut tx, id).await?;
         notify_account(&mut tx, owner).await?;
-        crate::audit::record(&mut tx, actor, "project.created", Some(("project", id)), json!({})).await?;
+        crate::audit::record(&mut tx, org, actor, "project.created", Some(("project", id)), json!({})).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -690,12 +692,12 @@ impl Projects {
     }
     /// [`Projects::delete`] in the caller's transaction; call [`Projects::erased`] once it commits.
     pub async fn delete_in(&self, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str, actor: &crate::audit::Actor, detail: Value) -> Result<bool, Error> {
-        let bytes: Option<i64> = sqlx::query_scalar("UPDATE sr_projects SET deleted = now(), data_key_wrapped = NULL WHERE project = $1 AND deleted IS NULL RETURNING bytes").bind(project).fetch_optional(&mut **tx).await?;
-        let Some(bytes) = bytes else { return Ok(false) };
+        let row: Option<(i64, String)> = sqlx::query_as("UPDATE sr_projects SET deleted = now(), data_key_wrapped = NULL WHERE project = $1 AND deleted IS NULL RETURNING bytes, org").bind(project).fetch_optional(&mut **tx).await?;
+        let Some((bytes, org)) = row else { return Ok(false) };
         sqlx::query("SELECT bytes FROM usage WHERE scope = $1 FOR UPDATE").bind(DEPLOYMENT_SCOPE).execute(&mut **tx).await?;
         sqlx::query("UPDATE usage SET bytes = greatest(bytes - $2, 0) WHERE scope = $1").bind(DEPLOYMENT_SCOPE).bind(bytes).execute(&mut **tx).await?;
         notify(tx, project).await?;
-        crate::audit::record(&mut **tx, actor, "project.deleted", Some(("project", project)), detail).await?;
+        crate::audit::record(&mut **tx, &org, actor, "project.deleted", Some(("project", project)), detail).await?;
         Ok(true)
     }
     /// Wakes maintenance to remove an erased project's rows and blobs.
@@ -763,29 +765,28 @@ pub async fn notify_account(tx: &mut sqlx::PgConnection, account: &str) -> Resul
     Ok(())
 }
 
-/// Turns pending, unexpired invitations to the account's verified email into shares (called at
-/// every sign-in of a server-readable deployment). An unverified email matches nothing, and an
-/// invitation counts only for the provider it names or, naming none, for a provider whose
-/// `email_domains` vouch for the email (review H2).
-pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate::config::Deployment, ip: Option<std::net::IpAddr>) -> Result<(), sqlx::Error> {
+/// Turns pending, unexpired invitations to the account's verified email into shares, in each
+/// organisation of `provider` where the account holds a role and is active (called at every
+/// sign-in of a server-readable deployment, and when a refresh changed its organisations). An
+/// unverified (or unconfirmed) email matches nothing, and an invitation counts only inside its
+/// project's organisation, for a member or (if the deployment admits guests) a guest of it.
+pub async fn accept_invitations(pool: &PgPool, account: &str, provider: &str, ip: Option<std::net::IpAddr>) -> Result<(), sqlx::Error> {
     let mut tx = pool.begin().await?;
-    let row: Option<(String, String)> = sqlx::query_as("SELECT email, provider FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
-    let Some((email, provider)) = row else { return Ok(()) };
+    let row: Option<String> = sqlx::query_scalar("SELECT email FROM accounts WHERE account = $1 AND email_verified AND email IS NOT NULL AND state = 'active'").bind(account).fetch_optional(&mut *tx).await?;
+    let Some(email) = row else { return Ok(()) };
     let email = crate::sso::normalise_email(&email);
-    let vouched = deployment.provider(&provider).is_some_and(|p| crate::sso::vouches(p, &email));
-    let accepted: Vec<(String, String, Option<String>, String)> = sqlx::query_as(
-        "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p
+    let accepted: Vec<(String, String, Option<String>, String, String)> = sqlx::query_as(
+        "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p, memberships m, organisations o
          WHERE i.project = p.project AND p.deleted IS NULL AND p.owner <> $2 AND i.state = 'pending' AND i.email = $1 AND i.expires > now()
-           AND (i.provider = $3 OR (i.provider IS NULL AND $4))
-         RETURNING i.project, i.role, i.created_by, i.invitation",
+           AND m.account = $2 AND m.org = p.org AND m.state = 'active' AND m.role IS NOT NULL AND o.org = p.org AND o.provider = $3
+         RETURNING i.project, i.role, i.created_by, i.invitation, p.org",
     )
     .bind(&email)
     .bind(account)
-    .bind(&provider)
-    .bind(vouched)
+    .bind(provider)
     .fetch_all(&mut *tx)
     .await?;
-    for (project, role, by, _) in &accepted {
+    for (project, role, by, ..) in &accepted {
         sqlx::query("INSERT INTO sr_shares (project, account, role, created_by) VALUES ($1, $2, $3, $4) ON CONFLICT (project, account) DO UPDATE SET role = EXCLUDED.role")
             .bind(project)
             .bind(account)
@@ -799,8 +800,8 @@ pub async fn accept_invitations(pool: &PgPool, account: &str, deployment: &crate
         notify_account(&mut tx, account).await?;
     }
     let actor = crate::audit::Actor::account(account, ip);
-    for (project, role, _, invitation) in &accepted {
-        crate::audit::record(&mut tx, &actor, "invitation.accepted", Some(("project", project)), json!({"invitation": invitation, "role": role})).await?;
+    for (project, role, _, invitation, org) in &accepted {
+        crate::audit::record(&mut tx, org, &actor, "invitation.accepted", Some(("project", project)), json!({"invitation": invitation, "role": role})).await?;
     }
     tx.commit().await
 }
@@ -924,9 +925,12 @@ impl Drop for PollGuard<'_> {
 }
 pub(crate) type Shared = Arc<Sr>;
 
-/// The caller of a server-readable route.
+/// The caller of a server-readable route, acting in one organisation (the `Scribyra-Org`
+/// header's, or their only one): every project, share, invitation and directory entry they reach
+/// is of that organisation.
 pub(crate) struct Caller {
     pub(crate) account: String,
+    pub(crate) org: String,
     pub(crate) role: Role,
 }
 
@@ -951,21 +955,27 @@ impl Sr {
         let projects = self.projects()?;
         let Some(token) = crate::sso::bearer(headers) else { return Err(error(StatusCode::UNAUTHORIZED, "sign in required")) };
         let login = self.sso.login(token).await.map_err(internal)?.ok_or_else(|| error(StatusCode::UNAUTHORIZED, "sign in required"))?;
-        let Some(account) = login.account else { return Err(error(StatusCode::UNAUTHORIZED, "sign in again")) };
-        let _ = sqlx::query("UPDATE accounts SET last_seen = now() WHERE account = $1 AND last_seen < now() - interval '1 minute'").bind(&account).execute(&projects.store.pool).await;
-        Ok((projects, Caller { account, role: login.role }))
+        let member = login.active(headers).map_err(crate::sso::org_choice_error)?;
+        let (org, role) = (member.org.clone(), member.role);
+        let account = login.account;
+        let pool = &projects.store.pool;
+        let _ = sqlx::query("UPDATE accounts SET last_seen = now() WHERE account = $1 AND last_seen < now() - interval '1 minute'").bind(&account).execute(pool).await;
+        let _ = sqlx::query("UPDATE memberships SET last_seen = now() WHERE account = $1 AND org = $2 AND last_seen < now() - interval '1 minute'").bind(&account).bind(&org).execute(pool).await;
+        Ok((projects, Caller { account, org, role }))
     }
-    /// The caller's access to a live project; non-members get `404`, as if it did not exist.
+    /// The caller's access to a live project of their organisation; anyone else gets `404`, as if
+    /// it did not exist (a project of another organisation too, whoever asks).
     pub(crate) async fn access(&self, projects: &Projects, caller: &Caller, project: &str) -> Result<Access, Response> {
         if !is_id(project) {
             return Err(not_found());
         }
         let row: Option<(String, Option<String>, bool)> = sqlx::query_as(
             "SELECT p.owner, s.role, EXISTS (SELECT 1 FROM sr_admin_opens o WHERE o.project = p.project AND o.account = $2 AND o.until > now())
-             FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $2 WHERE p.project = $1 AND p.deleted IS NULL",
+             FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $2 WHERE p.project = $1 AND p.deleted IS NULL AND p.org = $3",
         )
         .bind(project)
         .bind(&caller.account)
+        .bind(&caller.org)
         .fetch_optional(&projects.store.pool)
         .await
         .map_err(internal)?;
@@ -989,9 +999,10 @@ impl Sr {
         let row = sqlx::query(
             "SELECT p.name, p.head_seq, p.floor_seq, p.snapshot_seq, p.bytes, (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint,
                     o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider, p.compile
-             FROM sr_projects p JOIN accounts o ON o.account = p.owner WHERE p.project = $1 AND p.deleted IS NULL",
+             FROM sr_projects p JOIN accounts o ON o.account = p.owner WHERE p.project = $1 AND p.deleted IS NULL AND p.org = $2",
         )
         .bind(project)
+        .bind(&caller.org)
         .fetch_optional(pool)
         .await
         .map_err(internal)?
@@ -1008,28 +1019,34 @@ impl Sr {
         }
         let mut invitations = Vec::new();
         if access.writes() && caller.role != Role::Guest {
-            let rows = sqlx::query("SELECT invitation, email, role, (extract(epoch FROM created) * 1000)::bigint, (extract(epoch FROM expires) * 1000)::bigint, provider FROM sr_invitations WHERE project = $1 AND state = 'pending' AND expires > now() ORDER BY created")
+            let rows = sqlx::query("SELECT invitation, email, role, (extract(epoch FROM created) * 1000)::bigint, (extract(epoch FROM expires) * 1000)::bigint FROM sr_invitations WHERE project = $1 AND state = 'pending' AND expires > now() ORDER BY created")
                 .bind(project)
                 .fetch_all(pool)
                 .await
                 .map_err(internal)?;
             for r in rows {
-                invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "provider": r.get::<Option<String>, _>(5), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
+                invitations.push(json!({"id": r.get::<String, _>(0), "email": r.get::<String, _>(1), "role": r.get::<String, _>(2), "created": r.get::<i64, _>(3), "expires": r.get::<i64, _>(4)}));
             }
         }
-        // Administrator actions on this project are never silent to its members (design section 5).
-        let activity: Vec<Value> = sqlx::query_as::<_, (String, i64)>(
-            "SELECT action, (extract(epoch FROM time) * 1000)::bigint FROM audit_events WHERE target_type = 'project' AND target_id = $1
-               AND (action IN ('project.admin_open', 'project.admin_edit') OR (action IN ('project.transferred', 'project.renamed') AND detail->>'admin' = 'true'))
-             ORDER BY seq DESC LIMIT 10",
-        )
-        .bind(project)
-        .fetch_all(pool)
-        .await
-        .map_err(internal)?
-        .into_iter()
-        .map(|(action, time)| json!({"action": action, "time": time}))
-        .collect();
+        // Administrator actions on this project are not silent to its members (design section 5)
+        // while `notify_on_admin_access` is on; they are audited either way.
+        let activity: Vec<Value> = if self.notify_admin_access(projects) {
+            sqlx::query_as::<_, (String, i64)>(
+                "SELECT action, (extract(epoch FROM time) * 1000)::bigint FROM audit_log WHERE org = $2 AND target_type = 'project' AND target_id = $1
+                   AND (action IN ('project.admin_open', 'project.admin_edit') OR (action IN ('project.transferred', 'project.renamed') AND detail->>'admin' = 'true'))
+                 ORDER BY seq DESC LIMIT 10",
+            )
+            .bind(project)
+            .bind(&caller.org)
+            .fetch_all(pool)
+            .await
+            .map_err(internal)?
+            .into_iter()
+            .map(|(action, time)| json!({"action": action, "time": time}))
+            .collect()
+        } else {
+            Vec::new()
+        };
         Ok(json!({
             "id": project, "name": row.get::<String, _>(0), "role": access.as_str(), "owner": owner, "adminActivity": activity,
             "head": row.get::<i64, _>(1), "floor": row.get::<i64, _>(2), "snapshot": row.get::<i64, _>(3), "size": row.get::<i64, _>(4),
@@ -1037,21 +1054,28 @@ impl Sr {
             "compile": crate::compiles::effective_mode(&projects.store.config, &row.get::<String, _>(11)),
         }))
     }
-    /// The caller's projects and their heads, roles and names; `version` digests them.
+    /// Whether members see administrators' access to their projects (`notify_on_admin_access`).
+    fn notify_admin_access(&self, projects: &Projects) -> bool {
+        projects.store.config.deployment.as_ref().is_none_or(|d| d.notify_on_admin_access)
+    }
+    /// The caller's projects in their organisation and their heads, roles and names; `version`
+    /// digests them.
     /// With server compile, each project also has `compile`: its mode and its latest job's ID
     /// and state, so a queued, started or finished compile wakes every member's poll.
     async fn heads_now(&self, projects: &Projects, caller: &Caller) -> Result<(String, Value), Response> {
         let rows = sqlx::query(
             "SELECT p.project, p.head_seq, CASE WHEN p.owner = $1 THEN 'owner' WHEN s.role IS NOT NULL THEN s.role ELSE 'admin' END, p.name, p.compile, c.job, c.state,
-                    (SELECT (extract(epoch FROM max(e.time)) * 1000)::bigint FROM audit_events e WHERE e.target_type = 'project' AND e.target_id = p.project AND e.action = 'project.admin_open')
+                    (SELECT (extract(epoch FROM max(e.time)) * 1000)::bigint FROM audit_log e WHERE $5 AND e.org = $4 AND e.target_type = 'project' AND e.target_id = p.project AND e.action = 'project.admin_open')
              FROM sr_projects p LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
              LEFT JOIN sr_admin_opens o ON o.project = p.project AND o.account = $1 AND o.until > now() AND $3
              LEFT JOIN LATERAL (SELECT job, state FROM compiles WHERE project = p.project AND state <> 'replaced' AND $2 ORDER BY queued DESC LIMIT 1) c ON true
-             WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL OR o.account IS NOT NULL) ORDER BY p.project",
+             WHERE p.deleted IS NULL AND p.org = $4 AND (p.owner = $1 OR s.account IS NOT NULL OR o.account IS NOT NULL) ORDER BY p.project",
         )
         .bind(&caller.account)
         .bind(self.compiles.is_some())
         .bind(caller.role == Role::Admin)
+        .bind(&caller.org)
+        .bind(self.notify_admin_access(projects))
         .fetch_all(&projects.store.pool)
         .await
         .map_err(internal)?;
@@ -1127,13 +1151,15 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
     let rows = sqlx::query(
         "SELECT p.project, p.name, CASE WHEN p.owner = $1 THEN 'owner' WHEN s.role IS NOT NULL THEN s.role ELSE 'admin' END, p.head_seq, p.bytes,
                 (extract(epoch FROM p.created) * 1000)::bigint, (extract(epoch FROM p.updated) * 1000)::bigint, o.account, o.name, CASE WHEN o.email_verified THEN o.email END, o.provider,
-                (SELECT (extract(epoch FROM max(e.time)) * 1000)::bigint FROM audit_events e WHERE e.target_type = 'project' AND e.target_id = p.project AND e.action = 'project.admin_open')
+                (SELECT (extract(epoch FROM max(e.time)) * 1000)::bigint FROM audit_log e WHERE $4 AND e.org = $3 AND e.target_type = 'project' AND e.target_id = p.project AND e.action = 'project.admin_open')
          FROM sr_projects p JOIN accounts o ON o.account = p.owner LEFT JOIN sr_shares s ON s.project = p.project AND s.account = $1
          LEFT JOIN sr_admin_opens ao ON ao.project = p.project AND ao.account = $1 AND ao.until > now() AND $2
-         WHERE p.deleted IS NULL AND (p.owner = $1 OR s.account IS NOT NULL OR ao.account IS NOT NULL) ORDER BY p.updated DESC, p.project",
+         WHERE p.deleted IS NULL AND p.org = $3 AND (p.owner = $1 OR s.account IS NOT NULL OR ao.account IS NOT NULL) ORDER BY p.updated DESC, p.project",
     )
     .bind(&caller.account)
     .bind(caller.role == Role::Admin)
+    .bind(&caller.org)
+    .bind(sr.notify_admin_access(projects))
     .fetch_all(&projects.store.pool)
     .await;
     let rows = match rows {
@@ -1148,7 +1174,7 @@ async fn list(State(sr): State<Shared>, headers: HeaderMap) -> Response {
                    "adminOpened": r.get::<Option<i64>, _>(11)})
         })
         .collect();
-    ok_json(StatusCode::OK, json!({"account": caller.account, "role": caller.role.as_str(), "projects": list}))
+    ok_json(StatusCode::OK, json!({"account": caller.account, "org": caller.org, "role": caller.role.as_str(), "projects": list}))
 }
 
 fn valid_name(name: &str) -> bool {
@@ -1228,8 +1254,9 @@ async fn create(State(sr): State<Shared>, source: Option<axum::Extension<crate::
         None => random_hex(),
     };
     let actor = crate::audit::Actor::account(&caller.account, crate::audit::source(&source));
-    let created = match projects.create(&id, &caller.account, request.name.trim(), &actor).await {
+    let created = match projects.create(&caller.org, &id, &caller.account, request.name.trim(), &actor).await {
         Ok(created) => created,
+        Err(AppendError::Conflict) => return error(StatusCode::CONFLICT, "a project with this ID exists"),
         Err(e) => return internal(e),
     };
     let mut seq = None;
@@ -1292,7 +1319,7 @@ async fn rename(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
         notify(&mut tx, &p).await?;
         // An administrator renaming a project that is not theirs is shown to its members.
         let admin = caller.role == Role::Admin && access != Access::Owner;
-        crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.renamed", Some(("project", &p)), json!({"admin": admin})).await?;
+        crate::audit::record(&mut tx, &caller.org, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.renamed", Some(("project", &p)), json!({"admin": admin})).await?;
         tx.commit().await
     };
     if let Err(e) = done.await {
@@ -1524,12 +1551,11 @@ struct Invite {
     email: String,
     role: String,
 }
-/// Shares at once with every active account whose verified email this is at a provider that
-/// counts for it (`200` when the share existed, `201` when new), or records a pending invitation
-/// that the first such sign-in accepts (`201`, `status: "pending"`). `email` is `provider:email`
-/// (that provider's accounts only) or a plain email: then any provider whose `email_domains`
-/// vouch for its domain, or the deployment's only provider; with several providers and none
-/// vouching, the inviter must name one (`400`). Review H2.
+/// Shares at once with every account of the project's organisation (a member or administrator,
+/// or a guest when the deployment admits guests) whose verified email this is (`200` when the
+/// share existed, `201` when new), or records a pending invitation that the first such sign-in in
+/// that organisation accepts (`201`, `status: "pending"`). Accounts of other organisations are
+/// never matched, whatever their email.
 async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Invite>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
@@ -1543,39 +1569,25 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
         return r;
     }
     let Some(deployment) = projects.store.config.deployment.as_ref() else { return internal(()) };
-    let text = request.email.trim();
-    let (named, email) = match text.split_once(':') {
-        Some((id, email)) => match deployment.provider(id) {
-            Some(provider) => (Some(provider), crate::sso::normalise_email(email)),
-            None => return error(StatusCode::BAD_REQUEST, "unknown provider"),
-        },
-        None => (None, crate::sso::normalise_email(text)),
-    };
+    let email = crate::sso::normalise_email(&request.email);
     if !valid_email(&email) || Access::share(&request.role).is_none() {
         return error(StatusCode::BAD_REQUEST, "invalid email or role");
     }
-    // The providers whose accounts this email names, and the one the invitation records.
-    let (providers, recorded): (Vec<String>, Option<String>) = match named {
-        Some(provider) => (vec![provider.id.clone()], Some(provider.id.clone())),
-        None => {
-            let vouching: Vec<String> = deployment.providers.iter().filter(|d| crate::sso::vouches(d, &email)).map(|d| d.id.clone()).collect();
-            match (vouching.is_empty(), deployment.providers.as_slice()) {
-                (false, _) => (vouching, None),
-                (true, [only]) => (vec![only.id.clone()], Some(only.id.clone())),
-                (true, _) => return error(StatusCode::BAD_REQUEST, "no provider vouches for this email's domain: name one as provider:email"),
-            }
-        }
-    };
+    let guests = deployment.guests == crate::config::Guests::Shared;
     let days = projects.store.config.sr_invitation_days as f64;
     let actor = crate::audit::Actor::account(&caller.account, crate::audit::source(&source));
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
         let owner: String = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(&p).fetch_one(&mut *tx).await?;
-        let accounts: Vec<String> = sqlx::query_scalar("SELECT account FROM accounts WHERE email = $1 AND email_verified AND state = 'active' AND provider = ANY($2) ORDER BY account")
-            .bind(&email)
-            .bind(&providers)
-            .fetch_all(&mut *tx)
-            .await?;
+        let accounts: Vec<String> = sqlx::query_scalar(
+            "SELECT a.account FROM accounts a JOIN memberships m ON m.account = a.account AND m.org = $2
+             WHERE a.email = $1 AND a.email_verified AND a.state = 'active' AND m.state = 'active' AND (m.role IN ('admin', 'member') OR (m.role = 'guest' AND $3)) ORDER BY a.account",
+        )
+        .bind(&email)
+        .bind(&caller.org)
+        .bind(guests)
+        .fetch_all(&mut *tx)
+        .await?;
         let others: Vec<&String> = accounts.iter().filter(|a| **a != owner).collect();
         let outcome = if !accounts.is_empty() {
             let mut fresh = false;
@@ -1592,14 +1604,14 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
                 .await?;
                 fresh |= inserted;
                 notify_account(&mut tx, account).await?;
-                crate::audit::record(&mut tx, &actor, if inserted { "share.created" } else { "share.changed" }, Some(("project", &p)), json!({"account": account, "role": request.role})).await?;
+                crate::audit::record(&mut tx, &caller.org, &actor, if inserted { "share.created" } else { "share.changed" }, Some(("project", &p)), json!({"account": account, "role": request.role})).await?;
             }
             sqlx::query("UPDATE sr_invitations SET state = 'accepted' WHERE project = $1 AND email = $2 AND state = 'pending'").bind(&p).bind(&email).execute(&mut *tx).await?;
             (if fresh { StatusCode::CREATED } else { StatusCode::OK }, json!({"status": if others.is_empty() { "owner" } else { "shared" }}))
         } else {
             let (id, expires): (String, i64) = sqlx::query_as(
-                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires, provider) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int), $7)
-                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires, provider = EXCLUDED.provider
+                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int))
+                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires
                  RETURNING invitation, (extract(epoch FROM expires) * 1000)::bigint",
             )
             .bind(random_hex())
@@ -1608,12 +1620,11 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
             .bind(&request.role)
             .bind(&caller.account)
             .bind(days as i32)
-            .bind(&recorded)
             .fetch_one(&mut *tx)
             .await?;
             // The invitee's email is not recorded: emails appear only as account details.
-            crate::audit::record(&mut tx, &actor, "invitation.created", Some(("project", &p)), json!({"invitation": id, "role": request.role, "provider": recorded})).await?;
-            (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "provider": recorded, "role": request.role, "expires": expires}}))
+            crate::audit::record(&mut tx, &caller.org, &actor, "invitation.created", Some(("project", &p)), json!({"invitation": id, "role": request.role})).await?;
+            (StatusCode::CREATED, json!({"status": "pending", "invitation": {"id": id, "email": email, "role": request.role, "expires": expires}}))
         };
         notify(&mut tx, &p).await?;
         tx.commit().await?;
@@ -1651,7 +1662,7 @@ async fn withdraw(State(sr): State<Shared>, Path((p, invitation)): Path<(String,
         let n = sqlx::query("UPDATE sr_invitations SET state = 'withdrawn' WHERE invitation = $1 AND project = $2 AND state = 'pending'").bind(&invitation).bind(&p).execute(&mut *tx).await?.rows_affected();
         notify(&mut tx, &p).await?;
         if n > 0 {
-            crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "invitation.withdrawn", Some(("project", &p)), json!({"invitation": invitation})).await?;
+            crate::audit::record(&mut tx, &caller.org, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "invitation.withdrawn", Some(("project", &p)), json!({"invitation": invitation})).await?;
         }
         tx.commit().await?;
         Ok::<_, sqlx::Error>(n)
@@ -1687,7 +1698,7 @@ async fn change_member(State(sr): State<Shared>, Path((p, account)): Path<(Strin
         let n = sqlx::query("UPDATE sr_shares SET role = $3 WHERE project = $1 AND account = $2").bind(&p).bind(&account).bind(&request.role).execute(&mut *tx).await?.rows_affected();
         notify(&mut tx, &p).await?;
         if n > 0 {
-            crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "share.changed", Some(("project", &p)), json!({"account": account, "role": request.role})).await?;
+            crate::audit::record(&mut tx, &caller.org, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "share.changed", Some(("project", &p)), json!({"account": account, "role": request.role})).await?;
         }
         tx.commit().await?;
         Ok::<_, sqlx::Error>(n)
@@ -1723,7 +1734,7 @@ async fn remove_member(State(sr): State<Shared>, Path((p, account)): Path<(Strin
         let n = sqlx::query("DELETE FROM sr_shares WHERE project = $1 AND account = $2").bind(&p).bind(&account).execute(&mut *tx).await?.rows_affected();
         notify(&mut tx, &p).await?;
         if n > 0 {
-            crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "share.removed", Some(("project", &p)), json!({"account": account, "left": account == caller.account})).await?;
+            crate::audit::record(&mut tx, &caller.org, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "share.removed", Some(("project", &p)), json!({"account": account, "left": account == caller.account})).await?;
         }
         tx.commit().await?;
         Ok::<_, sqlx::Error>(n)
@@ -1752,17 +1763,27 @@ async fn transfer(State(sr): State<Shared>, Path(p): Path<String>, source: Optio
     }
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
-        let target: Option<String> = sqlx::query_scalar("SELECT a.role FROM sr_shares s JOIN accounts a USING (account) WHERE s.project = $1 AND s.account = $2 AND a.state = 'active' FOR UPDATE OF s").bind(&p).bind(&request.account).fetch_optional(&mut *tx).await?;
-        match target.as_deref() {
+        // The new owner holds a role in the project's organisation now, and is not a guest there.
+        let target: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT m.role FROM sr_shares s JOIN accounts a USING (account) LEFT JOIN memberships m ON m.account = s.account AND m.org = $3 AND m.state = 'active'
+             WHERE s.project = $1 AND s.account = $2 AND a.state = 'active' FOR UPDATE OF s",
+        )
+        .bind(&p)
+        .bind(&request.account)
+        .bind(&caller.org)
+        .fetch_optional(&mut *tx)
+        .await?;
+        match target {
             None => return Ok(Err(error(StatusCode::NOT_FOUND, "not a member of this project"))),
-            Some("guest") => return Ok(Err(error(StatusCode::CONFLICT, "guests cannot own projects"))),
+            Some(None) => return Ok(Err(error(StatusCode::CONFLICT, "only a member of the organisation can own its projects"))),
+            Some(Some(role)) if role == "guest" => return Ok(Err(error(StatusCode::CONFLICT, "guests cannot own projects"))),
             _ => {}
         }
         sqlx::query("DELETE FROM sr_shares WHERE project = $1 AND account = $2").bind(&p).bind(&request.account).execute(&mut *tx).await?;
         sqlx::query("UPDATE sr_projects SET owner = $2, updated = now() WHERE project = $1").bind(&p).bind(&request.account).execute(&mut *tx).await?;
         sqlx::query("INSERT INTO sr_shares (project, account, role, created_by) VALUES ($1, $2, 'editor', $2)").bind(&p).bind(&caller.account).execute(&mut *tx).await?;
         notify(&mut tx, &p).await?;
-        crate::audit::record(&mut tx, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.transferred", Some(("project", &p)), json!({"from": caller.account, "to": request.account, "admin": false})).await?;
+        crate::audit::record(&mut tx, &caller.org, &crate::audit::Actor::account(&caller.account, crate::audit::source(&source)), "project.transferred", Some(("project", &p)), json!({"from": caller.account, "to": request.account, "admin": false})).await?;
         tx.commit().await?;
         Ok::<_, sqlx::Error>(Ok(()))
     };
@@ -1803,15 +1824,12 @@ async fn heads(State(sr): State<Shared>, Query(q): Query<HeadsQuery>, headers: H
     loop {
         // A revocation notifies the account's polls: each checks that its session still holds
         // (review L6).
-        if std::mem::take(&mut woken) {
-            match crate::sso::bearer(&headers).map(|t| sr.sso.login(t)) {
-                Some(login) => match login.await {
-                    Ok(Some(_)) => {}
-                    Ok(None) => return error(StatusCode::UNAUTHORIZED, "sign in required"),
-                    Err(e) => return internal(e),
-                },
-                None => return error(StatusCode::UNAUTHORIZED, "sign in required"),
-            }
+        // A role the provider took away, or an administrator's stop in this organisation, ends
+        // the poll the same way.
+        if std::mem::take(&mut woken)
+            && let Err(r) = sr.caller(&headers).await
+        {
+            return r;
         }
         let (version, heads) = match sr.heads_now(projects, &caller).await {
             Ok(v) => v,
@@ -1841,6 +1859,30 @@ async fn heads(State(sr): State<Shared>, Query(q): Query<HeadsQuery>, headers: H
     }
 }
 
+/// The organisation's member directory (design section 3): names and verified emails of the
+/// members and administrators of the caller's organisation, to share with. Guests may not
+/// browse it (`403`).
+async fn directory(State(sr): State<Shared>, headers: HeaderMap) -> Response {
+    let (projects, caller) = match sr.caller(&headers).await {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    if caller.role == Role::Guest {
+        return error(StatusCode::FORBIDDEN, "guests cannot browse the directory");
+    }
+    let rows: Result<Vec<(String, Option<String>, Option<String>, String)>, _> = sqlx::query_as(
+        "SELECT a.account, a.name, CASE WHEN a.email_verified THEN a.email END, m.role FROM memberships m JOIN accounts a ON a.account = m.account
+         WHERE m.org = $1 AND m.state = 'active' AND m.role IN ('admin', 'member') AND a.state = 'active' ORDER BY a.name, a.account LIMIT 10000",
+    )
+    .bind(&caller.org)
+    .fetch_all(&projects.store.pool)
+    .await;
+    match rows {
+        Ok(rows) => ok_json(StatusCode::OK, json!({"org": caller.org, "members": rows.into_iter().map(|(account, name, email, role)| json!({"account": account, "name": name, "email": email, "role": role})).collect::<Vec<_>>()})),
+        Err(e) => internal(e),
+    }
+}
+
 /// The server-readable routes; merged into [`crate::service::router`].
 pub fn routes(sr: Shared) -> Router {
     Router::new()
@@ -1854,6 +1896,7 @@ pub fn routes(sr: Shared) -> Router {
         .route("/v1/sr/projects/{project}/members/{account}", put(change_member).delete(remove_member))
         .route("/v1/sr/projects/{project}/owner", post(transfer))
         .route("/v1/sr/heads", get(heads))
+        .route("/v1/sr/directory", get(directory))
         .merge(crate::compiles::routes())
         .with_state(sr)
 }
