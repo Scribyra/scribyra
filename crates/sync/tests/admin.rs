@@ -629,6 +629,38 @@ fn removal_from_the_admin_group_at_the_provider_demotes_at_the_next_recheck() {
 }
 
 #[test]
+fn a_grant_never_outlasts_the_provider_taking_the_role_away() {
+    let sr = Sr::start(
+        Blobs::Fs,
+        people(),
+        json!({"sso_recheck_tick_seconds": 1}),
+        json!({"provider": {"offline_access": true, "groups_claim": "groups", "admin_groups": ["scribyra-admins"], "recheck_minutes": 1}}),
+    );
+    assert_eq!(sr.env.idp.control("groups?user=erin&groups=scribyra-admins").status, 200);
+    let erin = sr.api(&sr.login("erin"));
+    let alice = sr.api(&sr.login("alice"));
+    let erin_id = account_of(&erin);
+    // Review M2: granting a group's administrator was accepted silently, and the grant kept her an
+    // administrator after the provider removed her from the group.
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{erin_id}/role"), Some(json!({"role": "admin"}))).status, 409);
+    assert_eq!(psql(&sr, &format!("SELECT admin_grant FROM accounts WHERE account = '{erin_id}'")), "f");
+    // A grant made before this was refused is cleared (and recorded) at the next recheck that
+    // finds her an administrator through the group.
+    psql(&sr, &format!("UPDATE accounts SET admin_grant = true WHERE account = '{erin_id}'"));
+    psql(&sr, "UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked");
+    eventually("the stale grant's clearing", || psql(&sr, &format!("SELECT admin_grant FROM accounts WHERE account = '{erin_id}'")) == "f");
+    let cleared = events(&alice).into_iter().find(|e| e["action"] == "account.admin_grant_cleared").unwrap();
+    assert_eq!((cleared["actor"].as_str(), cleared["target"].as_str()), (Some("system"), Some(erin_id.as_str())));
+    assert_eq!(sr.env.idp.control("groups?user=erin&groups=").status, 200);
+    psql(&sr, "UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked");
+    eventually("erin's demotion", || erin.call("GET", "/v1/admin/members", None).status == 403);
+    // The same at sign-in: a stale grant on someone the rules make an administrator goes.
+    psql(&sr, "UPDATE accounts SET admin_grant = true WHERE email = 'alice@example.org'");
+    sr.login("alice");
+    assert_eq!(psql(&sr, "SELECT admin_grant FROM accounts WHERE email = 'alice@example.org'"), "f");
+}
+
+#[test]
 fn end_to_end_deployments_refuse_content_routes_and_keep_metadata() {
     let env = Env::start("RS256", people(), json!({}), json!({}));
     let mut org = support::orgs::Org::create(&env, "alice");

@@ -779,10 +779,14 @@ impl Sso {
                 let admitted = admit(deployment, configured, subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest);
                 if let Ok(role) = admitted {
                     let mut tx = self.store.pool.begin().await?;
-                    let changed: Option<(String, String, String)> = sqlx::query_as(
-                        "WITH old AS (SELECT account, role FROM accounts WHERE provider = $1 AND subject = $2 FOR UPDATE)
-                         UPDATE accounts a SET email = $3, email_verified = $4, name = $5, role = CASE WHEN $6 = 'member' AND a.admin_grant THEN 'admin' ELSE $6 END, guest = $7
-                         FROM old WHERE a.account = old.account RETURNING a.account, old.role, a.role",
+                    // An administrator's grant lasts only while the rules make the account a
+                    // member: one the rules make an administrator (or guest) loses it, so the
+                    // provider alone decides when it takes that away (review M2).
+                    let changed: Option<(String, String, String, bool)> = sqlx::query_as(
+                        "WITH old AS (SELECT account, role, admin_grant FROM accounts WHERE provider = $1 AND subject = $2 FOR UPDATE)
+                         UPDATE accounts a SET email = $3, email_verified = $4, name = $5, role = CASE WHEN $6 = 'member' AND a.admin_grant THEN 'admin' ELSE $6 END, guest = $7,
+                           admin_grant = a.admin_grant AND $6 = 'member'
+                         FROM old WHERE a.account = old.account RETURNING a.account, old.role, a.role, old.admin_grant AND NOT a.admin_grant",
                     )
                     .bind(&configured.id)
                     .bind(subject)
@@ -794,8 +798,13 @@ impl Sso {
                     .fetch_optional(&mut *tx)
                     .await?;
                     // A role the provider's groups changed (for example removal from an admin group).
-                    if let Some((account, from, to)) = changed.filter(|(_, from, to)| from != to) {
-                        crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.role_changed", Some(("account", &account)), json!({"from": from, "to": to, "by": "provider"})).await?;
+                    if let Some((account, from, to, cleared)) = changed {
+                        if cleared {
+                            crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.admin_grant_cleared", Some(("account", &account)), json!({"role": to, "by": "provider"})).await?;
+                        }
+                        if from != to {
+                            crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.role_changed", Some(("account", &account)), json!({"from": from, "to": to, "by": "provider"})).await?;
+                        }
                     }
                     tx.commit().await?;
                 }
@@ -1173,13 +1182,13 @@ async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::s
         Ok(tx) => tx,
         Err(e) => return internal(e),
     };
-    let account = sqlx::query_as::<_, (String, String, bool, String, Option<String>)>(
-        "WITH old AS (SELECT role FROM accounts WHERE provider = $2 AND subject = $4)
+    let account = sqlx::query_as::<_, (String, String, bool, String, Option<String>, bool)>(
+        "WITH old AS (SELECT role, admin_grant FROM accounts WHERE provider = $2 AND subject = $4)
          INSERT INTO accounts (account, provider, issuer, subject, email, email_verified, name, role, guest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (provider, subject) DO UPDATE SET issuer = EXCLUDED.issuer, email = EXCLUDED.email, email_verified = EXCLUDED.email_verified,
            name = EXCLUDED.name, role = CASE WHEN EXCLUDED.role = 'member' AND accounts.admin_grant THEN 'admin' ELSE EXCLUDED.role END, guest = EXCLUDED.guest, last_seen = now(),
-           state = CASE WHEN accounts.state = 'blocked' THEN 'active' ELSE accounts.state END
-         RETURNING account, state, (xmax = 0), role, (SELECT role FROM old)",
+           state = CASE WHEN accounts.state = 'blocked' THEN 'active' ELSE accounts.state END, admin_grant = accounts.admin_grant AND EXCLUDED.role = 'member'
+         RETURNING account, state, (xmax = 0), role, (SELECT role FROM old), COALESCE((SELECT admin_grant FROM old), false) AND NOT admin_grant",
     )
     .bind(random_hex())
     .bind(&grant.provider)
@@ -1193,8 +1202,11 @@ async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::s
     .fetch_one(&mut *tx)
     .await;
     let account = match account {
-        Ok((account, state, created, role, old)) if state == "active" => {
+        Ok((account, state, created, role, old, cleared)) if state == "active" => {
             let recorded = async {
+                if cleared {
+                    crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.admin_grant_cleared", Some(("account", &account)), json!({"role": role, "by": "provider"})).await?;
+                }
                 if created {
                     crate::audit::record(&mut tx, &crate::audit::Actor::account(&account, ip), "account.created", Some(("account", &account)), json!({"provider": grant.provider, "role": role})).await?;
                 } else if let Some(old) = old.filter(|o| *o != role) {

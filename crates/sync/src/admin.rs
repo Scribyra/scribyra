@@ -168,7 +168,9 @@ struct RoleChange {
     role: String,
 }
 /// Makes a member an administrator or an administrator a member. Guests stay guests, and the
-/// configuration's administrators (`admins`, `admin_groups`) stay administrators (`409`).
+/// configuration's administrators (`admins`, `admin_groups`) are its alone (`409`): they cannot be
+/// demoted here, nor granted the role (a grant would outlast the provider taking it away, review
+/// M2). Every change of the grant is recorded.
 async fn set_role(State(a): State<Shared>, Path(account): Path<String>, source: SourceIp, headers: HeaderMap, Json(request): Json<RoleChange>) -> Response {
     let caller = admin!(a, headers, source);
     let grant = match request.role.as_str() {
@@ -182,21 +184,23 @@ async fn set_role(State(a): State<Shared>, Path(account): Path<String>, source: 
     };
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
-        let (role, state, guest, _) = target(&caller, &account, &mut tx).await?;
+        let (role, state, guest, granted) = target(&caller, &account, &mut tx).await?;
         if guest || role == "guest" {
             return Err(error(StatusCode::CONFLICT, "guests stay guests"));
         }
         if state == "removed" {
             return Err(error(StatusCode::CONFLICT, "this account was removed"));
         }
-        if !grant && configured == Some(Role::Admin) {
+        if configured == Some(Role::Admin) {
             return Err(error(StatusCode::CONFLICT, "this person is an administrator through the deployment's configuration (admins or admin_groups)"));
         }
-        let to = if grant || configured == Some(Role::Admin) { "admin" } else { "member" };
+        let to = if grant { "admin" } else { "member" };
         sqlx::query("UPDATE accounts SET admin_grant = $2, role = $3 WHERE account = $1").bind(&account).bind(grant).bind(to).execute(&mut *tx).await.map_err(internal)?;
         if to != role {
             audit::record(&mut tx, &caller.actor(), "account.role_changed", Some(("account", &account)), json!({"from": role, "to": to, "by": "admin"})).await.map_err(internal)?;
             server_projects::notify_account(&mut tx, &account).await.map_err(internal)?;
+        } else if granted != grant {
+            audit::record(&mut tx, &caller.actor(), "account.admin_grant_changed", Some(("account", &account)), json!({"grant": grant})).await.map_err(internal)?;
         }
         tx.commit().await.map_err(internal)
     };
