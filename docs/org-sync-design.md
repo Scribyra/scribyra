@@ -201,7 +201,7 @@ Paul: "the answers are in how Zitadel works — user IDs should be received from
 | **Member** | Create projects; share their projects; see their organisation's member directory (names and emails) to share with. |
 | **Guest** | Open projects shared with them; nothing else. |
 
-Roles are assigned in the provider only. The admin area shows them read-only with the provider they come from; it can disable an account in Scribyra (sessions revoked, sign-in refused until re-enabled) as an emergency stop, but granting or removing roles is done in the provider.
+Roles are assigned in the provider only. The admin area shows them read-only with the provider they come from; it can disable an account in Scribyra in that organisation only (its current sessions lose that organisation for good, keep the others, and sign-in there is refused until re-enabled) as an emergency stop, but granting or removing roles is done in the provider.
 
 ### End-to-end mode: binding device keys to OIDC identities
 

@@ -437,3 +437,37 @@ fn sign_outs_are_audited_only_where_the_person_holds_a_role() {
     assert_eq!(c.logout(&token(&c.login("cy"))).status, 200);
     assert_eq!((sign_outs(&a), sign_outs(&b)), ("2".into(), "2".into()));
 }
+
+#[test]
+fn an_administrator_stops_someone_only_in_their_own_organisation() {
+    // Review (low): disabling someone in organisation B revoked their sessions at B's provider,
+    // so an administrator of B also ended their work in A.
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": zitadel_provider()}));
+    let c = sr.env.client();
+    let (ana, bea, cy) = (sr.api(&token(&c.login("ana"))), sr.api(&token(&c.login("bea"))), sr.api(&token(&c.login("cy"))));
+    let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
+    let (pa, pb) = (ana.create("A paper"), bea.create("B paper"));
+    assert_eq!(ana.invite(&pa, "cy@a.test", "editor").json()["status"], "shared");
+    assert_eq!(bea.invite(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    let (cy_a, cy_b) = (cy.in_org(&a), cy.in_org(&b));
+    let version = cy_b.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
+    let poll = {
+        let cy_b = cy_b.clone();
+        std::thread::spawn(move || cy_b.heads(Some(&version), 25).status)
+    };
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let cy_id = account(&sr, "cy");
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/disable"), None).status, 200);
+    // B's poll and requests end; the same session keeps working in A.
+    assert_eq!(poll.join().unwrap(), 404);
+    assert_eq!(cy_b.log(&pb, 0).status, 404);
+    assert_eq!(c.me(&cy.token).status, 200);
+    assert_eq!(cy_a.log(&pa, 0).status, 200);
+    assert_eq!(cy.call("GET", "/v1/sr/projects", None).json()["org"], json!(a), "only A is left, so no header is needed");
+    assert_eq!(postgres().psql(&sr.db(), &format!("SELECT count(*) FROM sso_logins WHERE account = '{cy_id}' AND revoked")), "0");
+    // Re-enabled: that session stays without B for good; a new sign-in has it again.
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/unblock"), None).status, 200);
+    assert_eq!(cy_b.log(&pb, 0).status, 404);
+    assert_eq!(c.me(&cy.token).json()["orgs"].as_array().unwrap().len(), 1);
+    assert_eq!(sr.api(&token(&c.login("cy"))).in_org(&b).log(&pb, 0).status, 200);
+}

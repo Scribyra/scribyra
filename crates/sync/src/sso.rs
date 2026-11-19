@@ -586,7 +586,9 @@ impl Sso {
         let Some(row) = row else { return Ok(None) };
         let (provider, issuer, account): (String, String, String) = (row.get(0), row.get(1), row.get(8));
         let Some((deployment, _)) = self.configured(&provider).filter(|(_, p)| p.issuer == issuer) else { return Ok(None) };
-        let orgs = memberships(&self.store.pool, deployment, &account, &provider).await?;
+        let stopped: Vec<String> = sqlx::query_scalar("SELECT org FROM sso_login_stops WHERE token_hash = $1").bind(sha256_hex(token.as_bytes())).fetch_all(&self.store.pool).await?;
+        let mut orgs = memberships(&self.store.pool, deployment, &account, &provider).await?;
+        orgs.retain(|m| !stopped.contains(&m.org));
         if orgs.is_empty() {
             return Ok(None);
         }
@@ -828,13 +830,21 @@ impl Sso {
     }
 
     /// An administrator disabled or removed the account in one organisation (in the caller's
-    /// transaction): its sessions at that organisation's provider are revoked (it signs in again
-    /// for any other organisation it is in there), its access to this organisation ends until an
-    /// administrator re-enables it, and its heads polls check again. Returns the end-to-end (org,
-    /// person) pairs of that organisation whose device sessions [`Sso::announce`] closes once the
+    /// transaction, after the membership's state changed): its access to that organisation ends
+    /// at once (until an administrator re-enables it, and in its current sessions for good:
+    /// `sso_login_stops`), and nothing else. Its sessions stay valid for its other organisations
+    /// (review: an administrator of one organisation used to end them all); every request and poll
+    /// reads the memberships and stops, so its heads polls are woken to check again, and those in
+    /// this organisation end. Returns the end-to-end (org, person)
+    /// pairs of that organisation whose device sessions [`Sso::announce`] closes once the
     /// transaction committed.
     pub async fn stop_in(tx: &mut sqlx::PgConnection, account: &str, org: &str) -> Result<Vec<(String, String)>, sqlx::Error> {
-        sqlx::query("UPDATE sso_logins SET revoked = true WHERE account = $1 AND NOT revoked AND provider = (SELECT provider FROM organisations WHERE org = $2)").bind(account).bind(org).execute(&mut *tx).await?;
+        // Its sessions lose this organisation for good (re-enabling does not give it back).
+        sqlx::query("INSERT INTO sso_login_stops (token_hash, org) SELECT token_hash, $2 FROM sso_logins WHERE account = $1 AND NOT revoked AND expires > now() ON CONFLICT DO NOTHING")
+            .bind(account)
+            .bind(org)
+            .execute(&mut *tx)
+            .await?;
         let fired: Vec<(String, String)> =
             sqlx::query_as("SELECT l.org, l.person FROM sso_links l JOIN accounts a ON a.issuer = l.issuer AND a.subject = l.subject WHERE a.account = $1 AND l.org = $2").bind(account).bind(org).fetch_all(&mut *tx).await?;
         crate::server_projects::notify_account(&mut *tx, account).await?;
