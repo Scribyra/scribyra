@@ -54,10 +54,11 @@ async function add(page,place,name){
  await dialog.getByRole('list',{name:'Projects only on this device'}).getByRole('listitem').filter({hasText:name}).getByRole('button',{name:`Add to ${place}`}).click();
  await expect(row(page,place,name)).toContainText('Synced',{timeout:30000});
 }
-async function invite(page,place,name,email,role='editor'){
+async function invite(page,place,name,email,role='editor',{guest=false}={}){
  await row(page,place,name).getByRole('button',{name:'Share'}).click();
  await row(page,place,name).getByRole('textbox',{name:'Email'}).fill(email);
  await row(page,place,name).getByRole('combobox',{name:'Role'}).selectOption(role);
+ if(guest)await row(page,place,name).getByRole('checkbox',{name:/^Invite as a guest/}).check();
  await row(page,place,name).getByRole('button',{name:'Invite'}).click();
  await expect(dialogOf(page).getByRole('status')).toContainText(email);
 }
@@ -110,7 +111,8 @@ test('two organisations: switching, isolation, a guest who cannot add, and a rol
   await personal(ana.page,'Acme paper');await signIn(ana.page,s,'ana');await add(ana.page,'Acme Lab','Acme paper');
   await personal(bea.page,'Partner plan');await personal(bea.page,'Partner secret');await signIn(bea.page,s,'bea');
   await add(bea.page,'Acme Lab','Partner plan');await add(bea.page,'Acme Lab','Partner secret');
-  await invite(bea.page,'Acme Lab','Partner plan','cy@acme.test');
+  // Cy is (going to be) a guest of the partner: an explicit guest invitation.
+  await invite(bea.page,'Acme Lab','Partner plan','cy@acme.test','editor',{guest:true});
 
   // Cy holds roles in both: the switcher, and Acme first.
   await personal(cyp.page,'Cy notes');await signIn(cyp.page,s,'cy');

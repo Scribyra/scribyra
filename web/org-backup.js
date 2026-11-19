@@ -971,13 +971,15 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   * Records a finished sign-in for this tab, and hands it to a connection of the same organisation.
   * Each organisation the provider names is its own end-to-end organisation with the same ID
   * (design section 3; never a guest's): this browser's connection keeps its own, otherwise the
-  * first one is taken and the dialog offers the others (`chooseOrg`). The role and end-to-end link
+  * only one, or the primary one (`primary: true`), or the oldest is taken and the dialog offers
+  * the others (`chooseOrg`) before anything is created, joined or restored. The role and end-to-end link
   * are read for the organisation taken.
   */
  async function useLogin(flow,login){
   if(orgConnected()&&!connection)await load().catch(()=>{});
-  const orgs=(Array.isArray(login.orgs)?login.orgs:[]).filter(o=>/^[0-9a-f]{64}$/.test(o?.id)&&!o.guest&&o.role!=='guest').map(o=>({id:o.id,name:String(o.name||flow.name),role:o.role}));
-  const org=orgs.find(o=>o.id===connection?.org)?.id||orgs[0]?.id||login.org;
+  const orgs=(Array.isArray(login.orgs)?login.orgs:[]).filter(o=>/^[0-9a-f]{64}$/.test(o?.id)&&!o.guest&&o.role!=='guest').map(o=>({id:o.id,name:String(o.name||flow.name),role:o.role,primary:o.primary===true}));
+  if(!orgs.length)throw Error('Your account has no role in an organisation of this deployment.');
+  const org=orgs.find(o=>o.id===connection?.org)?.id||(orgs.find(o=>o.primary)||orgs[0]).id;
   if(orgs.length&&org!==login.orgs[0]?.id)login={...login,...await orgClient(flow.service,{fetchImpl}).ssoMe(login.token,org)};
   const record={service:flow.service,org,orgName:orgs.length>1&&orgs.find(o=>o.id===org)?.name||flow.name,orgs,provider:flow.provider,label:flow.label,name:flow.name,token:login.token,expires:login.expires,subject:login.subject,person:login.person,state:login.state,role:login.role};
   writeSession(SSO_LOGIN,record);
@@ -1226,7 +1228,7 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    const verifier=randomBytes(32);
    const {url}=await c.ssoStart(provider,appOrigin,sha256Hex(verifier));
    const checked=signInUrl(url);
-   writeSession(SSO_FLOW,{service,org:deployment.org,provider,label:chosen.label,name:deployment.name,purpose,carry,verifier:hex(verifier),started:Date.now()});
+   writeSession(SSO_FLOW,{service,provider,label:chosen.label,name:deployment.name,purpose,carry,verifier:hex(verifier),started:Date.now()});
    return checked;
   },
   /** Finishes signing in after the redirect back (`#scribyra-sso=…`). Returns the flow and the login. */
@@ -1234,7 +1236,8 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
    const flow=readSession(SSO_FLOW);writeSession(SSO_FLOW,null);
    if(!flow||!(Date.now()-flow.started<15*60*1000))throw Error('This sign-in was not started in this tab, or took too long. Start it again.');
    const login=await orgClient(flow.service,{fetchImpl}).ssoRedeem(code,flow.verifier);
-   if(login.org!==flow.org)throw Error('The sign-in came back for another organisation.');
+   // The organisation is chosen from the login's `orgs` (useLogin); the deployment's `org` is only the primary one's ID.
+   if(!Array.isArray(login.orgs)||!login.orgs.length)throw Error('The service sent an invalid sign-in.');
    return{...flow,login:await useLogin(flow,login)};
   },
   /** The login this tab holds (for the given deployment and organisation, if named). */

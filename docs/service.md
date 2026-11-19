@@ -784,7 +784,11 @@ in each one the browser holds copies of (one poll each). The dialog states the p
 its provider ("Your role in acme: Member, from Acme account. Roles are granted in Acme account."),
 read-only; the admin area lists every member's role "· from <provider>" without a way to change
 it. Guests see only the projects shared with them, get no "Add to", cannot share and have no
-directory. When a request or the heads poll answers `404 unknown_org` (the provider took the role
+directory. Invitations offer "Invite as a guest" (`guest: true`), and on `409 choose_account` the
+inviter picks one of the candidate accounts and the invitation is sent again with `account`. The
+organisation first worked in is the one already chosen, else the `primary` one when the account
+is in it, else the oldest; the deployment's `org` is never used as anyone's organisation. When a
+request or the heads poll answers `404 unknown_org` (the provider took the role
 away at a recheck, or an administrator stopped the person there) the app drops that organisation,
 stops syncing its copies (status "Access ended"), keeps them on the device (an online-only
 deployment deletes them, as at sign-out) and says "Your access to <organisation> ended."; a later
@@ -793,8 +797,11 @@ example "Your account has no Scribyra role. Ask your administrator to grant one 
 for `no_role`. With `notify_on_admin_access: false` members see no administrator notice, and the
 administrator's read-only copy says that members are not told (the open is audited either way).
 In an end-to-end deployment each organisation the provider names is its own end-to-end
-organisation (no guests): Remote backup offers the choice before connecting and joins, creates or
-restores in the chosen one, reading its role and link with `Scribyra-Org` on `/v1/sso/me`.
+organisation (no guests): Remote backup takes the connection's own organisation, else the only or
+`primary` one, else the oldest, offers the others before connecting, and joins, creates or restores
+in the chosen one (its `orgs[].id` on every end-to-end route, signature and stored key), reading
+its role and link with `Scribyra-Org` on `/v1/sso/me`. Refusals `domain` and `missing_claim` show
+the service's sentences too.
 
  Sign-ins in progress, one-time
 grants and used back-channel logout tokens are in PostgreSQL (`sso_flows`, `sso_grants`,

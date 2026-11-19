@@ -13,7 +13,7 @@ const messages={
  507:'The service’s storage is full. Your changes stay saved on this device.',
 };
 // A sign-in the service refuses (redeem `403 {code}`) says why in the service's own words.
-const REFUSALS=new Set(['no_role','guest','no_organisation','account_disabled','account_removed']);
+const REFUSALS=new Set(['no_role','guest','no_organisation','domain','missing_claim','account_disabled','account_removed']);
 async function failure(response){
  let detail='',code='';try{const body=await response.json();if(typeof body?.error==='string'&&body.error.length<300)detail=body.error;if(typeof body?.code==='string'&&/^[a-z_]{1,40}$/.test(body.code))code=body.code;}catch{}
  if(REFUSALS.has(code)&&detail)return Object.assign(new ServiceError(response.status,detail),{code});
@@ -65,10 +65,10 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
   async postEvent(org,raw,{auth=true,sso}={}){return json(`/v1/orgs/${org}/events`,{method:'POST',type:'application/json',body:raw,auth,sso});},
   /** Unauthenticated: whether the org has a genesis, and its log head and length. */
   async info(org){const r=await json(`/v1/orgs/${org}/info`,{auth:false});if(typeof r?.head!=='string'||!Number.isSafeInteger(r.count))throw new ServiceError(0,'The service sent invalid organisation details.');return r;},
-  /** Unauthenticated: the deployment's name, encryption mode, providers and organisation. */
+  /** Unauthenticated: the deployment's name, encryption mode, providers and primary organisation's ID (`org`, or null: never someone's organisation by itself). */
   async deployment(){
    const d=await json('/v1/deployment',{auth:false});
-   if(typeof d?.name!=='string'||!['server','e2ee'].includes(d.encryption)||!Array.isArray(d.providers)||!d.providers.length||!d.providers.every(p=>typeof p?.id==='string'&&typeof p.label==='string')||typeof d.org!=='string'||!/^[0-9a-f]{64}$/.test(d.org))
+   if(typeof d?.name!=='string'||!['server','e2ee'].includes(d.encryption)||!Array.isArray(d.providers)||!d.providers.length||!d.providers.every(p=>typeof p?.id==='string'&&typeof p.label==='string')||d.org!==null&&d.org!==undefined&&(typeof d.org!=='string'||!/^[0-9a-f]{64}$/.test(d.org)))
     throw new ServiceError(0,'This address does not answer like a Scribyra deployment.');
    return d;
   },

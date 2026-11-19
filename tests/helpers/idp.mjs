@@ -78,13 +78,14 @@ export function zitadelUser(name,home,grants){
 }
 /**
  * A server-readable deployment whose provider "Acme account" is a Zitadel instance (preset
- * `zitadel`): organisations and roles come from the tokens, guests are admitted (`guests:
+ * `zitadel`, project owned by Acme, each organisation keying a role its own Scribyra organisation:
+ * `zitadel_foreign_organisations: "organisations"`): organisations and roles come from the tokens, guests are admitted (`guests:
  * "shared"`), and logins are rechecked every second once due (`recheck_minutes` 1; tests make a
  * login due at once with `due()`). `users` are `zitadelUser`s.
  */
 export async function identityService({users,deployment={},provider={},...options}){
  const s=await serverService({users,admins:[],sso_recheck_tick_seconds:1,...options,deployment:{guests:'shared',...deployment},
-  provider:{claims:null,preset:'zitadel',zitadel_project_id:ZITADEL.project,offline_access:true,recheck_minutes:1,...provider}});
+  provider:{claims:null,preset:'zitadel',zitadel_project_id:ZITADEL.project,zitadel_project_owner_org:ZITADEL.acme.id,zitadel_foreign_organisations:'organisations',offline_access:true,recheck_minutes:1,...provider}});
  return Object.assign(s,{due:()=>s.sql("UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked")});
 }
 

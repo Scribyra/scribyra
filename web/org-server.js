@@ -71,6 +71,8 @@ export function refusalText(code,label='your sign-in provider'){
  return code==='no_role'?`Your account has no Scribyra role. Ask your administrator to grant one in ${label}.`:
   code==='guest'?'Guest accounts can’t use this organisation’s Scribyra.':
   code==='no_organisation'?`${label} did not say which organisation your account belongs to. Ask your administrator.`:
+  code==='domain'?`Your ${label} organisation can’t use this deployment.`:
+  code==='missing_claim'?`${label} did not send what this deployment needs to know about your account. Ask your administrator.`:
   code==='account_disabled'?'An administrator disabled your account here.':code==='account_removed'?'An administrator removed your account here.':'';
 }
 /** The provider label of the sign-in this tab started (server-readable or end-to-end), for refusal messages. */
@@ -143,7 +145,10 @@ export function srClient(service,{token,org=null,fetchImpl=globalThis.fetch.bind
   try{response=await fetchImpl(service+path,{method,headers:all,body,signal:signal?AbortSignal.any([signal,AbortSignal.timeout(timeout)]):AbortSignal.timeout(timeout),cache:'no-store',credentials:'omit'});}
   catch(error){if(signal?.aborted)throw error;throw new ServiceError(0,error?.name==='TimeoutError'?'The server did not answer in time.':'The server cannot be reached. Your changes stay saved on this device.');}
   if(!response.ok&&!allow.includes(response.status)){
-   let detail='',code='';try{const b=await response.json();if(typeof b?.error==='string'&&b.error.length<300)detail=b.error;if(typeof b?.code==='string'&&/^[a-z_]{1,40}$/.test(b.code))code=b.code;}catch{}
+   let detail='',code='',candidates;try{const b=await response.json();if(typeof b?.error==='string'&&b.error.length<300)detail=b.error;if(typeof b?.code==='string'&&/^[a-z_]{1,40}$/.test(b.code))code=b.code;
+    // Several accounts share an invited email: the inviter chooses one (`409 choose_account`).
+    if(code==='choose_account'&&Array.isArray(b.candidates))candidates=b.candidates.filter(c=>isId(c?.account)).slice(0,50).map(c=>({account:c.account,name:typeof c.name==='string'?c.name:null,email:typeof c.email==='string'?c.email:null,provider:c.provider,role:c.role}));}catch{}
+   if(code==='choose_account')throw Object.assign(new ServiceError(409,'Several accounts have this email. Choose the one to invite.'),{detail,code,candidates:candidates||[]});
    onAnswer(response.status,code);
    if(code==='unknown_org')throw Object.assign(new ServiceError(404,'Your access to this organisation ended.'),{detail,code});
    throw Object.assign(new ServiceError(response.status,detail?`${messages[response.status]||'The server refused the request.'} (${detail})`:messages[response.status]||`The server answered ${response.status}.`),{detail,code});
@@ -159,7 +164,7 @@ export function srClient(service,{token,org=null,fetchImpl=globalThis.fetch.bind
   create:(id,name)=>send('POST','/v1/sr/projects',{id,name}),
   details:project=>json(p(project)),
   rename:(project,name)=>send('PATCH',p(project),{name}),
-  invite:(project,email,role)=>send('POST',p(project)+'/invitations',{email,role}),
+  invite:(project,email,role,{guest=false,account=null}={})=>send('POST',p(project)+'/invitations',{email,role,...guest?{guest:true}:{},...account?{account}:{}}),
   async withdraw(project,id){await request(`${p(project)}/invitations/${id}`,{method:'DELETE'});},
   setRole:(project,account,role)=>send('PUT',`${p(project)}/members/${account}`,{role}),
   async removeMember(project,account){await request(`${p(project)}/members/${account}`,{method:'DELETE'});},
@@ -262,7 +267,8 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
  /** The organisations the account may act in now ({id, name, provider, role, guest}). */
  const orgs=()=>connection?.orgs||[];
  const holds=org=>orgs().some(o=>o.id===org);
- const activeOrg=()=>holds(connection?.active)?connection.active:orgs()[0]?.id||null;
+ // The chosen organisation; else the primary one (holding the deployment's ID) when the account is in it; else the oldest.
+ const activeOrg=()=>holds(connection?.active)?connection.active:(orgs().find(o=>o.primary)||orgs()[0])?.id||null;
  const orgNamed=org=>orgs().find(o=>o.id===org)?.name||connection?.ended?.[org]?.name||connection?.name||'your organisation';
  const roleIn=org=>orgs().find(o=>o.id===org)?.role||null;
  function clientFor(org){
@@ -314,7 +320,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
  }
  /** Takes the account's organisations from a login (`/v1/sso/redeem` or `/v1/sso/me`); those it names again resume. */
  async function takeOrgs(login){
-  const list=(Array.isArray(login?.orgs)?login.orgs:[]).filter(o=>isId(o?.id)).map(o=>({id:o.id,name:String(o.name||connection.name),provider:o.provider,role:o.role,guest:!!o.guest}));
+  const list=(Array.isArray(login?.orgs)?login.orgs:[]).filter(o=>isId(o?.id)).map(o=>({id:o.id,name:String(o.name||connection.name),provider:o.provider,role:o.role,guest:!!o.guest,primary:o.primary===true}));
   for(const o of orgs())if(!list.some(l=>l.id===o.id))await orgEnded(o.id);
   const back=list.filter(o=>connection.ended?.[o.id]).map(o=>o.id);
   connection.orgs=list;
@@ -669,7 +675,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
   get signedIn(){return signedIn();},
   get info(){
    if(!connection)return null;
-   const {service,org,name,offline,compile,providers,provider,label,account,email,accountName}=connection,active=activeOrg(),list=orgs().map(o=>({...o}));
+   const {service,name,offline,compile,providers,provider,label,account,email,accountName}=connection,active=activeOrg(),list=orgs().map(o=>({...o})),org=active;
    const current=list.find(o=>o.id===active)||null,role=current?.role||connection.role||null;
    // `place` names where projects go: the organisation when the account has several, else the deployment.
    return{service,org,name,offline,compile:compile||'browser',providers,provider,label,account,email,accountName,role,guest:role==='guest',signedIn:signedIn(),
@@ -697,7 +703,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
    await refreshOrgs().catch(()=>{});
    await begin();
    // The deployment's compile setting can change between visits (the projects' modes come with the heads).
-   void orgClient(connection.service,{fetchImpl}).deployment().then(async d=>{if(connection&&d.org===connection.org&&d.compile!==connection.compile){connection.compile=d.compile;await save();onAccount();for(const l of await db.getAll('links'))onCompile(l.localId,remote?.[l.project]?.compile||null);}}).catch(()=>{});
+   void orgClient(connection.service,{fetchImpl}).deployment().then(async d=>{if(connection&&d.compile!==connection.compile){connection.compile=d.compile;await save();onAccount();for(const l of await db.getAll('links'))onCompile(l.localId,remote?.[l.project]?.compile||null);}}).catch(()=>{});
    return true;
   },
   /** What a deployment address offers before anyone signs in: name, mode, offline and providers. */
@@ -711,7 +717,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
    if(deployment.encryption!=='server')throw Error('This deployment is end-to-end encrypted. Connect to it with Remote backup.');
    if(!chosen)throw Error('This deployment does not offer that sign-in.');
    const verifier=randomBytes(32),{url}=await c.ssoStart(provider,appOrigin,sha256Hex(verifier)),checked=signInUrl(url);
-   writeSession(SSO_FLOW,{service,org:deployment.org,provider,label:chosen.label,name:deployment.name,offline:deployment.offline!==false,compile:deployment.compile||'browser',providers:deployment.providers,verifier:hex(verifier),started:now()});
+   writeSession(SSO_FLOW,{service,provider,label:chosen.label,name:deployment.name,offline:deployment.offline!==false,compile:deployment.compile||'browser',providers:deployment.providers,verifier:hex(verifier),started:now()});
    return checked;
   },
   /** Finishes signing in after the redirect back (`#scribyra-sso=…`) and starts syncing. */
@@ -719,14 +725,15 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
    const flow=readSession(SSO_FLOW);writeSession(SSO_FLOW,null);
    if(!flow||!(now()-flow.started<15*60*1000))throw Error('This sign-in was not started in this tab, or took too long. Start it again.');
    const login=await orgClient(flow.service,{fetchImpl}).ssoRedeem(code,flow.verifier);
-   if(login.org!==flow.org||typeof login.token!=='string'||!isId(login.token))throw Error('The sign-in came back for another organisation.');
+   // The login's organisations are its `orgs` (the deployment's `org` is only the primary one's ID, possibly null).
+   if(typeof login.token!=='string'||!isId(login.token)||!Array.isArray(login.orgs)||!login.orgs.length)throw Error('The service sent an invalid sign-in.');
    await open();
    const previous=connection||await db.get('connection','current');
    if(previous&&(previous.service!==flow.service||previous.account!==login.account)&&(await db.count('links')))
     throw Error(`This browser holds projects of ${previous.email||'another account'} at ${previous.name}. Forget that deployment first.`);
    for(const link of await db.getAll('links'))noteLink(link);
    const same=previous&&previous.service===flow.service&&previous.account===login.account;
-   connection={service:flow.service,org:flow.org,name:flow.name,offline:flow.offline,compile:flow.compile||'browser',providers:flow.providers,provider:flow.provider,label:flow.label,
+   connection={service:flow.service,name:flow.name,offline:flow.offline,compile:flow.compile||'browser',providers:flow.providers,provider:flow.provider,label:flow.label,
     token:login.token,expires:login.expires,account:login.account,email:login.email||null,accountName:login.name||null,role:login.role,client:previous?.client||hex(randomBytes(8)),
     orgs:same?previous.orgs||[]:[],active:same?previous.active:null,ended:same?previous.ended:undefined,notifyAdmin:same?previous.notifyAdmin:undefined};
    clients.clear();
@@ -804,7 +811,8 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
    const result=await download(project);if(!result)throw Error('This project has no changes yet.');
    return result;
   },
-  async invite(project,email,role){await load();return on(project).invite(project,String(email||'').trim(),role);},
+  /** Invites by email (`guest`: an explicit guest invitation; `account`: the account chosen when several share the email). */
+  async invite(project,email,role,{guest=false,account=null}={}){await load();return on(project).invite(project,String(email||'').trim(),role,{guest,account});},
   async withdraw(project,id){await load();await on(project).withdraw(project,id);},
   async setMemberRole(project,account,role){await load();return on(project).setRole(project,account,role);},
   async removeMember(project,account){await load();await on(project).removeMember(project,account);},

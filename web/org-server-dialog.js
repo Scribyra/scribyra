@@ -17,6 +17,7 @@ const host=service=>{try{return new URL(service).host;}catch{return service;}};
 
 export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged=()=>{},onOpen=async()=>{}}){
  let dialog,session,busy=false,feedback='',render=()=>{},drawing=null,redraw=false,shared=null;
+ const choosing=new Map();
  const close=()=>session?.close('now');
  function button(label,fn,cls='secondary'){
   const b=element('button',label,'button compact '+cls);b.type='button';
@@ -33,6 +34,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
   for(const [v,text] of options){const o=element('option',text);o.value=v;input.append(o);}if(value)input.value=value;
   row.append(element('span',label),input);return{row,input};
  }
+ function check(label){const row=element('label',null,'org-check'),input=element('input');input.type='checkbox';input.setAttribute('aria-label',label);row.append(input,element('span',label));return{row,input};}
  const actions=(...buttons)=>{const a=element('div',null,'org-actions');a.append(...buttons);return a;};
  const section=(title,...nodes)=>{const s=element('section',null,'org-section');s.append(element('h3',title),...nodes);return s;};
  async function signInWith(provider){location.assign(await engine.ssoBegin({service:engine.info.service,provider}));}
@@ -59,7 +61,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
 
  async function shareBox(project){
   // Owners and editors share, except guests (design section 3).
-  const details=await engine.details(project.project),box=element('div',null,'org-share'),manage=['owner','editor'].includes(details.role)&&!engine.info.guest;
+  const [details,directory]=await Promise.all([engine.details(project.project),engine.directory().catch(()=>[])]),box=element('div',null,'org-share'),manage=['owner','editor'].includes(details.role)&&!engine.info.guest;
   const people=element('ul',null,'org-members');people.setAttribute('aria-label','People with access');
   for(const m of [details.owner,...details.members]){
    const row=element('li',null,'org-member'),who=m.email||m.name||'Someone';
@@ -95,19 +97,30 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    box.append(pending);
   }
   if(manage){
-   const {email,role}=keep('invite:'+project.project,()=>({email:field('Email','','email'),role:select('Role',ROLES,'editor')}));
+   const {email,role,guest}=keep('invite:'+project.project,()=>({email:field('Email','','email'),role:select('Role',ROLES,'editor'),guest:check('Invite as a guest (someone the provider marks as a guest of this organisation)')}));
    // The organisation's directory (members and administrators; not for guests) fills in whom to invite.
    const listed=new Set([details.owner,...details.members].map(m=>m.email).filter(Boolean));
-   const offered=(await engine.directory().catch(()=>[])).filter(m=>m.email&&!listed.has(m.email)).map(m=>[m.email,m.name?`${m.name} (${m.email})`:m.email]);
+   const offered=directory.filter(m=>m.email&&!listed.has(m.email)).map(m=>[m.email,m.name?`${m.name} (${m.email})`:m.email]);
    if(offered.length){
     const {pick}=keep(`directory:${project.project}:${offered.map(([v])=>v).join()}`,()=>{const pick=select('From the directory',[['','Choose someone…'],...offered],'');pick.input.onchange=()=>{if(pick.input.value)email.input.value=pick.input.value;};return{pick};});
     box.append(pick.row);
    }
-   box.append(email.row,role.row,actions(button('Invite',async()=>{
-    const address=email.input.value.trim(),result=await engine.invite(project.project,address,role.input.value);
-    email.input.value='';
-    feedback=result.status==='pending'?`Invited ${address}. Ask them to sign in to ${engine.info.place}’s Scribyra; the project then appears in their list.`:`Shared with ${address}.`;
+   const invited=async(address,result)=>{email.input.value='';guest.input.checked=false;choosing.delete(project.project);
+    feedback=result.status==='pending'?`Invited ${address}. Ask them to sign in to ${engine.info.place}’s Scribyra; the project then appears in their list.`:`Shared with ${address}.`;};
+   box.append(email.row,role.row,guest.row,actions(button('Invite',async()=>{
+    const address=email.input.value.trim(),asked={role:role.input.value,guest:guest.input.checked};
+    try{await invited(address,await engine.invite(project.project,address,asked.role,{guest:asked.guest}));}
+    // Several accounts of this organisation have that verified email: the inviter chooses one.
+    catch(error){if(error?.code!=='choose_account')throw error;choosing.set(project.project,{address,...asked,candidates:error.candidates});feedback=error.message;}
    },'primary')));
+   const choice=choosing.get(project.project);
+   if(choice){
+    const options=choice.candidates.map(c=>[c.account,[c.name,c.email,c.role&&(ACCOUNT_ROLE[c.role]||c.role),c.provider].filter(Boolean).join(' · ')]);
+    const {which}=keep(`account:${project.project}:${options.map(([v])=>v).join()}`,()=>({which:select(`Account to invite as ${choice.address}`,options)}));
+    box.append(element('p',`Several accounts have ${choice.address}. Choose the one to invite:`,'org-help'),which.row,actions(
+     button('Invite this account',async()=>{await invited(choice.address,await engine.invite(project.project,choice.address,choice.role,{guest:choice.guest,account:which.input.value}));},'primary'),
+     button('Cancel',async()=>{choosing.delete(project.project);})));
+   }
   }
   return box;
  }
