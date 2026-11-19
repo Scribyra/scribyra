@@ -1,0 +1,36 @@
+# Single-node k3s: provisioned PostgreSQL (CloudNativePG) and Garage, k3s Traefik with a
+# cert-manager ClusterIssuer. See docs/operator.md, "Single-node quickstart".
+apiVersion: scribyra.com/v1alpha1
+kind: Scribyra
+metadata:
+  name: lab
+  namespace: lab
+spec:
+  version: "0.2.0"
+  domain: scribyra.lab.example.org
+  displayName: Example Lab
+  encryption: serverReadable
+  oidc:
+    providers:
+      - name: lab
+        label: Lab account
+        issuer: https://login.lab.example.org/realms/lab
+        clientId: scribyra
+        clientSecretRef: {name: lab-oidc, key: client-secret}
+        emailDomains: [lab.example.org]
+        roleMapping:
+          groupsClaim: groups
+          adminGroups: [scribyra-admins]
+  policy:
+    admins: [it-admin@lab.example.org]
+  postgres:
+    provisioned:
+      storageSize: 10Gi
+      instances: 1
+  storage:
+    provisioned:
+      size: 20Gi
+  replicas: 1
+  ingress:
+    className: traefik
+    issuerRef: {name: letsencrypt, kind: ClusterIssuer}

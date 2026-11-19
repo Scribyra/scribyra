@@ -1,0 +1,31 @@
+# Existing PostgreSQL and S3, browser compile only, end-to-end encrypted.
+apiVersion: scribyra.com/v1alpha1
+kind: Scribyra
+metadata:
+  name: acme
+  namespace: acme
+spec:
+  version: "0.2.0"
+  domain: scribyra.acme.example.com
+  encryption: endToEnd
+  oidc:
+    providers:
+      - name: acme
+        issuer: https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0
+        clientId: 11111111-2222-3333-4444-555555555555
+        clientSecretRef: {name: acme-oidc, key: client-secret}
+        offlineAccess: true
+  postgres:
+    external:
+      secretRef: {name: acme-db, key: url}
+      cidrs: [10.20.0.0/24]
+  storage:
+    s3:
+      endpoint: https://s3.eu-west-1.amazonaws.com
+      bucket: acme-scribyra
+      region: eu-west-1
+      secretRef: {name: acme-s3}
+  ingress:
+    className: nginx
+    tlsSecretName: acme-wildcard-tls
+  deletionPolicy: Retain

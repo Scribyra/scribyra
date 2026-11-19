@@ -1,0 +1,43 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: scribyra-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+---
+# Generated from the operator's code (files/clusterrole-rules.yaml); least privilege.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: scribyra-operator
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+rules: {{- .Files.Get "files/clusterrole-rules.yaml" | nindent 2 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: scribyra-operator
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: scribyra-operator}
+subjects:
+  - {kind: ServiceAccount, name: scribyra-operator, namespace: {{ .Release.Namespace }}}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: scribyra-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+rules:
+  - {apiGroups: [coordination.k8s.io], resources: [leases], verbs: [create]}
+  - {apiGroups: [coordination.k8s.io], resources: [leases], resourceNames: [scribyra-operator], verbs: [get, patch]}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: scribyra-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: scribyra-operator}
+subjects:
+  - {kind: ServiceAccount, name: scribyra-operator, namespace: {{ .Release.Namespace }}}

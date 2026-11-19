@@ -1,0 +1,113 @@
+# End-to-end install on a kind cluster (GitHub's runners have Docker): build the images
+# with Nix, load them into kind, install CloudNativePG and the generated operator.yaml,
+# apply a Scribyra with provisioned PostgreSQL and Garage, and wait for Ready.
+#
+# Manual and optional until it is stable (docs/operator.md, "Testing"). It stands in a
+# static page for the web app (the real app build needs the BusyTeX assets) and signs
+# nobody in; the browser specs against a deployment come later (design section 10).
+name: operator-e2e
+on:
+  workflow_dispatch:
+    inputs:
+      cnpg-version:
+        description: CloudNativePG release to install
+        type: string
+        default: '1.27.1'
+
+permissions: {}
+
+jobs:
+  kind:
+    name: kind
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    env:
+      REGISTRY: registry.local/scribyra
+      RELEASE: 0.2.0
+      CNPG_VERSION: ${{ inputs.cnpg-version }}
+    steps:
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: cachix/install-nix-action@3dc140bfc76c49fbd4dd958429132e3746bcb086 # v31.11.5
+        with:
+          extra_nix_config: |
+            accept-flake-config = false
+
+      - name: Build and load the images
+        run: |
+          set -euo pipefail
+          nix build .#operator-image --out-link operator-image
+          nix build .#service-image --out-link service-image
+          nix build .#garage-image --out-link garage-image
+          nix build --impure --out-link web-image --expr "(builtins.getFlake (toString ./.)).lib.x86_64-linux.webImage ./site"
+          for image in operator-image service-image garage-image web-image; do docker load < "$image"; done
+          docker tag "scribyra-operator:0.1.0" "$REGISTRY/scribyra-operator:e2e"
+          docker tag "scribyra-sync:0.2.0-pg1" "$REGISTRY/scribyra-sync:$RELEASE"
+          docker tag "scribyra-web:0.1.0" "$REGISTRY/scribyra-web:$RELEASE"
+          garage="$(nix eval --raw .#garage-image.imageTag)"
+          docker tag "scribyra-garage:$garage" "$REGISTRY/scribyra-garage:$garage"
+          docker images
+
+      - name: Create the cluster
+        run: |
+          set -euo pipefail
+          nix shell --inputs-from . nixpkgs#kind nixpkgs#kubectl -c kind create cluster --name scribyra --wait 120s
+          for image in $(docker images --format '{{.Repository}}:{{.Tag}}' | grep "^$REGISTRY/"); do
+            nix shell --inputs-from . nixpkgs#kind -c kind load docker-image --name scribyra "$image"
+          done
+
+      - name: Install CloudNativePG
+        run: |
+          set -euo pipefail
+          minor="${CNPG_VERSION%.*}"
+          nix shell --inputs-from . nixpkgs#kubectl -c kubectl apply --server-side -f "https://raw.githubusercontent.com/cloudnative-pg/cloudnative-pg/release-${minor}/releases/cnpg-${CNPG_VERSION}.yaml"
+          nix shell --inputs-from . nixpkgs#kubectl -c kubectl -n cnpg-system rollout status deployment/cnpg-controller-manager --timeout=300s
+
+      - name: Install the operator
+        run: |
+          set -euo pipefail
+          nix develop .#operator -c cargo run -q -p scribyra-operator --locked -- manifests --image "$REGISTRY/scribyra-operator:e2e" --registry "$REGISTRY" > operator.yaml
+          nix shell --inputs-from . nixpkgs#kubectl -c kubectl apply --server-side -f operator.yaml
+          nix shell --inputs-from . nixpkgs#kubectl -c kubectl -n scribyra-system rollout status deployment/scribyra-operator --timeout=180s
+
+      - name: Apply a Scribyra
+        run: |
+          set -euo pipefail
+          kubectl() { nix shell --inputs-from . nixpkgs#kubectl -c kubectl "$@"; }
+          kubectl create namespace lab
+          kubectl -n lab create secret generic lab-oidc --from-literal=client-secret="$(openssl rand -hex 16)"
+          sed -e 's/className: traefik/tlsSecretName: lab-tls/' -e '/issuerRef:/d' -e 's/storageSize: 10Gi/storageSize: 1Gi/' -e 's/size: 20Gi/size: 1Gi/' \
+            deploy/operator/samples/quickstart.yaml | kubectl apply -f -
+          kubectl -n lab wait scribyra/lab --for=condition=Ready --timeout=900s
+
+      - name: Check the deployment
+        run: |
+          set -euo pipefail
+          kubectl() { nix shell --inputs-from . nixpkgs#kubectl -c kubectl "$@"; }
+          kubectl -n lab get scribyra lab -o yaml
+          test "$(kubectl -n lab get job lab-migrate-0-2-0 -o jsonpath='{.status.succeeded}')" = 1
+          kubectl -n lab port-forward svc/lab-api 18787:8787 > /dev/null &
+          sleep 5
+          curl -sf http://127.0.0.1:18787/ready
+          curl -sf http://127.0.0.1:18787/v1/deployment
+          kill %1
+
+      - name: Diagnostics
+        if: failure()
+        run: |
+          kubectl() { nix shell --inputs-from . nixpkgs#kubectl -c kubectl "$@"; }
+          kubectl get all -A
+          kubectl -n lab describe scribyra lab
+          kubectl -n lab get events --sort-by=.lastTimestamp
+          kubectl -n lab describe pods
+          kubectl -n scribyra-system logs deployment/scribyra-operator --tail=200
+          for p in $(kubectl -n lab get pods -o name); do kubectl -n lab logs "$p" --all-containers --tail=100; done

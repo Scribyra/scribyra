@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: scribyra-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicas }}
+  selector:
+    matchLabels: {app.kubernetes.io/name: scribyra-operator}
+  strategy: {type: RollingUpdate, rollingUpdate: {maxUnavailable: 0, maxSurge: 1}}
+  template:
+    metadata:
+      labels: {{- include "scribyra-operator.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: scribyra-operator
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: operator
+          image: {{ include "scribyra-operator.image" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args: [run]
+          env:
+            - {name: POD_NAME, valueFrom: {fieldRef: {fieldPath: metadata.name}}}
+            - {name: POD_NAMESPACE, valueFrom: {fieldRef: {fieldPath: metadata.namespace}}}
+            - {name: SCRIBYRA_OPERATOR_IMAGE, value: {{ include "scribyra-operator.image" . | quote }}}
+            - {name: SCRIBYRA_OPERATOR_REGISTRY, value: {{ .Values.registry | quote }}}
+            - {name: WATCH_NAMESPACE, value: {{ .Values.watchNamespace | quote }}}
+            - {name: RUST_LOG, value: {{ .Values.logLevel | quote }}}
+          ports:
+            - {name: metrics, containerPort: 8080}
+          livenessProbe: {httpGet: {path: /healthz, port: metrics}, periodSeconds: 10}
+          readinessProbe: {httpGet: {path: /readyz, port: metrics}, periodSeconds: 5}
+          resources: {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+            seccompProfile: {type: RuntimeDefault}
+      {{- with .Values.nodeSelector }}
+      nodeSelector: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations: {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity: {{- toYaml . | nindent 8 }}
+      {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: scribyra-operator
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "scribyra-operator.labels" . | nindent 4 }}
+spec:
+  selector: {app.kubernetes.io/name: scribyra-operator}
+  ports:
+    - {name: metrics, port: 8080, targetPort: metrics}

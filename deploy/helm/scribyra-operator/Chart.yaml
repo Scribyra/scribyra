@@ -1,0 +1,8 @@
+apiVersion: v2
+name: scribyra-operator
+description: The Scribyra operator only (CRD, RBAC, Deployment). Scribyra deployments are then created as Scribyra resources, never by this chart.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+annotations:
+  licenses: AGPL-3.0-only
