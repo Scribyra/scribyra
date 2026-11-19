@@ -149,7 +149,7 @@ Everything else, including setup without Nix, tests, measurements, self-hosting 
 
 ## Roadmap
 
-- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, comments, reviews and history, and bibliographies imported from `.bib` files or linked to a Zotero library.
+- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, comments, reviews and history, bibliographies imported from `.bib` files, and sandboxed plugins such as Zotero for linking a library.
 - 🧪 **Experimental:** an AI working in your tab, and direct sessions on a shared network (off by default).
 - 🗺️ **Planned:** remote and local Git, plugins, remote backup, sync and collaboration, end-to-end encryption, and managed hosting.
 

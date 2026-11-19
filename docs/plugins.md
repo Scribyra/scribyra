@@ -203,12 +203,27 @@ Every message is structured-cloneable JSON:
 
 Rules on every call:
 
-- The host rejects messages that are not this shape, methods it does not know, and
-  messages over 8 MiB.
+- The host rejects messages that are not this shape and methods it does not know.
+- Every message's data is measured by a bounded walk before anything else. Only plain
+  JSON data is accepted (bytes only for `net.fetch` bodies), up to 8 MiB. A typed array,
+  `Map` or other object is refused at once, so a plugin can neither freeze the page by
+  making the host serialise something huge nor pass large data as small.
 - At most 64 requests can be in flight per plugin. More are refused with
   `rate_limited`.
 - A plugin's answer to a host request (for example `fileAction.run`) times out after
   10 minutes, so a dialog that stays open is fine.
+- Calls that redraw are paced to one every 50 ms per plugin: `ui.files.decorate`,
+  `ui.dialog.update`, `bibliography.set` and `completion.set`. The app redraws for
+  plugins at most once per frame.
+- Notices are shown as "<Plugin>: text", with at most 30 per 10 seconds per plugin.
+- **Activation.** Opening a dialog or a file picker, and switching the open file,
+  require activation. Activation comes only from the person's gestures: choosing the
+  plugin's command, menu item or bar button, or clicking or changing something in its
+  dialog. It lasts one minute.
+  - Pending requests, Escape and dismissal do not extend it.
+  - After the person uses **Dismiss**, the plugin cannot open a dialog again until a new
+    gesture, and not for at least 2 seconds.
+  - The **Dismiss** button is drawn by Scribyra, so it always works.
 
 The runtime wraps this in the `scribyra` global:
 
@@ -281,9 +296,16 @@ scribyra.files                            // the package's own files: text or Ui
    - The response is limited to 16 MiB.
    - The sandbox CSP makes this the only way out.
 5. **UI** (`plugin-ui.js`). Plugin text is set with `textContent`, never parsed as
-   HTML. Links must be `https:` and are shown with `rel="noopener noreferrer"`. Dialog
-   titles carry the plugin's name, so a plugin cannot pass for Scribyra. Specs are
+   HTML. Links must be `https:` and are shown with `rel="noopener noreferrer"`. Specs are
    bounded to 2,000 nodes.
+   - Plugins cannot pass for Scribyra. Dialogs show "<Plugin> plugin" (adding
+     "developer, unverified" for sideloaded ones), file bars show the plugin's name, More
+     tools hints end with it, and notices start with it.
+   - Labels equal to Scribyra's own items (for example "MCP providers" or "Delete") are
+     refused, as are names with control, bidirectional or zero-width characters.
+     "Scribyra" in a name or publisher is reserved for official plugins.
+   - Contributed citation keys must be BibTeX keys, with no spaces, braces, commas or
+     backslashes, so accepting a completion cannot insert TeX the plugin chose.
 
 ### Modes
 
@@ -297,8 +319,12 @@ The person's mode applies to plugins as to the agent API (`web/agent-commands.js
 | File actions and bar buttons with `modes:["editing"]` | enabled | disabled, with the reason | disabled, with the reason |
 
 A plugin's suggestions use an author record of kind `agent` named "<Plugin name>
-(plugin)". The id is derived from the local author and the plugin id, so its
-suggestions in one project collect under one author. The replicated collaboration
+(plugin)". As for the agent, the author id is drawn per running session: a random id,
+or one derived from the local author when direct sessions are on. Each session's
+suggestions collect in one review.
+
+In Editing, plugin changes go through the same project command as the person's own
+edits, so history credits them to the person, as it did for the built-in Zotero. The replicated collaboration
 schema is unchanged; peers on older versions read it as an agent. A dedicated `plugin`
 actor kind is a schema change for later.
 
@@ -411,15 +437,22 @@ version exists, **Update to x.y.z**:
   globs or origins), the consent dialog lists **only what is new** and asks again.
 - If not, it updates after one confirmation.
 
-The previous package is kept, so **Roll back to x.y.z** restores it with the
-permissions granted before.
+The previous package is kept, so **Roll back to x.y.z** restores it. Its stored bytes
+are hashed again before it runs.
 
 **Enable and disable.** A switch per plugin. Disabled plugins never start, and their
 menu items and bars disappear. Data stays.
 
 **Revoke and re-grant.** Each permission has **Revoke** in the manager. A revoked
 permission makes the matching calls fail with `permission_denied`, and the plugin is
-restarted so it cannot keep what it already cached. **Grant again** asks for consent.
+restarted so it cannot keep what it already cached. Revoking `ui.command` or
+`ui.fileAction` also removes those items. A revocation is kept across updates and
+rollbacks: a new version does not ask for it again, and only **Grant again**, after
+consent, restores it.
+
+**Sideloaded updates.** A newer package of a developer plugin from the same site (scheme,
+host and port) is an update. A package with the same id from another site is refused
+until the old one is uninstalled, since it would inherit the plugin's data and secrets.
 
 **Uninstall.** This stops the plugin and deletes everything it owns on this device:
 
@@ -477,7 +510,7 @@ the person's trust in the UI, and the network destinations their data reaches.
 | Plugin impersonates Scribyra UI | Declarative rendering only. Dialog titles carry the plugin's name. No HTML from plugins. |
 | Tampered registry or package | Pinned-key signature over the registry; SHA-256 per package; packages stored at install. |
 | Malicious update | No automatic updates. New permissions ask again. Rollback is available. |
-| Denial of service (loops, floods) | The worker is isolated from the UI thread. In-flight and size limits apply. Plugins with persistent errors are stopped. Disabling always works because the manager never waits for the plugin. |
+| Denial of service (loops, floods, modal spam) | The worker is isolated from the UI thread. Messages are measured by a bounded walk. In-flight limits, redraw pacing and notice limits apply. Dialogs need a fresh gesture, and Dismiss always closes. Plugins with persistent errors are stopped. Disabling always works because the manager never waits for the plugin. |
 | Sideloaded malware | Off unless developer mode is on, with a loud warning. Unsigned code is labelled. Official ids are reserved. The organisation policy can forbid it. |
 | Secrets leaking into projects, backups or telemetry | Secrets are in their own database, outside the project, history, backups, exports, diagnostics and telemetry. Plugin modules never call the telemetry recorder (`tests/telemetry-consent.test.mjs`). |
 
@@ -525,11 +558,22 @@ origins its permissions name, and nothing else.
 - **Rust to WebAssembly.** Start from `templates/plugin-rust/`, a `cdylib` with no
   imports except what you declare.
   1. `cargo build --release --target wasm32-unknown-unknown`.
-  2. Pack it together with the small JavaScript shim in `src/main.js`. The shim passes
-     JSON in and out through `alloc`/`handle` exports and makes the capability calls.
+  2. Copy the module into `assets/` and pack it with
+     `node scripts/plugins.mjs pack templates/plugin-rust`, together with the small
+     JavaScript shim in `src/main.js`. The shim passes text in through the module's
+     `alloc`/`count_words`/`dealloc` exports and makes the capability calls.
      WASM code never touches the network or project directly: the host imports it sees
      are only the functions the shim passes in (`env.log` in the template). That keeps
      the authority explicit.
+
+**Notes for authors.**
+- `crypto.subtle` and `crypto.randomUUID` are missing in Chromium's sandbox, which does
+  not count the opaque-origin worker as a secure context. `crypto.getRandomValues`
+  works. The Zotero plugin hashes with a small SHA-256 in JavaScript
+  (`plugins/zotero/src/sha256.js`).
+- `eval` and `new Function` are blocked.
+- `project.freePath` tells a plugin whether paths matching its `create` globs exist.
+- Commands and file actions run only while their `ui.*` permission is granted.
 
 ## Verification results
 
