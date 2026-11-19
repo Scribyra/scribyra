@@ -84,6 +84,21 @@ Notes:
 - Restoring the thesis backup as a second project adds 1.3 MiB in Chromium's estimate, because images are content-addressed and stored once. Firefox's and WebKit's estimates grow by 40–44 MiB. Their estimates track storage files rather than live records, so this is probably not a second copy of the images, but it was not verified on disk.
 - WebKit's storage estimate for the heavy history (293 MiB, against 130 MiB in Chromium) is likewise an upper bound.
 
+## Outline tree (November 19, 2026)
+
+The Outline panel used to put every heading into the UI state that is serialised on each keystroke, and rendered one button per heading through a closure that cloned that whole state, so a long outline slowed every update quadratically. It is now a virtualised WAI-ARIA tree (`web/outline.js`, `web/outline-model.js`) kept outside that state: only rows in view exist in the DOM, the tree follows `\input`/`\include` from the main document, and typing re-reads only the edited file on the main thread (the first read, or one over 256 KiB, goes to the worker). Scroll position and height are cached so an update never forces a layout.
+
+`tests/browser/outline.spec.js` measures it on the thesis (text only, 122 headings in 14 files) with `performance.measure`: seven debounced updates while typing word bursts in chapter 1, and eight expand/collapse operations. One run per engine on the same shared host:
+
+| | Chromium | Firefox | WebKit |
+| --- | --- | --- | --- |
+| First read (click to status, worker) | 418 ms | 493 ms | 595 ms |
+| Outline update after typing, median / max (re-read file, rebuild tree, repaint) | 11.2 / 14.0 ms | 7 / 14 ms | 7 / 12 ms |
+| of which rebuilding the tree, median | 2.7 ms | 3 ms | 3 ms |
+| Expand or collapse (all, or one node), median / max | 1.4 / 2.6 ms | 2 / 4 ms | 2 / 3 ms |
+
+Firefox and WebKit round `performance.measure` to whole milliseconds. The spec fails if the median update reaches 16 ms or any update or toggle reaches 50 ms. With Expand all, fewer than 70 rows are in the DOM. The long single file (902 sections, 3 MiB) was not measured: its re-read goes to the worker, so the main thread pays for reading the text out of the document and posting it, plus rebuilding and repainting the tree, but that was not timed.
+
 ## Bottlenecks and what was fixed
 
 1. **A 250-page thesis could not compile at all (fixed).** Each LuaLaTeX pass of the 305-page thesis takes 45–55 s in Chromium and Firefox and 50–85 s in WebKit. With Biber and cross-references, a compile needs four or five passes. Two 180-second limits stopped it in every engine. One was Scribyra's own cumulative compile budget. The other was a fixed timer in the pinned `texlyre-busytex` wrapper, which rejected every compile call after 180 s whatever the budget.
