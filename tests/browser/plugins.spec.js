@@ -127,6 +127,12 @@ scribyra.handle('command.run',async({command})=>{
     r.create=await attempt(()=>scribyra.call('project.create',{path:'probe-'+r.context.mode+'.bib',content:'% x\\n'}));
     r.patch=await attempt(async()=>{const text=(await scribyra.call('project.read',{fileId:own.id})).text;return scribyra.call('project.patch',{fileId:own.id,edits:[{start:text.length,end:text.length,before:'',after:'% '+r.context.mode+'\\n'}]});});
   }
+  if(command==='notify'){r.notices=[];for(let i=1;i<=32;i++)r.notices.push(await attempt(()=>scribyra.call('ui.notify',{text:'Your session expired, re-enter your key '+i})));}
+  if(command==='flood'){const started=Date.now();r.flood=await attempt(()=>scribyra.call('app.context',new Uint8Array(40e6)));r.map=await attempt(()=>scribyra.call('storage.set',{key:'m',value:new Map([[1,2]])}));r.floodMs=Date.now()-started;r.badCite=await attempt(()=>scribyra.call('bibliography.set',{entries:[{key:'smith2020'+' '.repeat(150)+'}\\input{x}'}]}));}
+  if(command==='nag'){
+    const opened=await scribyra.call('ui.dialog.open',{spec:{title:'Please stay',children:[{type:'text',text:'Dismiss me.'},{type:'actions',buttons:[{id:'ok',label:'OK'}]}]}});
+    r.reopen=await new Promise(resolve=>{const stop=scribyra.on('dialog.event',async event=>{if(event.dialogId!==opened.dialogId||event.type!=='close')return;stop();resolve(await attempt(()=>scribyra.call('ui.dialog.open',{spec:{title:'Back again',children:[{type:'actions',buttons:[{id:'ok',label:'OK'}]}]}})));});});
+  }
   if(command==='suggest'){r.bibliography=await attempt(()=>scribyra.call('bibliography.set',{entries:[{key:'probe2026',author:'Probe',year:'2026',title:'A probing study'}]}));r.completion=await attempt(()=>scribyra.call('completion.set',{items:[{kind:'command',name:'probecommand',args:1}]}));}
   await report({command,version:scribyra.plugin.version,...r});
   return {};
@@ -136,7 +142,7 @@ const PROBE_ID='org.example.probe';
 function probeManifest(server,version='1.0.0',extra={}){
   return {id:PROBE_ID,name:'Probe',version,description:'A test plugin that tries to leave its sandbox.',
     permissions:{'project.read':{files:['*.bib']},'project.write':{create:['*.bib']},network:[server.origin],secrets:true,'ui.dialog':true,'ui.command':true,...extra},
-    contributes:{commands:[{id:'probe',label:'Run probe'},{id:'write',label:'Probe write'},{id:'suggest',label:'Probe suggest'}]}};
+    contributes:{commands:[{id:'probe',label:'Run probe'},{id:'write',label:'Probe write'},{id:'suggest',label:'Probe suggest'},{id:'notify',label:'Probe notify'},{id:'flood',label:'Probe flood'},{id:'nag',label:'Probe nag'}]}};
 }
 async function runProbe(page,server,command){
   const count=server.reports.length;
@@ -216,6 +222,29 @@ test('a malicious plugin cannot leave its sandbox: no app storage, DOM, cookies,
     expect(['SecurityError','']).toContain(layer.cookie);expect(layer.cookie).not.toContain('cookie-secret');
     expect({...layer,cookie:undefined}).toEqual({origin:'null',idb:'SecurityError',cookie:undefined,parentDom:'SecurityError',fetch:'blocked'});
     expect(server.requests.some(request=>request.url==='/frame')).toBe(false);
+    // A worker the frame starts inherits the deny-all policy: this is the layer plugin code runs in.
+    const worker=await frame.evaluate(origin=>new Promise(resolve=>{const url=URL.createObjectURL(new Blob([`fetch('${origin}/worker').then(()=>postMessage('ok'),()=>postMessage('blocked'))`],{type:'text/javascript'}));const w=new Worker(url);w.onmessage=event=>resolve(event.data);w.onerror=()=>resolve('error');}),server.origin);
+    expect(worker).toBe('blocked');expect(server.requests.some(request=>request.url==='/worker')).toBe(false);
+
+    // Review regressions: notices are attributed and rate-limited; oversized or non-JSON
+    // messages are refused without freezing the page; contributed citation keys cannot carry TeX.
+    const n=await runProbe(page,server,'notify');
+    expect(n.notices.slice(0,30).every(item=>item.ok)).toBe(true);expect(n.notices.slice(30)).toEqual([{ok:false,code:'rate_limited',message:'Too many notices.'},{ok:false,code:'rate_limited',message:'Too many notices.'}]);
+    await expect(notice(page)).toHaveText(/^Probe: Your session expired, re-enter your key 30/);
+    const f=await runProbe(page,server,'flood');
+    expect(f.flood).toMatchObject({ok:false,code:'too_large'});expect(f.map).toMatchObject({ok:false,code:'too_large'});expect(f.floodMs).toBeLessThan(5000);
+    expect(f.badCite).toMatchObject({ok:false,code:'permission_denied'});
+    // Dismiss always works, and a dismissed plugin cannot put its dialog straight back.
+    const nag=runProbe(page,server,'nag');
+    const stay=page.getByRole('dialog',{name:'Please stay'});await expect(stay).toBeVisible();await expect(stay).toContainText('Probe plugin · developer, unverified');
+    await stay.getByRole('button',{name:'Dismiss dialog'}).click();
+    expect((await nag).reopen).toMatchObject({ok:false,code:'not_allowed'});
+    await expect(page.getByRole('dialog',{name:'Back again'})).toHaveCount(0);await expect(stay).toBeHidden();
+    // A plugin's tree action opens nothing else afterwards (no folder picker).
+    const choosers=[];page.on('filechooser',chooser=>choosers.push(chooser));
+    await page.locator('.tree-root').click({button:'right'});await page.getByRole('menuitem',{name:/^Link to Zotero/}).click();
+    const linkDialog=page.getByRole('dialog',{name:'Link to Zotero'});await expect(linkDialog).toBeVisible();await linkDialog.getByRole('button',{name:'Cancel'}).click();await expect(linkDialog).toBeHidden();
+    await page.waitForTimeout(500);expect(choosers).toEqual([]);
 
     // Modes: Viewing refuses every write; Reviewing turns changes into suggestions credited to the plugin.
     await page.getByRole('combobox',{name:'Editor mode'}).selectOption('viewing');
@@ -265,12 +294,18 @@ test('updates ask again only for new permissions; rollback, revoke, developer mo
     await manager.getByRole('button',{name:'Close',exact:true}).click();
     // Its contributions reach \cite{ and command completion, labelled with the plugin.
     expect(await runProbe(page,server,'suggest')).toMatchObject({version:'2.0.0',bibliography:{ok:true},completion:{ok:true}});
+    // With the permission, a key that could smuggle TeX into a file through completion is still refused.
+    expect((await runProbe(page,server,'flood')).badCite).toMatchObject({ok:false,code:'invalid_request'});
     await page.getByRole('treeitem',{name:'main.tex',exact:true}).click();await page.locator('.cm-content').click();await page.keyboard.press('Control+End');
     await page.keyboard.type('\\cite{probe',{delay:30});
     await expect(page.locator('.cm-tooltip-autocomplete').getByRole('option').filter({hasText:'probe2026'})).toContainText('Probe plugin');
     await page.keyboard.press('Escape');
-    // Revoke: the next call is refused and the plugin restarts without it.
+    // A package with the same id from another address may not take over this plugin and its secrets.
     await openManager(page);
+    const site=await pluginServer();const elsewhere=site.serve('/probe-2.0.0.scribyra-plugin.json',pluginPackage(probeManifest(server,'2.0.0',{bibliography:true,completion:true}),probeCode(config)));
+    await manager.getByLabel('Plugin package URL').fill(elsewhere);await manager.getByRole('button',{name:'Install from URL'}).click();
+    await expect(manager.getByRole('status')).toContainText('Uninstall it before installing it from another site');await site.close();
+    // Revoke: the next call is refused and the plugin restarts without it.
     await card.getByRole('button',{name:'Revoke: Suggest citations while you type'}).click();
     await expect(manager.getByRole('status')).toContainText('Probe can no longer: suggest citations while you type.');
     await expect(card.locator('[data-permission="bibliography"]')).toHaveAttribute('data-granted','false');
@@ -280,9 +315,21 @@ test('updates ask again only for new permissions; rollback, revoke, developer mo
     await openManager(page);await card.getByRole('button',{name:'Grant again: Suggest citations while you type'}).click();
     consent=page.getByRole('dialog',{name:'Allow Probe again?'});await expect(consent.getByRole('list',{name:'New permissions'}).getByRole('listitem')).toHaveText([/Suggest citations while you type/]);
     await consent.getByRole('button',{name:'Allow'}).click();await expect(manager.getByRole('status')).toContainText('Probe can again: suggest citations while you type.');
-    // Rollback restores the previous version and its permissions.
+    // A revoked permission stays revoked when rolling back to a version that also asked for it.
+    await card.getByRole('button',{name:'Revoke: Keep secrets such as API keys on this device'}).click();
+    await expect(card.locator('[data-permission="secrets"]')).toHaveAttribute('data-granted','false');
+    // Rollback restores the previous version, without anything the person revoked.
     await card.getByRole('button',{name:'Roll back to 1.1.0'}).click();await expect(manager.getByRole('status')).toContainText('Probe rolled back to 1.1.0.');
     await expect(card.locator('[data-permission="bibliography"]')).toHaveCount(0);
+    await expect(card.locator('[data-permission="secrets"]')).toHaveAttribute('data-granted','false');
+    // Revoking More tools removes its items there, and their action is refused.
+    await card.getByRole('button',{name:'Revoke: Add items to More tools'}).click();await expect(manager.getByRole('status')).toContainText('can no longer: add items to more tools');
+    await manager.getByRole('button',{name:'Close',exact:true}).click();
+    await page.getByRole('button',{name:'More tools'}).click();await expect(page.locator('#more-tools-menu').getByRole('button',{name:'Run probe'})).toHaveCount(0);await page.keyboard.press('Escape');
+    const reports=server.reports.length;await page.evaluate(value=>window.scribyra.action('plugin-command',value),`${PROBE_ID}:probe`);
+    await expect(notice(page)).toContainText('That plugin is not running.');expect(server.reports.length).toBe(reports);
+    await openManager(page);await card.getByRole('button',{name:'Grant again: Add items to More tools'}).click();await page.getByRole('dialog',{name:'Allow Probe again?'}).getByRole('button',{name:'Allow'}).click();
+    await expect(manager.getByRole('status')).toContainText('can again: add items to more tools');
     await manager.getByRole('button',{name:'Close',exact:true}).click();
     expect((await runProbe(page,server,'suggest')).bibliography).toMatchObject({ok:false,code:'permission_denied'});
     // Developer mode off: plugins from a URL stop and say why.
@@ -313,4 +360,31 @@ test('a tampered official package is refused before consent',async({page})=>{
   await expect(page.getByRole('dialog',{name:'Install Zotero?'})).toHaveCount(0);
   expect(await storeRecords(page,'scribyra-plugins','plugins')).toEqual([]);
 });
+});
+
+test('the JavaScript and Rust/WebAssembly templates install from a URL and run in the sandbox',async({page})=>{
+  const {buildPackage}=await import('../../scripts/plugins.mjs');
+  const {execFileSync}=await import('node:child_process');const {readFileSync}=await import('node:fs');const {tmpdir}=await import('node:os');const {join}=await import('node:path');
+  const target=join(tmpdir(),'scribyra-plugin-template-target');
+  execFileSync('cargo',['build','--release','--quiet','--target','wasm32-unknown-unknown','--manifest-path','templates/plugin-rust/Cargo.toml','--target-dir',target],{stdio:'inherit'});
+  const wasm=readFileSync(join(target,'wasm32-unknown-unknown/release/word_count.wasm'));
+  const js=await buildPackage('templates/plugin-js',{developer:true}),rust=await buildPackage('templates/plugin-rust',{developer:true,assets:{'word_count.wasm':wasm}});
+  const server=await pluginServer();
+  try{
+    await openProject(page,{'main.tex':'One two three. % not counted\n\\section{Four five}\n\\emph{six}\n','refs.bib':'@misc{x}\n'});
+    await openManager(page);
+    await sideload(page,server.serve('/'+js.name,new TextDecoder().decode(js.bytes)),{consentName:'Install Word count?'});
+    await sideload(page,server.serve('/'+rust.name,new TextDecoder().decode(rust.bytes)),{consentName:'Install Word count (Rust)?'});
+    const manager=page.getByRole('dialog',{name:'Plugins'});await expect(manager.getByRole('status')).toContainText('Word count (Rust) 1.0.0 installed and enabled.');
+    await manager.getByRole('button',{name:'Close',exact:true}).click();
+    for(const [name,title] of [['Word count','Word count'],['Word count (Rust)','Word count (Rust)']]){
+      await page.getByRole('button',{name:'More tools'}).click();await page.locator('#more-tools-menu').getByRole('button',{name,exact:true}).click();
+      const dialog=page.getByRole('dialog',{name:title,exact:true});await expect(dialog).toBeVisible();
+      await expect(dialog).toContainText(`${name} plugin · developer, unverified`);
+      await expect(dialog.getByRole('row',{name:/main\.tex/})).toHaveText(/main\.tex\s*6$/);
+      await expect(dialog).not.toContainText('refs.bib');
+      if(name==='Word count')await shoot(page,'plugin-dialog',dialog);
+      await dialog.getByRole('button',{name:'Close'}).click();await expect(dialog).toBeHidden();
+    }
+  }finally{await server.close();}
 });

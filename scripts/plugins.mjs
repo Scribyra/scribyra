@@ -20,7 +20,7 @@ export const PLUGINS_DIR=join(root,'plugins'),DIST=join(PLUGINS_DIR,'dist');
 const exists=path=>stat(path).then(()=>true,()=>false);
 
 /** The package bytes for a plugin folder: deterministic for the same sources. */
-export async function buildPackage(dir,{developer=false}={}){
+export async function buildPackage(dir,{developer=false,assets={}}={}){
   const manifest=validateManifest(JSON.parse(await readFile(join(dir,'manifest.json'),'utf8')),{developer});
   const result=await esbuild({entryPoints:[join(dir,'src/main.js')],bundle:true,format:'iife',target:'es2022',platform:'browser',write:false,legalComments:'inline',absWorkingDir:root,charset:'utf8',logLevel:'silent'});
   const files={[manifest.main]:result.outputFiles[0].text},binary={};
@@ -28,6 +28,7 @@ export async function buildPackage(dir,{developer=false}={}){
     const bytes=await readFile(join(dir,'assets',name));
     if(name.endsWith('.wasm'))binary[name]=bytes.toString('base64');else files[name]=bytes.toString('utf8');
   }
+  for(const [name,bytes]of Object.entries(assets)){if(name.endsWith('.wasm'))binary[name]=Buffer.from(bytes).toString('base64');else files[name]=Buffer.from(bytes).toString('utf8');}
   const source=JSON.parse(await readFile(join(dir,'manifest.json'),'utf8'));
   const text=JSON.stringify({format:PACKAGE_FORMAT,formatVersion:PACKAGE_FORMAT_VERSION,manifest:source,files,...(Object.keys(binary).length?{binary}:{})},null,1)+'\n';
   const bytes=new TextEncoder().encode(text);readPackage(bytes,{developer});

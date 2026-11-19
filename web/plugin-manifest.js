@@ -14,11 +14,16 @@ export class PluginError extends Error{constructor(code,message){super(message);
 const fail=(message,code='invalid_manifest')=>{throw new PluginError(code,message);};
 const isObject=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 function only(object,allowed,where){for(const key of Object.keys(object))if(!allowed.includes(key))fail(`${where} has an unknown field “${key}”.`);}
+// Control, bidirectional and zero-width characters can disguise what a label says.
+const HIDDEN=/[\u0000-\u001f\u007f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/;
 function text(value,where,max,{optional=false,min=1}={}){
   if(value===undefined&&optional)return undefined;
-  if(typeof value!=='string'||value.trim().length<min||value.length>max||/[\u0000-\u001f\u007f]/.test(value))fail(`${where} must be text of at most ${max} characters.`);
+  if(typeof value!=='string'||value.trim().length<min||value.length>max||HIDDEN.test(value))fail(`${where} must be text of at most ${max} characters.`);
   return value.trim();
 }
+// Plugin labels may not pass for Scribyra's own menu items.
+const BUILT_IN=new Set(['project settings','tex environment','diagnostics','share project','plugins','mcp providers','rust companion and mcp','report a problem','privacy','licences','source code on github','new file','new folder','upload files','import folder','import bibliography…','import bibliography','rename','move','duplicate','delete','restore last deletion','export','history']);
+const label=(value,where)=>{const result=text(value,where,60);if(BUILT_IN.has(result.toLowerCase()))fail(`${where} “${result}” is the name of a Scribyra item.`);return result;};
 const ID=/^[a-z][a-z0-9-]{0,30}(\.[a-z][a-z0-9-]{0,30})+$/;
 export const validPluginId=id=>typeof id==='string'&&id.length<=64&&ID.test(id);
 const SEMVER=/^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
@@ -59,7 +64,7 @@ export function globMatch(glob,path){
   let pattern='';
   for(let i=0;i<glob.length;i++){
     const char=glob[i];
-    if(char==='*'&&glob[i+1]==='*'){pattern+='.*';i++;if(glob[i+1]==='/')i++;}
+    if(char==='*'&&glob[i+1]==='*'){i++;if(glob[i+1]==='/'){pattern+='(?:.*/)?';i++;}else pattern+='.*';}
     else if(char==='*')pattern+='[^/]*';
     else if(char==='?')pattern+='[^/]';
     else pattern+=char.replace(/[.+^${}()|[\]\\]/g,'\\$&');
@@ -116,7 +121,7 @@ function contributions(value,permissions){
   const modes=(list,where)=>{if(list===undefined)return [...MODES];if(!Array.isArray(list)||!list.length||list.some(mode=>!MODES.includes(mode)))fail(`${where} “modes” lists editing, reviewing or viewing.`);return MODES.filter(mode=>list.includes(mode));};
   const commands=(value.commands||[]).map((item,i)=>{
     const where=`Command ${i+1}`;if(!isObject(item))fail(`${where} must be an object.`);only(item,['id','label','hint'],where);
-    return {id:id(item,where),label:text(item.label,`${where} label`,60),...(item.hint!==undefined?{hint:text(item.hint,`${where} hint`,80)}:{})};
+    return {id:id(item,where),label:label(item.label,`${where} label`),...(item.hint!==undefined?{hint:text(item.hint,`${where} hint`,80)}:{})};
   });
   if(!Array.isArray(value.commands||[])||commands.length>8)fail('At most eight commands.');
   if(commands.length&&!permissions['ui.command'])fail('Commands need the “ui.command” permission.');
@@ -128,7 +133,7 @@ function contributions(value,permissions){
     if(item.icon!==undefined&&!ICONS.includes(item.icon))fail(`${where} icon must be one of ${ICONS.join(', ')}.`);
     if(item.when.tag!==undefined&&(typeof item.when.tag!=='string'||!/^[a-z][a-z0-9-]{0,31}$/.test(item.when.tag)))fail(`${where} “when.tag” must be a short lowercase tag.`);
     const when={target:item.when.target,...(item.when.files!==undefined?{files:globs(item.when.files,`${where} “when.files”`)}:{}),...(item.when.tag!==undefined?{tag:item.when.tag}:{})};
-    return {id:id(item,where),label:text(item.label,`${where} label`,60),...(item.hint!==undefined?{hint:text(item.hint,`${where} hint`,80)}:{}),...(item.icon?{icon:item.icon}:{}),when,modes:modes(item.modes,where)};
+    return {id:id(item,where),label:label(item.label,`${where} label`),...(item.hint!==undefined?{hint:text(item.hint,`${where} hint`,80)}:{}),...(item.icon?{icon:item.icon}:{}),when,modes:modes(item.modes,where)};
   });
   if(fileActions.length&&!permissions['ui.fileAction'])fail('File actions need the “ui.fileAction” permission.');
   return {commands,fileActions};
@@ -146,6 +151,7 @@ export function validateManifest(manifest,{developer=false}={}){
   let homepage;
   if(manifest.homepage!==undefined){let url;try{url=new URL(manifest.homepage);}catch{}if(!url||url.protocol!=='https:'||manifest.homepage.length>200)fail('“homepage” must be an https:// address.');homepage=url.href;}
   const permissions=normalPermissions(manifest.permissions??{},{developer});
+  if(!manifest.id.startsWith(OFFICIAL_PREFIX)&&/scribyra/i.test(`${manifest.name} ${manifest.publisher}`))fail('Only official plugins may use “Scribyra” in their name or publisher.');
   return {
     manifestVersion:MANIFEST_VERSION,id:manifest.id,name:text(manifest.name,'“name”',40),version:manifest.version,
     publisher:text(manifest.publisher,'“publisher”',60),description:text(manifest.description,'“description”',300,{optional:true})??'',
@@ -153,7 +159,7 @@ export function validateManifest(manifest,{developer=false}={}){
   };
 }
 
-const FILE_NAME=/^[A-Za-z0-9._-]{1,64}$/,BASE64=/^[A-Za-z0-9+/]*={0,2}$/;
+const FILE_NAME=/^(?!(?:__proto__|constructor|prototype)$)[A-Za-z0-9._-]{1,64}$/,BASE64=/^[A-Za-z0-9+/]*={0,2}$/;
 /** Parses a package (JSON text or bytes); returns {manifest, files, binary} with binary files as Uint8Array. */
 export function readPackage(input,{developer=false}={}){
   const bytes=typeof input==='string'?new TextEncoder().encode(input):input;
@@ -165,7 +171,7 @@ export function readPackage(input,{developer=false}={}){
   only(value,['format','formatVersion','manifest','files','binary'],'The package');
   const manifest=validateManifest(value.manifest,{developer});
   if(!isObject(value.files))fail('The package has no files.','invalid_package');
-  const files={},binary={};
+  const files=Object.create(null),binary=Object.create(null);
   for(const [name,content]of Object.entries(value.files)){if(!FILE_NAME.test(name)||typeof content!=='string')fail(`Package file “${name}” is not valid.`,'invalid_package');files[name]=content;}
   for(const [name,content]of Object.entries(value.binary??{})){
     if(!FILE_NAME.test(name)||typeof content!=='string'||!BASE64.test(content)||name in files)fail(`Package file “${name}” is not valid.`,'invalid_package');
@@ -192,6 +198,7 @@ export function addedPermissions(granted,requested){
   }
   return added;
 }
+const privateOrigin=origin=>{const host=new URL(origin).hostname.replace(/^\[|\]$/g,'');return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd]|fe80:)/i.test(host)||host.endsWith('.local');};
 const list=items=>items.length<=1?items.join(''):`${items.slice(0,-1).join(', ')} and ${items.at(-1)}`;
 /** Plain words for the consent dialog and the manager, one line per permission. */
 export function describePermissions(permissions){
@@ -200,7 +207,7 @@ export function describePermissions(permissions){
     switch(key){
       case 'project.read':lines.push({key,text:`Read files in the open project matching ${list(grant.files)}`,detail:'Only the project you have open, never your other projects, history or comments.'});break;
       case 'project.write':lines.push({key,text:[grant.create.length?`Create ${list(grant.create)} files and change the files it created`:'',grant.pick?'Change files you pick for it':''].filter(Boolean).join('; '),detail:'In Reviewing its changes become suggestions; in Viewing it cannot change anything.'});break;
-      case 'network':lines.push({key,text:`Contact ${list(grant)}`,detail:'It can send what it reads from the open project there. No other address.'});break;
+      case 'network':lines.push({key,text:`Contact ${list(grant)}`,detail:`It can send what it reads from the open project there. No other address.${grant.some(privateOrigin)?' Some of these are on your own computer or local network.':''}`});break;
       case 'secrets':lines.push({key,text:'Keep secrets such as API keys on this device',detail:'Never in projects, history, backups, exports, diagnostics or telemetry.'});break;
       case 'ui.dialog':lines.push({key,text:'Show dialogs'});break;
       case 'ui.command':lines.push({key,text:'Add items to More tools'});break;

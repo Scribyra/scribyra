@@ -5,7 +5,7 @@
 // built-in code had, and deletes the old database. It runs only when that database
 // exists, so new browsers fetch and install nothing. See docs/plugins.md#open-decisions.
 import {pluginStore} from './plugin-store.js';
-import {readPackage} from './plugin-manifest.js';
+import {readPackage,compareVersions,policyDecision} from './plugin-manifest.js';
 import {sha256Hex} from './plugin-registry.js';
 
 export const LEGACY_ZOTERO_DATABASE='scribyra-zotero',ZOTERO_PLUGIN_ID='com.scribyra.zotero';
@@ -26,7 +26,7 @@ const removeDatabase=name=>new Promise(resolve=>{const request=indexedDB.deleteD
  * Returns {links, keys} when something was moved, or null. `catalog()` loads the official
  * registry module; it is called only when there is legacy data to move.
  */
-export async function migrateLegacyZotero({catalog}){
+export async function migrateLegacyZotero({catalog,policy}){
   if(typeof indexedDB==='undefined')return null;
   if(typeof indexedDB.databases==='function'){try{if(!(await indexedDB.databases()).some(entry=>entry.name===LEGACY_ZOTERO_DATABASE))return null;}catch{}}
   const db=await openExisting(LEGACY_ZOTERO_DATABASE);if(!db)return null;
@@ -38,7 +38,10 @@ export async function migrateLegacyZotero({catalog}){
     const {officialRegistry,officialPackage}=await catalog();
     const registry=await officialRegistry(),plugin=registry.plugins.find(entry=>entry.id===ZOTERO_PLUGIN_ID);
     if(!plugin)throw new Error('The Zotero plugin is not in the official registry.');
-    const entry=plugin.versions.filter(version=>version.compatible).at(-1),{bytes}=await officialPackage(plugin,entry),{manifest}=readPackage(bytes);
+    const entry=plugin.versions.filter(version=>version.compatible).sort((a,b)=>compareVersions(b.version,a.version))[0];
+    // An organisation that does not allow Zotero keeps the old data untouched.
+    if(!entry||policyDecision(policy,{id:plugin.id,version:entry.version,sha256:entry.sha256,source:'official',action:'install'}))return null;
+    const {bytes}=await officialPackage(plugin,entry),{manifest}=readPackage(bytes);
     record={id:manifest.id,version:manifest.version,manifest,sha256:await sha256Hex(bytes),source:'official',sourceUrl:null,granted:manifest.permissions,enabled:true,installedAt:Date.now(),updatedAt:Date.now(),previous:null,migrated:true};
     await pluginStore.install(record,bytes);
   }

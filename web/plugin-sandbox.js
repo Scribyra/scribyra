@@ -29,7 +29,7 @@ function bootstrap(){
 export function pluginRuntime(start){
   'use strict';
   const scope=self;
-  for(const name of ['fetch','XMLHttpRequest','WebSocket','EventSource','WebTransport','importScripts','indexedDB','caches','Worker','SharedWorker','BroadcastChannel','RTCPeerConnection','webkitRTCPeerConnection','cookieStore','storageFoundation','navigator.storage']){
+  for(const name of ['fetch','XMLHttpRequest','WebSocket','EventSource','WebTransport','importScripts','indexedDB','caches','Worker','SharedWorker','BroadcastChannel','RTCPeerConnection','webkitRTCPeerConnection','cookieStore','storageFoundation','navigator.storage','WebSocketStream','FontFace','fonts']){
     let target=scope,key=name;if(name.startsWith('navigator.')){target=scope.navigator;key=name.slice(10);}
     for(let object=target;object;object=Object.getPrototypeOf(object)){
       try{if(Object.getOwnPropertyDescriptor(object,key)?.configurable)delete object[key];}catch{}

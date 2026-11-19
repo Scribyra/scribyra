@@ -62,7 +62,7 @@ function confirmDialog({title,message,label,danger=false}){
 }
 
 /** A file a plugin asked the person to choose; resolves to {id, path} or null. */
-export function pickFileDialog({plugin,title,files}){
+export function pickFileDialog({plugin,title,files,signal}){
   return new Promise(resolve=>{
     const dialog=el('dialog',{className:'modal plugin-pick','aria-label':title});restoreDialogFocus(dialog);
     const name=`plugin-pick-${Math.random().toString(36).slice(2)}`;
@@ -73,6 +73,8 @@ export function pickFileDialog({plugin,title,files}){
       files.length?el('div',{className:'plugin-choices vertical',role:'radiogroup','aria-label':'Files'},choices):el('p',{className:'plugin-text tone-muted',text:'No file in this project fits.'}),
       el('div',{className:'modal-actions'},button('Cancel',()=>finish(null)),button('Choose file',()=>{const id=dialog.querySelector('input:checked')?.value;finish(files.find(file=>file.id===id)||null);},{primary:true})));
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});
+    // The plugin stopped (disabled, revoked, uninstalled): its picker goes with it.
+    signal?.addEventListener('abort',()=>{if(dialog.isConnected)finish(null);},{once:true});
     document.body.append(dialog);dialog.showModal();(dialog.querySelector('input')||dialog.querySelector('.button.primary')).focus();
   });
 }

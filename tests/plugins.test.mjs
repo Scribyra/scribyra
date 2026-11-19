@@ -174,3 +174,38 @@ test('dialog specs: only known parts, https links, unique ids, bounded sizes, at
   bad({title:'T',children:[deep,actions]},/nested at most 8 deep/);
   bad({title:'x'.repeat(121),children:[actions]},/Dialog title/);
 });
+
+// Regressions for the adversarial review (docs/plugins.md#security-review).
+test('review: **/ matches whole folders only, so **/main.tex never grants domain.tex',()=>{
+  assert.ok(globMatch('**/main.tex','main.tex'));assert.ok(globMatch('**/main.tex','a/b/main.tex'));
+  assert.ok(!globMatch('**/main.tex','domain.tex'));assert.ok(!globMatch('**/main.tex','a/domain.tex'));
+});
+test('review: labels cannot pose as Scribyra items, names cannot hide characters or claim Scribyra',()=>{
+  rejects({...base,permissions:{'ui.command':true},contributes:{commands:[{id:'go',label:'MCP providers'}]}},/name of a Scribyra item/);
+  rejects({...base,permissions:{'ui.fileAction':true},contributes:{fileActions:[{id:'go',label:'Delete',when:{target:'file'}}]}},/name of a Scribyra item/);
+  rejects({...base,name:'Zot‮ero'},/“name”/);rejects({...base,name:'Zo​tero'},/“name”/);
+  rejects({...base,name:'Scribyra Sync'},/Only official plugins/);rejects({...base,publisher:'The Scribyra team'},/Only official plugins/);
+  assert.equal(validateManifest({...base,id:'com.scribyra.demo',name:'Scribyra demo'}).name,'Scribyra demo');
+});
+test('review: package file names cannot be __proto__ or constructor',()=>{
+  for(const name of ['__proto__','constructor','prototype'])
+    assert.throws(()=>readPackage(JSON.stringify({format:'scribyra-plugin',formatVersion:1,manifest:base,files:{'main.js':'1'},binary:{[name]:'AAAA'}})),/not valid/,name);
+  const raw=`{"format":"scribyra-plugin","formatVersion":1,"manifest":${JSON.stringify(base)},"files":{"main.js":"1","__proto__":"x"}}`;
+  assert.throws(()=>readPackage(raw),/not valid/);
+});
+test('review: consent says when a network origin is on this computer or local network',()=>{
+  const [line]=describePermissions(normalPermissions({network:['https://192.168.0.10']}));assert.match(line.detail,/local network/);
+  assert.doesNotMatch(describePermissions(normalPermissions({network:['https://api.zotero.org']}))[0].detail,/local network/);
+});
+test('review: message sizes are measured with a budget; typed arrays and Maps cannot freeze or slip through',async()=>{
+  const {measure}=await import('../web/plugin-host.js');
+  const big=new Uint8Array(40e6),map={a:new Map([[1,new Uint8Array(1e8)]])},many=Array.from({length:1e7});
+  const started=performance.now();
+  assert.equal(measure(big,8*1024*1024),Infinity);
+  assert.equal(measure(map,8*1024*1024),Infinity);
+  assert.equal(measure(new ArrayBuffer(10),100),Infinity);
+  assert.equal(measure(many,8*1024*1024),Infinity);
+  assert.ok(performance.now()-started<500,'measuring must stop early (JSON.stringify of the same input took 18 s)');
+  assert.ok(measure({key:'a',value:{n:[1,2,'x']}},1000)<100);
+  assert.equal(measure(new Uint8Array(10),100,{bytes:true}),10);
+});

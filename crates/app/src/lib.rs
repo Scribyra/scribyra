@@ -108,8 +108,9 @@ struct State {
     plugin_commands: Vec<PluginCommand>,
 }
 #[derive(Clone, Default, Deserialize, PartialEq)]
-#[serde(default)]
+#[serde(default, rename_all = "camelCase")]
 struct FileBar {
+    plugin_name: String,
     label: String,
     text: String,
     actions: Vec<BarAction>,
@@ -405,7 +406,7 @@ fn App() -> impl IntoView {
                                     </div>
                                 </div>
                                 {move || s.get().file_bar.map(|bar| view! {
-                                    <div class="linked-file-bar" role="group" aria-label=bar.label.clone()><span class="linked-file-summary">{bar.text.clone()}</span>
+                                    <div class="linked-file-bar" role="group" aria-label=bar.label.clone()><span class="linked-file-summary">{bar.text.clone()}</span><span class="plugin-chip">{bar.plugin_name.clone()}</span>
                                         {bar.actions.into_iter().map(|a| { let value = format!("{}:{}", a.plugin, a.id); view! { <button class="button secondary compact" disabled=a.disabled title=a.title.clone() on:click=move |_| action("plugin-bar", &value)>{a.label.clone()}</button> } }).collect::<Vec<_>>()}
                                     </div>
                                 })}

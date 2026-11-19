@@ -1,0 +1,19 @@
+# A Scribyra plugin with its logic in Rust, compiled to WebAssembly
+# (docs/plugins.md#writing-a-plugin). Not part of the Scribyra workspace.
+[package]
+name = "word_count"
+version = "1.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true
+
+[workspace]

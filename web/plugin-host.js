@@ -14,10 +14,34 @@ import {validateDialogSpec} from './plugin-dialog.js';
 import {failure} from './plugin-errors.js';
 export {failure};
 
-export const LIMITS=Object.freeze({message:8*1024*1024,inflight:64,storage:1024*1024,projectData:4*1024*1024,secretBytes:4096,secretNames:32,notify:500,response:16*1024*1024,citations:20000,completions:2000,hostRequestMs:10*60*1000,errors:20,dialogs:3,activationMs:30000,tags:8,patchEdits:2000});
+export const LIMITS=Object.freeze({message:8*1024*1024,inflight:64,storage:1024*1024,projectData:4*1024*1024,secretBytes:4096,secretNames:32,notify:500,response:16*1024*1024,citations:20000,completions:2000,hostRequestMs:10*60*1000,errors:20,dialogs:3,activationMs:60000,tags:8,patchEdits:2000,notices:30,noticeWindowMs:10000,renderIntervalMs:50,dismissPauseMs:2000});
 const isObject=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const text=(value,max,name)=>{if(typeof value!=='string'||value.length>max)throw failure('invalid_request',`${name} must be text of at most ${max} characters.`);return value;};
 const KEY=/^[A-Za-z0-9._:/-]{1,128}$/;
+// BibTeX citation keys: what \cite{…} accepts, so a contributed key cannot carry TeX.
+const CITATION_KEY=/^[^\s{}%,\\#~"'()=]{1,200}$/;
+/**
+ * The size of a message's data, walked with a budget: plain objects, arrays, strings,
+ * finite numbers, booleans and null only (Uint8Array where bytes are expected). Anything
+ * else, or more than `limit`, stops the walk early, so a huge typed array or Map can
+ * neither freeze the page nor pass as small.
+ */
+export function measure(value,limit,{bytes=false}={}){
+  let total=0;const stack=[value];
+  while(stack.length){
+    const item=stack.pop();
+    if(item===null||typeof item==='boolean')total+=4;
+    else if(typeof item==='number'){if(!Number.isFinite(item))return Infinity;total+=8;}
+    else if(typeof item==='string')total+=item.length*2+2;
+    else if(item instanceof Uint8Array&&bytes)total+=item.byteLength;
+    else if(Array.isArray(item)){total+=2;if(item.length>limit)return Infinity;for(let i=0;i<item.length;i++)stack.push(item[i]);}
+    else if(typeof item==='object'&&Object.getPrototypeOf(item)===Object.prototype){const keys=Object.keys(item);total+=2;if(keys.length>limit)return Infinity;for(const key of keys){total+=key.length*2+4;stack.push(item[key]);}}
+    else if(item===undefined)total+=1;
+    else return Infinity;
+    if(total>limit)return Infinity;
+  }
+  return total;
+}
 const FORBIDDEN_HEADERS=/^(accept-charset|accept-encoding|access-control-.*|connection|content-length|cookie2?|date|dnt|expect|host|keep-alive|origin|referer|set-cookie|te|trailer|transfer-encoding|upgrade|via|proxy-.*|sec-.*)$/i;
 const METHODS=new Set(['GET','HEAD','POST','PUT','PATCH','DELETE']);
 
@@ -38,7 +62,7 @@ export function startPlugin({record,pkg,env,container}){
   const opened=env.project();
   if(!opened)throw new PluginError('project_closed','Open a project first.');
   const session={doc:opened.doc,projectId:opened.projectId};
-  let stopped=false,inflight=0,activeRequests=0,activationUntil=0,errors=0,nextHostId=1;
+  let stopped=false,inflight=0,activationUntil=0,dismissedAt=0,errors=0,nextHostId=1;const notices=[];let picking=null;const lastRender=new Map();
   const owned=new Map(),dialogs=new Map(),fetches=new Map(),waiting=new Map();
   const decorations=new Map();let citations=[],completions=[];
   const ready=pluginStore.owned(plugin.id,session.projectId).then(items=>{for(const item of items)owned.set(item.fileId,item.how);}).catch(()=>{});
@@ -65,7 +89,14 @@ export function startPlugin({record,pkg,env,container}){
     if(now.mode==='viewing')throw failure('viewing_mode','Viewing is read only. Switch to Editing to let a plugin change files.');
     if(create&&now.mode==='reviewing')throw failure('reviewing_mode','Reviewing records suggestions; a plugin cannot create files. Switch to Editing.');
   }
-  const activated=()=>activeRequests>0||dialogs.size>0||Date.now()<activationUntil;
+  // Activation comes only from the person: choosing the plugin's command, menu item or bar
+  // button, or clicking or changing something in its dialog. It lasts a minute; a pending
+  // request, a dismissed or cancelled dialog and time do not extend it.
+  const activated=()=>Date.now()<activationUntil;
+  const gesture=()=>{activationUntil=Date.now()+LIMITS.activationMs;};
+  const alive=()=>{if(stopped)throw failure('stopped','The plugin stopped.');};
+  // Calls that redraw the app or a dialog run at most every 50 ms per plugin.
+  async function paced(key){const wait=(lastRender.get(key)||0)+LIMITS.renderIntervalMs-Date.now();if(wait>0)await new Promise(resolve=>setTimeout(resolve,wait));lastRender.set(key,Date.now());alive();}
 
   // Reviewing: a plugin's edits become suggestions in its own review, credited to an
   // author record of kind "agent" named after the plugin (docs/plugins.md#modes).
@@ -93,9 +124,9 @@ export function startPlugin({record,pkg,env,container}){
     if(op==='keys')return pluginStore.dataKeys(plugin.id,scope);
     if(typeof params.key!=='string'||!KEY.test(params.key))throw failure('invalid_request','Keys are 1–128 letters, digits and . _ : / -.');
     if(op==='get')return (await pluginStore.dataGet(plugin.id,scope,params.key))??null;
-    if(op==='delete'){await pluginStore.dataDelete(plugin.id,scope,params.key);return {};}
+    if(op==='delete'){alive();await pluginStore.dataDelete(plugin.id,scope,params.key);return {};}
     let value;try{value=JSON.parse(JSON.stringify(params.value??null));}catch{throw failure('invalid_request','Values must be JSON.');}
-    if(!await pluginStore.dataSet(plugin.id,scope,params.key,value,limit))throw failure('quota_exceeded',`This plugin's ${scope?'project data':'storage'} is full (${Math.round(limit/1024/1024)} MiB).`);
+    alive();if(!await pluginStore.dataSet(plugin.id,scope,params.key,value,limit))throw failure('quota_exceeded',`This plugin's ${scope?'project data':'storage'} is full (${Math.round(limit/1024/1024)} MiB).`);
     return {};
   }
   const projectScope=()=>{const now=project();return now.projectId;};
@@ -105,7 +136,12 @@ export function startPlugin({record,pkg,env,container}){
       const now=env.project(),same=now&&now.doc===session.doc&&!stopped,active=same?textFile(now.doc,now.activeFileId):null;
       return {api:1,mode:same?now.mode:null,project:same?{open:true,transient:!!now.transient,activeFileId:active&&readable(now.doc,active)?active.id:null}:null,online:globalThis.navigator?.onLine!==false};
     },
-    'ui.notify':async params=>{project();env.notify(text(params?.text,LIMITS.notify,'Notice text'));return {};},
+    'ui.notify':async params=>{
+      project();const message=text(params?.text,LIMITS.notify,'Notice text'),now=Date.now();
+      while(notices.length&&notices[0]<now-LIMITS.noticeWindowMs)notices.shift();
+      if(notices.length>=LIMITS.notices)throw failure('rate_limited','Too many notices.');
+      notices.push(now);env.notify(`${plugin.name}: ${message}`);return {};
+    },
     'storage.get':params=>keyValue('',LIMITS.storage,'get',params),
     'storage.set':params=>keyValue('',LIMITS.storage,'set',params),
     'storage.delete':params=>keyValue('',LIMITS.storage,'delete',params),
@@ -133,7 +169,7 @@ export function startPlugin({record,pkg,env,container}){
       if(projectFiles(now.doc).some(file=>file.path.toLowerCase()===path.toLowerCase()))throw failure('exists',`${path} already exists.`);
       await ready;const after=project();if(after.doc!==now.doc)throw failure('project_closed','The project changed.');writeMode(after,{create:true});
       const id=after.commands.run({op:'files.add',entries:[{kind:'text',path,content}]}).ids[0];
-      owned.set(id,'created');await pluginStore.own(plugin.id,session.projectId,id,'created');
+      owned.set(id,'created');alive();await pluginStore.own(plugin.id,session.projectId,id,'created');
       return {id,path};
     },
     'project.patch':async params=>{
@@ -156,8 +192,10 @@ export function startPlugin({record,pkg,env,container}){
       need('project.write');if(!granted['project.write'].pick)throw failure('permission_denied','This plugin may not ask you to pick files.');
       if(!activated())throw failure('not_allowed','A plugin can ask you to pick a file only right after you used it.');
       const now=project(),files=Array.isArray(params?.files)?params.files.filter(glob=>typeof glob==='string').slice(0,16):['*'];
-      const choice=await env.pickFile({plugin,title:text(params?.title??'Choose a file',120,'Title'),files:projectFiles(now.doc).filter(file=>!file.binary&&!file.folder&&matchesAny(files,file.path))});
-      if(!choice||project().doc!==now.doc)return null;
+      if(picking)throw failure('rate_limited','A file picker is already open.');
+      picking=new AbortController();
+      const choice=await env.pickFile({plugin,signal:picking.signal,title:text(params?.title??'Choose a file',120,'Title'),files:projectFiles(now.doc).filter(file=>!file.binary&&!file.folder&&matchesAny(files,file.path))}).finally(()=>{picking=null;});
+      if(!choice||project().doc!==now.doc)return null;alive();
       owned.set(choice.id,'picked');await pluginStore.own(plugin.id,session.projectId,choice.id,'picked');
       return {id:choice.id,path:choice.path};
     },
@@ -168,23 +206,32 @@ export function startPlugin({record,pkg,env,container}){
     },
     'secrets.get':async params=>{need('secrets');return pluginStore.secretGet(plugin.id,secretName(params));},
     'secrets.keys':async()=>{need('secrets');return pluginStore.secretNames(plugin.id);},
-    'secrets.delete':async params=>{need('secrets');await pluginStore.secretDelete(plugin.id,secretName(params));return {};},
+    'secrets.delete':async params=>{need('secrets');alive();await pluginStore.secretDelete(plugin.id,secretName(params));return {};},
     'secrets.set':async params=>{
-      need('secrets');const name=secretName(params),value=text(params?.value,LIMITS.secretBytes,'A secret');
+      need('secrets');const name=secretName(params),value=text(params?.value,LIMITS.secretBytes,'A secret');alive();
       const names=await pluginStore.secretNames(plugin.id);if(!names.includes(name)&&names.length>=LIMITS.secretNames)throw failure('quota_exceeded',`A plugin can keep at most ${LIMITS.secretNames} secrets.`);
-      await pluginStore.secretSet(plugin.id,name,value);return {};
+      alive();await pluginStore.secretSet(plugin.id,name,value);return {};
     },
     'net.fetch':params=>networkFetch(params),
     'net.abort':async params=>{need('network');fetches.get(params?.requestId)?.abort();return {};},
     'ui.dialog.open':async params=>{
       need('ui.dialog');project();
       if(!activated())throw failure('not_allowed','A plugin can open a dialog only while you are using it.');
+      if(Date.now()<dismissedAt+LIMITS.dismissPauseMs)throw failure('not_allowed','You dismissed this plugin’s dialog.');
       if(dialogs.size>=LIMITS.dialogs)throw failure('rate_limited','This plugin already has dialogs open.');
       const spec=validateDialogSpec(params?.spec),dialogId=`d${nextHostId++}`;
-      const handle=env.openDialog({plugin,spec,onEvent:event=>{if(stopped)return;if(event.type!=='change')activationUntil=Date.now()+LIMITS.activationMs;send({type:'event',event:'dialog.event',data:{dialogId,...event}});},onClosed:()=>{dialogs.delete(dialogId);activationUntil=Date.now()+LIMITS.activationMs;}});
+      const handle=env.openDialog({plugin,spec,
+        onEvent:event=>{
+          if(stopped)return;
+          // Clicks and changes are the person using the plugin; cancel and Dismiss are not.
+          if(event.type==='click'||event.type==='change')gesture();
+          if(event.type==='close'){dismissedAt=Date.now();activationUntil=0;}
+          send({type:'event',event:'dialog.event',data:{dialogId,...event}});
+        },
+        onClosed:()=>{dialogs.delete(dialogId);}});
       dialogs.set(dialogId,handle);return {dialogId};
     },
-    'ui.dialog.update':async params=>{need('ui.dialog');const handle=dialogs.get(params?.dialogId);if(!handle)throw failure('not_found','That dialog is closed.');handle.update(validateDialogSpec(params.spec));return {};},
+    'ui.dialog.update':async params=>{need('ui.dialog');if(!dialogs.has(params?.dialogId))throw failure('not_found','That dialog is closed.');const spec=validateDialogSpec(params.spec);await paced('dialog');const handle=dialogs.get(params.dialogId);if(!handle)throw failure('not_found','That dialog is closed.');handle.update(spec);return {};},
     'ui.dialog.close':async params=>{need('ui.dialog');const handle=dialogs.get(params?.dialogId);if(handle){dialogs.delete(params.dialogId);handle.close();}return {};},
     'ui.files.decorate':async params=>{
       need('ui.fileAction');const now=project(),file=readableFile(now.doc,params?.fileId);
@@ -200,7 +247,7 @@ export function startPlugin({record,pkg,env,container}){
           return {id:action.id,label:text(action.label,40,'Button label'),title:action.title===undefined?'':text(action.title,160,'Button title'),blockedTitle:action.blockedTitle===undefined?'':text(action.blockedTitle,160,'Button title'),modes};
         })};
       }
-      if(!tags.length&&!bar)decorations.delete(file.id);else decorations.set(file.id,{tags:new Set(tags),bar});
+      await paced('decorate');if(!tags.length&&!bar)decorations.delete(file.id);else decorations.set(file.id,{tags:new Set(tags),bar});
       env.changed();return {};
     },
     'bibliography.set':async params=>{
@@ -208,11 +255,11 @@ export function startPlugin({record,pkg,env,container}){
       const entries=Array.isArray(params?.entries)?params.entries:null;
       if(!entries||entries.length>LIMITS.citations)throw failure('invalid_request',`Send at most ${LIMITS.citations} entries.`);
       citations=entries.map(entry=>{
-        if(!isObject(entry)||typeof entry.key!=='string'||!entry.key||entry.key.length>200)throw failure('invalid_request','Each entry needs a citation key.');
+        if(!isObject(entry)||typeof entry.key!=='string'||!CITATION_KEY.test(entry.key))throw failure('invalid_request','Each entry needs a BibTeX citation key (no spaces, braces, commas or backslashes).');
         const field=name=>typeof entry[name]==='string'?entry[name].slice(0,name==='title'?160:80):'';
         return {key:entry.key,type:field('type')||'misc',author:field('author'),year:field('year'),title:field('title')};
       });
-      env.changed();return {};
+      await paced('bibliography');env.changed();return {};
     },
     'completion.set':async params=>{
       need('completion');project();
@@ -222,7 +269,7 @@ export function startPlugin({record,pkg,env,container}){
         if(!isObject(item)||!['command','environment'].includes(item.kind)||typeof item.name!=='string'||!/^[A-Za-z@*]{1,64}$/.test(item.name))throw failure('invalid_request','Each item needs a kind (command or environment) and a name.');
         return {kind:item.kind,name:item.name,args:Number.isInteger(item.args)&&item.args>=0&&item.args<=9?item.args:0};
       });
-      env.changed();return {};
+      await paced('completion');env.changed();return {};
     },
   };
   function secretName(params){if(typeof params?.name!=='string'||!/^[A-Za-z0-9._-]{1,64}$/.test(params.name))throw failure('invalid_request','Secret names are 1–64 letters, digits and . _ -.');return params.name;}
@@ -260,6 +307,8 @@ export function startPlugin({record,pkg,env,container}){
     if(stopped)return;
     const message=event.data;
     if(!isObject(message)||message.scribyra!==1)return;
+    const data=message.type==='response'?message.result??message.error:message.type==='event'?message.data:message.params;
+    if(measure(data??null,LIMITS.message,{bytes:message.type==='request'&&message.method==='net.fetch'})===Infinity){if(message.type==='request'&&Number.isSafeInteger(message.id))send({type:'response',id:message.id,error:{code:'too_large',message:'Requests carry plain JSON data of at most 8 MiB.'}});return;}
     if(message.type==='response'){const entry=waiting.get(message.id);if(!entry)return;waiting.delete(message.id);clearTimeout(entry.timer);if(isObject(message.error))entry.reject(failure(String(message.error.code||'failed').slice(0,64),String(message.error.message||'The plugin failed.').slice(0,2000)));else entry.resolve(message.result);return;}
     if(message.type==='event'){if(message.event==='plugin.error'&&++errors>LIMITS.errors)crash('It reported too many errors.');return;}
     if(message.type!=='request'||!Number.isSafeInteger(message.id))return;
@@ -267,8 +316,6 @@ export function startPlugin({record,pkg,env,container}){
     if(inflight>=LIMITS.inflight){reply({error:{code:'rate_limited',message:'Too many requests at once.'}});return;}
     const handler=typeof message.method==='string'&&Object.hasOwn(methods,message.method)?methods[message.method]:null;
     if(!handler){reply({error:{code:'unknown_method',message:`Plugin API 1 has no method “${String(message.method).slice(0,64)}”.`}});return;}
-    let size=0;try{size=JSON.stringify(message.params??null)?.length??0;}catch{size=Infinity;}
-    if(size>LIMITS.message){reply({error:{code:'too_large',message:'The request is larger than 8 MiB.'}});return;}
     inflight++;
     try{await ready;reply({result:(await handler(message.params??{}))??null});}
     catch(error){reply({error:{code:typeof error?.code==='string'?error.code:'failed',message:String(error?.message||error).slice(0,2000)}});}
@@ -278,19 +325,19 @@ export function startPlugin({record,pkg,env,container}){
   /** Asks the plugin to do something the person chose; resolves to its answer. */
   function request(method,params){
     if(stopped)return Promise.reject(failure('stopped','This plugin is not running.'));
-    activeRequests++;activationUntil=Date.now()+LIMITS.activationMs;
+    gesture();
     const id=`h${nextHostId++}`;
     return new Promise((resolve,reject)=>{
       const timer=setTimeout(()=>{waiting.delete(id);reject(failure('timeout',`${plugin.name} did not answer.`));},LIMITS.hostRequestMs);
       waiting.set(id,{resolve,reject,timer});send({type:'request',id,method,params});
-    }).finally(()=>{activeRequests--;activationUntil=Date.now()+LIMITS.activationMs;});
+    });
   }
   function event(name,data){send({type:'event',event:name,data});}
   function crash(message){if(stopped)return;stop();env.onCrash?.(message);}
   function stop(){
     if(stopped)return;stopped=true;
     for(const controller of fetches.values())controller.abort();
-    for(const handle of dialogs.values())handle.close();dialogs.clear();
+    for(const handle of dialogs.values())handle.close();dialogs.clear();picking?.abort();
     for(const entry of waiting.values()){clearTimeout(entry.timer);entry.reject(failure('stopped','The plugin stopped.'));}waiting.clear();
     decorations.clear();citations=[];completions=[];
     sandbox.stop();env.changed();

@@ -126,7 +126,7 @@ plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),change
   fetch:(...args)=>globalThis.fetch(...args),
 }});
 // Links and keys of the former built-in Zotero move into its plugin (only if any exist).
-plugins.before(migrateLegacyZotero({catalog:pluginCatalog}).then(moved=>{if(moved)notice(`Zotero is now a plugin. Your ${moved.links} Zotero ${moved.links===1?'link':'links'} and ${moved.keys} ${moved.keys===1?'key':'keys'} moved into it on this device; see More tools → Plugins.`);}));
+plugins.before(migrateLegacyZotero({catalog:pluginCatalog,policy:pluginPolicy}).then(moved=>{if(moved)notice(`Zotero is now a plugin. Your ${moved.links} Zotero ${moved.links===1?'link':'links'} and ${moved.keys} ${moved.keys===1?'key':'keys'} moved into it on this device; see More tools → Plugins.`);}));
 /** What plugins contribute to the next render; also tells them about mode and file changes. */
 function pluginRender(){
   if(!plugins)return {fileBar:null,pluginCommands:[]};
@@ -656,6 +656,7 @@ async function treeMenu(id,origin={},client=commands,expected){
         if(!node||node.folder){state.selected=id||'';emit();}
         await plugins.runFileAction(plugin,action,{nodeId:node&&!node.folder?id:null,directory:!node||node.folder?selectedDirectory():''});
       }
+      break;
     case 'import-folder': state.selected='';emit();await importFolder(client,expected);break;
     case 'restore': client.run({op:'trash.restore'},expected);if(!state.active)activateFile(state.mainFile||state.files[0]?.id);notice('Last deletion restored with its original contents.');break;
   }

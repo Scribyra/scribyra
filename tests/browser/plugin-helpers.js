@@ -83,6 +83,6 @@ export async function sideload(page,url,{consentName,accept=true}={}){
   const consent=page.getByRole('dialog',{name:consentName});await expect(consent).toBeVisible();
   await expect(consent.getByRole('alert')).toContainText('Not reviewed by Scribyra.');
   // accept: true installs, false cancels, null leaves the dialog open for the caller.
-  if(accept===true)await consent.getByRole('button',{name:/^(Install|Update)$/}).click();else if(accept===false)await consent.getByRole('button',{name:'Cancel'}).click();
+  if(accept===true){await consent.getByRole('button',{name:/^(Install|Update)$/}).click();await expect(consent).toBeHidden();await expect(manager).not.toHaveAttribute('aria-busy','true');}else if(accept===false)await consent.getByRole('button',{name:'Cancel'}).click();
   return consent;
 }
