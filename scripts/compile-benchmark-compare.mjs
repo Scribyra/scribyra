@@ -9,9 +9,9 @@ import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs';
 const out=process.argv[2]||'target/compile-benchmark/out';
 const engines=['wasm','browser','native'],docs=['sample','article','beamer','tikz','thesis'];
 async function read(path){
- const pdf=await getDocument({data:new Uint8Array(readFileSync(path)),verbosity:0}).promise,pages=[];
+ const task=getDocument({data:new Uint8Array(readFileSync(path)),verbosity:0}),pdf=await task.promise,pages=[];
  for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);pages.push((await page.getTextContent()).items.map(item=>item.str).join(' ').replace(/\s+/g,' ').trim());}
- await pdf.destroy();return pages;
+ await task.destroy();return pages;
 }
 // Shared words over all words (multisets): 1 when the texts hold the same words.
 function overlap(a,b){

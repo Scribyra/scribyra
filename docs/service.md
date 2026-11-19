@@ -898,8 +898,8 @@ development shell sets all three (`bubblewrap`, `texliveSmall`).
 
 | Limit (default) | Enforced by |
 | --- | --- |
-| `cpu_seconds` 60 | the job's cgroup CPU time (all processes); `RLIMIT_CPU` per process too |
-| `wall_seconds` 120 | the runner kills the job's cgroup and the sandbox |
+| `cpu_seconds` 300 (deployment default; the runner's own 60) | the job's cgroup CPU time (all processes); `RLIMIT_CPU` per process too |
+| `wall_seconds` 600 (deployment default; the runner's own 120) | the runner kills the job's cgroup and the sandbox |
 | `memory_mib` 2048 | the job's `memory.max` (scratch included, no swap); `RLIMIT_AS` per process too |
 | `output_mib` 64 | `RLIMIT_FSIZE` per file; also the PDF read back |
 | `scratch_mib` 512 | tmpfs size of `/work` (also counts against `memory_mib`) |

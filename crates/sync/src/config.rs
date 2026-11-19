@@ -671,7 +671,9 @@ pub struct CompileLimits {
 }
 impl Default for CompileLimits {
     fn default() -> Self {
-        Self { cpu_seconds: 60, wall_seconds: 120, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120, per_project_per_minute: 30, active_per_member: 2, active_per_owner: 2, retention_days: 90 }
+        // The WebAssembly engine (the default) needs several times native TeX Live's CPU: a 305-page
+        // thesis with Biber takes about 4 minutes (docs/compile-engines.md).
+        Self { cpu_seconds: 300, wall_seconds: 600, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120, per_project_per_minute: 30, active_per_member: 2, active_per_owner: 2, retention_days: 90 }
     }
 }
 fn short_text(text: &str, max: usize) -> bool {
