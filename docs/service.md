@@ -143,22 +143,24 @@ Added with organisation sync; the organisation routes document their use.
 
 ### Deployment
 
-A deployment is one service, its database and its blob store, serving **one organisation**. Its
-policy is the `deployment` object of the configuration file (or `SCRIBYRA_SERVICE_DEPLOYMENT` as
+A deployment is one service, its database and its blob store, serving the **organisations** its
+providers name (design section 3: one per provider unless the provider's tokens name several, as
+Zitadel's and Entra's do). Its policy is the `deployment` object of the configuration file (or `SCRIBYRA_SERVICE_DEPLOYMENT` as
 JSON); every field is validated at start, and an inconsistent file refuses to start with
 `{"event":"invalid_configuration","reason":"…"}` on stderr naming the field (never a value).
 
 ```json
 "deployment": {
   "name": "Acme Lab",
-  "encryption": "e2ee",
-  "admins": ["it-admin@acme.org"],
+  "encryption": "server",
+  "guests": "shared",
+  "notify_on_admin_access": true,
   "providers": [
-    {"id": "acme", "label": "Acme account", "issuer": "https://login.acme.org/realms/lab",
-     "client_id": "scribyra", "client_secret_file": "/run/secrets/scribyra-oidc",
-     "email_domains": ["acme.org"], "groups_claim": "groups",
-     "admin_groups": ["scribyra-admins"], "member_groups": [],
-     "guest": {"claim": "acct", "equals": "1"}, "offline_access": true}
+    {"id": "acme", "label": "Acme account", "issuer": "https://acme.zitadel.cloud",
+     "client_id": "…", "client_secret_file": "/run/secrets/scribyra-oidc",
+     "preset": "zitadel", "zitadel_project_id": "273800000000000001",
+     "roles": {"admin": ["scribyra:admin"], "member": ["scribyra:member"], "guest": ["scribyra:guest"]},
+     "offline_access": true}
   ]
 }
 ```
@@ -170,32 +172,37 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `offline` | `true` | `false` makes the deployment online-only (used by server-readable mode) |
 | `compile` | `"browser"` | `"browser"`, `"server"` or `"both"`; the last two need `encryption: "server"` and `texlive` |
 | `link_sharing` | `false` | Whether editors may create share links (later slice) |
-| `guests` | `"off"` | `"off"` refuses provider guest accounts at sign-in; `"shared"` admits them as guests |
-| `admins` | `[]` | Administrators whatever groups say, each one of: `provider:email` (a verified email at that configured provider, for example `acme:it-admin@acme.org`); a plain lowercase email, which matches only through a provider whose `email_domains` include its domain (an entry no provider vouches for refuses start); or `issuer#subject`. In an end-to-end deployment, only an administrator's sign-in may create the organisation (once) |
+| `guests` | `"off"` | `"off"` refuses what the provider marks as guests ([Sign-in](#single-sign-on-oidc)); `"shared"` admits them to projects shared with them. Must be `"off"` in an end-to-end deployment |
+| `notify_on_admin_access` | `true` | Members see "An administrator opened this project on …" (`adminActivity` in project details, `adminOpened` in lists and heads); `false` hides it from them. The access is audited either way |
 | `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
 | `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour`, `per_project_per_minute`, `active_per_member`, `active_per_owner`, `retention_days` ([Server compile](#server-compile)) |
 | `texlive` | none | A TeX Live tree, for server compile |
 
-The organisation's ID is random, made at first start and recorded with the mode (a database that
-already held exactly one organisation from before keeps it). `GET /v1/deployment` is public and
-answers `{name, encryption, offline, compile, linkSharing, providers: [{id, label}], org}`;
-issuers, client IDs and secrets never leave the service.
+There is **no list of people or administrators** in the configuration (design decision 9):
+identity, organisations, roles and guest status come from each provider's tokens. The deployment's
+ID is random, made at first start and recorded with the mode (a database that already held
+exactly one organisation from before keeps it); the first organisation the deployment makes
+(the first provider's, at the first start, when its tokens name no organisation) takes that ID, so
+a deployment with one organisation keeps the ID end-to-end clients sign with. `GET /v1/deployment`
+is public and answers `{name, encryption, offline, compile, linkSharing, providers: [{id, label}],
+org}` (`org`: the deployment's ID); issuers, client IDs and secrets never leave the service.
 
 ### Organisation routes (end-to-end deployments)
 
 All bodies are JSON unless noted; every signed event and wrap is checked by the same Rust
 rules the browsers use (`crates/core/src/membership.rs`). They serve the deployment's
-organisation only, and only when `deployment.encryption` is `"e2ee"` (otherwise `404`).
-Nothing here signs anyone in by itself: every device or recovery-key session needs the live
-sign-in (`ScribyraSSO` login token) of the person the key belongs to.
+organisations (one end-to-end organisation per organisation the providers name, with the same ID)
+only when `deployment.encryption` is `"e2ee"` (otherwise `404`). Nothing here signs anyone in by
+itself: every device or recovery-key session needs the live sign-in (`ScribyraSSO` login token) of
+the person the key belongs to, holding a role in that organisation (there are no guests).
 
 | Route | Who | Purpose |
 | --- | --- | --- |
 | `POST /v1/auth/challenge`, `POST /v1/auth/session` | An active device or recovery key, with its person's login | Device session. The key signs `scribyra-auth/2`, this service's `public_url`, the org, the key, the SHA-256 of the login token and the challenge; the request carries the login token (`sso`, required). A login that is missing, expired, someone else's or blocked at the provider is refused, and the session ends with the login |
 | `GET /v1/orgs/{org}/info` | Anyone | Whether the org has a genesis, its log head and length, its sealed name |
-| `GET`/`POST /v1/orgs/{org}/events` | Members; the genesis and join requests with a login instead of a session | The signed membership log (paged, with its length). The genesis is accepted once, only with a configured administrator's login, and links that login to the owner; a `person.request` needs a login nobody is linked to yet and links it |
+| `GET`/`POST /v1/orgs/{org}/events` | Members; the genesis and join requests with a login instead of a session | The signed membership log (paged, with its length). The genesis is accepted once, only with the login of someone the provider makes an administrator of that organisation, and links that login to the owner; a `person.request` needs a login nobody is linked to yet and links it |
 | `GET /v1/orgs/{org}/people` | Member devices | Each person's verified sign-in email (`null` if the provider did not verify one) and provider (`{person: {email, provider, providerLabel}}`), for approving join requests and sharing |
 | `GET`/`PUT /v1/orgs/{org}/keys`, `POST /v1/orgs/{org}/keys/report` | Member devices | Key wraps (one per sender), and reporting a wrap that does not open |
 | `GET /v1/orgs/{org}/pending` | Member devices | Entitled keys that still lack a wrap, for the caller's projects (every epoch, so members keep earlier keys to read history) and the directory |
@@ -232,16 +239,20 @@ links included), and trailing bytes. An accepted update is then decoded and appl
 document (inside `catch_unwind`, on a blocking thread). Replays check stored entries again and
 turn a `yrs` panic into an error; a panic in any request handler answers `500` for that request.
 
-**Sessions.** Every route needs `Authorization: ScribyraSSO <token>` from
-[sign-in](#single-sign-on-oidc) (`401 {"error":"sign in required"}` without a valid one; a login
-from before accounts existed gets `401 {"error":"sign in again"}`). Errors are JSON
-`{"error": "<short text>"}`; every response is `Cache-Control: no-store`. IDs (projects,
+**Sessions and organisations.** Every route needs `Authorization: ScribyraSSO <token>` from
+[sign-in](#single-sign-on-oidc) (`401 {"error":"sign in required"}` without a valid one, or once
+the account holds no role any more) and acts in **one organisation**: the one the
+`Scribyra-Org: <org id>` header names, or, without the header, the account's only organisation
+([choosing the organisation](#organisations-and-the-scribyra-org-header)). Every project, share,
+invitation, directory entry and admin action a request reaches is of that organisation; another
+organisation's project is `404` like a project that does not exist. Errors are JSON
+`{"error": "<short text>"}`, with a stable `code` where the app tells cases apart; every response is `Cache-Control: no-store`. IDs (projects,
 accounts, invitations) are 64 lowercase hex characters; times are milliseconds since the epoch.
 Emails are stored and compared in one normal form (surrounding space trimmed, Unicode lowercase
 as Rust defines it, independent of the database's locale; no Unicode normalisation): sign-ins
 store it in accounts and logins, invitations store it, and SQL compares stored values with `=`.
 CORS allows `GET, HEAD, PUT, POST, PATCH, DELETE`, the request headers `Authorization`,
-`Content-Type`, `Scribyra-Client`, `Scribyra-Client-Seq`, and exposes `Scribyra-Log-Head`,
+`Content-Type`, `Scribyra-Client`, `Scribyra-Client-Seq`, `Scribyra-Org`, and exposes `Scribyra-Log-Head`,
 `Scribyra-Log-Floor`, `Scribyra-Snapshot-Seq`, `Scribyra-Audit-Head` and `Content-Disposition`.
 
 **Roles.** A project has one owner and shares with role `editor`, `reviewer` or `viewer`.
@@ -253,16 +264,16 @@ CORS allows `GET, HEAD, PUT, POST, PATCH, DELETE`, the request headers `Authoriz
 | Reviewer, viewer | yes | no (`403`; their writes follow in slice 12) | no (`403`) | no (`403`) |
 | Anyone else | `404 {"error":"unknown project"}` on every project route, as if it did not exist | | | |
 
-Guests (`guests: "shared"`) see only projects shared with them and cannot create projects
-(`403`). Administrators read a project without a share only after an audited "Open as
+Guests (`guests: "shared"`) see only projects shared with them, cannot create projects (`403`),
+browse the directory (`403`), share or own projects. Administrators read a project without a share only after an audited "Open as
 administrator" ([Administration](#administration-and-the-audit-log)): for 12 hours their role on
 it is `admin` (read like a viewer, never write); "Edit as administrator" gives them an explicit
 editor share. Anyone but the owner may leave a project (remove their own share).
 
 | Route | Body → answer |
 | --- | --- |
-| `GET /v1/sr/projects` | → `200 {account, role, projects: [{id, name, role, head, size, created, updated, owner: {account, name, email, provider}, adminOpened}]}` (owned and shared, and for an administrator the projects they opened as administrator, `role: "admin"`; newest change first; `role` at the top is the deployment role; `adminOpened` is when an administrator last opened the project, or `null`) |
-| `POST /v1/sr/projects` | `{name, id?, state?, client?, clientSeq?}` → `201 {project, seq}` (members and admins only). `name` 1–200 characters. `id` (64 hex) lets a retry find the project it created: the project's ID is then SHA-256 of `scribyra-sr-project/1\n<account>\n<id>` (hex), so the app can compute it beforehand, a repeat by the same account gets `200` and the same body, and the same `id` from another account makes that account's own project (nothing tells anyone whether another account used it). Without `id` the ID is random. `state` is base64 of a Yjs update (the project's initial state, at most `sr_entry_bytes`), appended as the first entry under `client`/`clientSeq` (default `initial`/1); `seq` is its sequence number or `null`. `400` for a bad name or a state that is not a Yjs update, `413` too large, `507` over quota (the new project is then not kept) |
+| `GET /v1/sr/projects` | → `200 {account, org, role, projects: [{id, name, role, head, size, created, updated, owner: {account, name, email, provider}, adminOpened}]}` (owned and shared, and for an administrator the projects they opened as administrator, `role: "admin"`; newest change first; `org` and `role` at the top are the organisation the request acts in and the caller's role there; `adminOpened` is when an administrator last opened the project, or `null`) |
+| `POST /v1/sr/projects` | `{name, id?, state?, client?, clientSeq?}` → `201 {project, seq}` (members and admins only). `name` 1–200 characters. `id` (64 hex) lets a retry find the project it created: the project's ID is then SHA-256 of `scribyra-sr-project/1\n<account>\n<id>` (hex), so the app can compute it beforehand, a repeat by the same account gets `200` and the same body, and the same `id` from another account makes that account's own project (nothing tells anyone whether another account used it). Without `id` the ID is random. `state` is base64 of a Yjs update (the project's initial state, at most `sr_entry_bytes`), appended as the first entry under `client`/`clientSeq` (default `initial`/1); `seq` is its sequence number or `null`. `400` for a bad name or a state that is not a Yjs update, `413` too large, `507` over quota (the new project is then not kept). The project belongs to the organisation the request acts in, for good; the same `id` used in another organisation answers `409` |
 | `GET /v1/sr/projects/{p}` | → `200` project details: `{id, name, role, owner: {account, name, email, provider, role:"owner"}, head, floor, snapshot, size, created, updated, members: [{account, name, email, provider, role}] (owner first), invitations: [{id, email, provider, role, created, expires}], adminActivity: [{action, time}]}`. Invitations are listed for the owner and editors only. Emails are verified ones or `null`. `adminActivity` is the newest ten administrator actions on the project from the audit log (`project.admin_open`, `project.admin_edit`, and transfers and renames by an administrator), which the app shows as "An administrator opened this project on …" |
 | `PATCH /v1/sr/projects/{p}` | `{name}` → `200` details (owner, editors) |
 | `DELETE /v1/sr/projects/{p}` | → `204` (owner). Crypto-erase: the wrapped key is removed in the same transaction that marks the project deleted; everything sealed under it is unreadable from then on, and maintenance removes rows and blobs. Members' later requests get `404` |
@@ -271,12 +282,13 @@ editor share. Anyone but the owner may leave a project (remove their own share).
 | `GET /v1/sr/projects/{p}/snapshot` | → `200`, the whole Yjs state (one update, v1) covering `Scribyra-Snapshot-Seq`, with the log headers; `404 {"error":"no snapshot"}` before the first one (read the log from 0); `410 {"error":"compacted", floor, snapshot}` when a newer snapshot replaced it while it was read (ask again) |
 | `PUT /v1/sr/projects/{p}/objects/{sha256}` | Body: an asset or history object's plaintext (at most `sr_object_bytes`). → `201` stored, `204` already stored, `400` when the body's SHA-256 is not the path's, `403` reviewer/viewer (checked again inside the upload's transaction, as for appends), `413`, `507`, `503` when `uploads` are all busy. Upload objects before the update that references them |
 | `GET /v1/sr/projects/{p}/objects/{sha256}` | → `200` the plaintext (checked against its hash), `404 {"error":"unknown object"}` |
-| `POST /v1/sr/projects/{p}/invitations` | `{email, role}` (owner, editors). `email` is a plain email or `provider:email`. An email counts only at a provider that vouches for it (the same rule as `admins`): a plain email names accounts at providers whose `email_domains` include its domain, or at the deployment's only provider; `provider:email` names that provider's accounts. With several providers and none vouching, a plain email is `400` (name the provider); an unknown provider is `400`. If active accounts with that **verified** email exist at those providers, they are shared at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Otherwise `201 {status:"pending", invitation: {id, email, provider, role, expires}, project}` (`provider` is `null` for "any vouching provider"): the first sign-in with that verified email at such a provider turns it into a share. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
+| `POST /v1/sr/projects/{p}/invitations` | `{email, role}` (owner, editors). Invitations stay inside the project's organisation: if accounts of that organisation (members and administrators, or guests when `guests: "shared"`) have that **verified** email, they are shared at once: `201 {status:"shared", project}` (`200` when the share existed; the role is updated). Accounts of other organisations are never matched, whatever their email. Otherwise `201 {status:"pending", invitation: {id, email, role, expires}, project}`: the first sign-in (or refresh that adds the organisation) of an account with that verified email that holds a role in the project's organisation turns it into a share. An email whose `email_verified` the provider did not send counts as unverified and matches nothing. Inviting the same email again updates the pending invitation's role and expiry. Invitations expire after `sr_invitation_days` (30). `409` for the owner's own email, `400` bad email or role. No email is sent in this release |
 | `DELETE /v1/sr/projects/{p}/invitations/{id}` | → `204` withdrawn, `404` unknown or no longer pending |
 | `PUT /v1/sr/projects/{p}/members/{account}` | `{role}` → `200` details (owner, editors), `404` if not a member |
+| `GET /v1/sr/directory` | → `{org, members: [{account, name, email, role}]}`: the organisation's members and administrators (active, verified emails only), to share with. Guests `403` |
 | `DELETE /v1/sr/projects/{p}/members/{account}` | → `204`. Owner and editors remove others; anyone removes themselves (leave), except the owner (`409`) |
-| `POST /v1/sr/projects/{p}/owner` | `{account}` (owner) → `200` details: that member (not a guest, `409`) becomes the owner and the old owner an editor |
-| `GET /v1/sr/heads?since=v&wait=s` | → `200 {version, projects: {"<id>": {head, role, name, adminOpened?}}}` for every project the caller can open (`adminOpened`: when an administrator last opened it). With `since` equal to the current `version` it waits up to `wait` seconds (at most 25) until something the caller sees changes (an entry, a rename, a share or invitation acceptance, a removal or deletion), on any replica; then or at the deadline it answers. A notice only: read the logs afterwards. Only notices about the caller's projects or account wake a poll. An account keeps at most 4 polls waiting per replica: a fifth ends the oldest at once with its current state and `superseded: true` (keep one poll per account and do not re-poll a superseded answer at once). A sign-out, revocation or block ends the session's polls at once with `401`. Shutdown ends waiting polls at once |
+| `POST /v1/sr/projects/{p}/owner` | `{account}` (owner) → `200` details: that member (holding a role in the project's organisation and not a guest there, `409`) becomes the owner and the old owner an editor |
+| `GET /v1/sr/heads?since=v&wait=s` | → `200 {version, projects: {"<id>": {head, role, name, adminOpened?}}}` for every project the caller can open (`adminOpened`: when an administrator last opened it). With `since` equal to the current `version` it waits up to `wait` seconds (at most 25) until something the caller sees changes (an entry, a rename, a share or invitation acceptance, a removal or deletion), on any replica; then or at the deadline it answers. A notice only: read the logs afterwards. Only notices about the caller's projects or account wake a poll. An account keeps at most 4 polls waiting per replica: a fifth ends the oldest at once with its current state and `superseded: true` (keep one poll per account and do not re-poll a superseded answer at once). A sign-out, revocation or block ends the session's polls at once with `401`; a role the provider takes away in the poll's organisation (at a refresh) or an administrator's stop there ends it with `404 unknown_org` (or `401` when no organisation is left). Shutdown ends waiting polls at once |
 
 **Sealing at rest.** Each project has a random 32-byte data key, stored only as
 `nonce ‖ XChaCha20-Poly1305(master key, nonce, "scribyra-sr-key/1\n<deployment>\n<project>", key)`
@@ -333,18 +345,25 @@ texts, asset objects (with their bytes when stored), the main file and the name.
 ### Administration and the audit log
 
 Design section 5, slice 10. **Audit log.** Every security-relevant action is one row of
-`audit_events` (migration `0015`): `seq` (gap-free), `time`, `actor` (an account ID or `system`),
+`audit_log` (migration `0033`; `audit_events` from `0015` holds what was recorded before it and is
+no longer written: its rows were copied into the deployment chain unchanged) in the **hash chain
+of the organisation it concerns** (`org`; the empty `org` is the deployment's own chain: service
+starts, purges of it, sign-ins refused before an organisation was known). An action concerning an
+account in several organisations (a sign-in, a revocation) is one event in each of their chains.
+Each row has `seq` (gap-free within its chain), `time`, `actor` (an account ID or `system`),
 `ip` (the client, or the address a trusted proxy names), `action`, `target_type`/`target_id`, a
 small JSON `detail` (at most 4 KiB), `prev` and `hash` = SHA-256(prev bytes ‖ the row's canonical
 text: `jsonb_build_array(seq, time in µs, actor, ip or "", action, target_type or "", target_id or
-"", detail)::text`), 64 zeros before the first row. Rows are written only by the SQL function
-`audit_append`, which locks the one `audit_head` row, so appends from every replica form one line
-(and `time` never decreases along it). Events are written in the transaction of the action they
+"", detail, org)::text`, the deployment chain's rows without the trailing `org`), 64 zeros before
+a chain's first row; moving a row to another chain therefore breaks both. Rows are written only by
+the SQL function `audit_log_append(org, …)`, which locks the chain's `audit_heads` row, so appends
+from every replica form one line per chain (and `time` never decreases along it). Events are written in the transaction of the action they
 record, so an action and its event commit together.
 
-**Who can change the log (migration `0031`).** The NOLOGIN role `scribyra_audit_owner` owns
-`audit_events`, `audit_head`, `audit_settings` and the functions that write them (`audit_append`,
-`audit_purge`, `audit_purge_expired`, `audit_set_retention`: `SECURITY DEFINER` with
+**Who can change the log (migrations `0031`, `0033`).** The NOLOGIN role `scribyra_audit_owner`
+owns `audit_log`, `audit_heads`, `audit_settings` (and the older `audit_events`, `audit_head`) and
+the functions that write them (`audit_log_append`, `audit_log_purge`, `audit_log_purge_expired`,
+`audit_set_retention`, and the older ones: `SECURITY DEFINER` with
 `search_path` fixed to the service's schema, then `pg_temp`). The service's database user (and the
 database's owner) get `SELECT` on the tables and `EXECUTE` on the functions, nothing else, so they
 can neither write rows directly nor disable or drop the triggers; the triggers let only the
@@ -367,16 +386,15 @@ exported heads outside the database.
 | Action | Recorded when | Actor, target, detail |
 | --- | --- | --- |
 | `session.sign_in`, `session.sign_out` | A sign-in is redeemed; a session signs out | the account; `{provider, role}` |
-| `session.refused` | A sign-in in progress is refused (`reason`: a claim check, `guest`, `not_member`, `token_exchange`, `account_disabled`, `account_removed`, …) | `system` (or the account, when known); `{reason, provider}`. Requests with an unknown `state` are not recorded |
-| `session.revoked`, `account.blocked` | Back-channel logout, a refused refresh token (`invalid_grant` blocks the account), the group rules at a recheck | `system`; `{reason, provider}` |
-| `account.created`, `account.role_changed` | First sign-in; a role the provider's groups or an administrator changed | `{provider, role}`; `{from, to, by: "provider" or "admin"}` |
-| `account.admin_grant_changed`, `account.admin_grant_cleared` | An administrator's grant changed without a role change; a grant dropped because the rules now make the account an administrator or guest (sign-in or recheck) | `{grant}`; `system`, `{role, by: "provider"}` |
+| `session.refused` | A sign-in in progress is refused (`reason`: a claim check, `no_role`, `guest`, `no_organisation`, `token_exchange`, `account_disabled`, `account_removed`, …) | `system` (or the account, when known); `{reason, provider}`; in the deployment chain, or in the organisations that stopped the account. Requests with an unknown `state` are not recorded |
+| `session.revoked`, `account.blocked` | Back-channel logout, a refused refresh token (`invalid_grant` blocks the account), a refresh that leaves no role (`reason`: `no_role`, `guest`, `no_organisation`, `no_access`) | `system`; `{reason, provider}` |
+| `account.created`, `account.role_changed` | An account's first sign-in into an organisation; a role the provider changed at a sign-in or refresh (`to: null` when it took the role away) | `{provider, role}`; `system`, `{from, to, by: "provider"}` |
 | `account.disabled`, `account.unblocked`, `account.removed` | Admin area; `account unblock` (`system`, `by: "cli"`) | `{from}`; removal `{transferredTo, projects, shares}` |
 | `project.created`, `project.renamed`, `project.deleted`, `project.transferred` | Owners, editors and administrators (`admin: true` when an administrator acted) | target the project |
 | `project.admin_open`, `project.admin_edit` | Open or edit as administrator | |
 | `project.compile_mode` | `PUT …/settings` | `{mode}` |
 | `share.created`, `share.changed`, `share.removed` | Sharing (including a member leaving, `left: true`) | `{account, role}` |
-| `invitation.created`, `invitation.accepted`, `invitation.withdrawn` | Invitations (the invitee's email is not recorded) | `{invitation, role, provider}` |
+| `invitation.created`, `invitation.accepted`, `invitation.withdrawn` | Invitations (the invitee's email is not recorded) | `{invitation, role}` |
 | `export.everything`, `audit.export` | Admin exports | filters and format |
 | `audit.purge` | Retention | `system`; `{count, last_seq, last_hash, before, retention}` |
 | `deployment.start` | Each start of `serve` | `system`; `{policy, encryption, schema, version, auditRetention, auditProtection}` (`policy` is the SHA-256 of the deployment object, so configuration changes show) |
@@ -389,56 +407,58 @@ Never recorded: content, ID or session tokens, provider tokens; emails only as a
 `audit_set_retention`, which never goes below `floor_seconds` (30 days). The service cannot lower
 the floor; only the tables' owner or a superuser can (`UPDATE audit_settings SET floor_seconds =
 …`), which the tests do together with the tests-only `audit_retention_seconds` to purge within
-seconds. `audit_purge(before)` refuses a cutoff newer than now minus the retention. Every
-`audit_purge_seconds` (daily) a task on each replica calls `audit_purge_expired()`, which deletes
-the older events and appends `audit.purge` with the count, the last purged event's sequence
-number and hash, the cutoff and the retention; the head's lock keeps two replicas from purging the
-same events.
+seconds. `audit_log_purge(before)` refuses a cutoff newer than now minus the retention. Every
+`audit_purge_seconds` (daily) a task on each replica calls `audit_log_purge_expired()`, which
+deletes each chain's older events and appends `audit.purge` to that chain with the count, the last
+purged event's sequence number and hash, the cutoff and the retention; the heads' locks keep two
+replicas from purging the same events.
 
-**`scribyra-sync audit verify [<seq>:<hash>]`** reads the log (no ownership lock, so it runs beside
+**`scribyra-sync audit verify [--org <org>] [<seq>:<hash>]`** checks every chain (one line each)
+or, with `--org`, that organisation's (a head without `--org` is the deployment chain's). It reads the log (no ownership lock, so it runs beside
 serving replicas) and recomputes every hash outside the database's functions; it checks that
 sequence numbers have no gap, that each `prev` is the previous hash, that the first kept event is
 the chain's start or anchored by an `audit.purge` (its `last_seq` + 1 and `last_hash`; only a
 `system` purge event recorded after the events it names anchors), that no purge's cutoff was newer
 than its own time minus the retention (the configured one, or 30 days if longer), and that
-`audit_head` names the last event; with `<seq>:<hash>` (the head an export carries) also that this
+the chain's `audit_heads` row names the last event; with `<seq>:<hash>` (the head an export carries) also that this
 event has that hash: one purged since is accepted only if it is the anchor the log starts from
 (so check an exported head while the retention still keeps it), and one past the last event is a
-problem. It prints `{"event":"audit_verify","ok":…,"events":n,"first":…,
+problem. It prints `{"event":"audit_verify","org":…,"ok":…,"events":n,"first":…,
 "last":…,"head":{"seq","hash"},"anchored":…,"problems":[{"seq","problem"}]}` and exits 0 only when
 the chain holds.
 
-**Admin routes** (`/v1/admin/…`, `Authorization: ScribyraSSO <token>` of an administrator; `401`
-without a session, `403` for everyone else). An administrator is one by `admins`, by
-`admin_groups`, or by an administrator's grant in the admin area; the configuration's own
-administrators can only be changed in the configuration (or at the provider). Each action's
-transaction locks the caller's account row and checks again that they are an active
-administrator (still holding the grant, if that is what makes them one); member actions also
-lock every active administrator's row (in account order, with the target's and an heir's), so at
-least one active administrator always remains and two cannot disable each other.
+**Admin routes** (`/v1/admin/…`, `Authorization: ScribyraSSO <token>` of an administrator of the
+organisation the request acts in (`Scribyra-Org`, or their only one); `401` without a session,
+`403` for everyone else, `404 unknown_org` for an organisation that is not theirs). An
+administrator is one because the provider's token gives them `admin` in that organisation;
+nobody grants or removes roles here. Every member, project and audit event these routes reach is
+of that organisation: another organisation's account or project is `404`. Each action's
+transaction locks the caller's membership and checks again that they are an active administrator
+there; member actions also lock every active administrator's membership (in account order, with
+the target's and an heir's), so at least one active administrator always remains and two cannot
+disable each other.
 
 | Route | Body → answer |
 | --- | --- |
-| `GET /v1/admin/members?removed=true` | → `{account, members: [{account, name, email, provider, role, state, guest, granted, created, lastSeen, storage, projects}]}` (`storage`: sealed bytes of owned projects; removed accounts only with `removed=true`) |
-| `PUT /v1/admin/members/{a}/role` | `{role: "admin"|"member"}` → the member. `409` for guests (they stay guests), for an administrator by the configuration (`admins` or `admin_groups`: neither demoted nor granted, so a grant never outlasts the provider taking the role away; a grant such a person holds is cleared at their next sign-in or recheck), a removed account, the caller's own account, or a change that would leave no active administrator |
-| `POST /v1/admin/members/{a}/disable` | → the member: sessions revoked at once (waiting heads polls answer `401`), sign-in refused (`403 "this account is disabled"`). `409` for an administrator the `admins` list names (change the configuration instead) or the last active administrator |
-| `POST /v1/admin/members/{a}/unblock` | → the member: a disabled, blocked or removed account may sign in again |
-| `POST /v1/admin/members/{a}/remove` | `{transfer?}` → `{account, state: "removed", transferredTo, projects}` (`409` as for disable): sessions revoked, every share removed, owned projects transferred to `transfer` (an active member or administrator, its row locked meanwhile; default the caller); sign-in refused (`403 "this account was removed"`) until unblocked. End-to-end: removal from the organisation still needs an administrator's app to sign `person.remove` |
+| `GET /v1/admin/members?removed=true` | → `{account, org, members: [{account, name, email, provider, role, state, guest, created, lastSeen, storage, projects}]}`: the organisation's memberships. `role` is the provider's (`admin`, `member`, `guest`, or `null` when it grants none now), read only; `state` is `active`, `disabled`, `removed` or `blocked` (the provider refused a refresh token); `storage`: sealed bytes of owned projects there; removed members only with `removed=true`. There is no route that changes roles: grant and remove them at the provider |
+| `POST /v1/admin/members/{a}/disable` | → the member: an emergency stop in this organisation: the account's sessions at the organisation's provider are revoked (waiting heads polls answer `401`; it may sign in again for other organisations), its access to this organisation is refused (`403 code account_disabled` at sign-in when no other organisation is left) until unblocked. `409` for the caller's own account or the last active administrator |
+| `POST /v1/admin/members/{a}/unblock` | → the member: a disabled or removed member may use the organisation again (with the role the provider gives), and a block from a refused refresh token is cleared |
+| `POST /v1/admin/members/{a}/remove` | `{transfer?}` → `{account, state: "removed", transferredTo, projects}` (`409` as for disable): as disable, and their shares in this organisation's projects are removed and the projects they own there transferred to `transfer` (an active member or administrator there, its membership locked meanwhile; default the caller); refused (`account_removed`) until unblocked. Remove the role at the provider too. End-to-end: removal from the organisation still needs an administrator's app to sign `person.remove` |
 | `GET /v1/admin/projects` | → `{encryption: "server", projects: [{id, name, owner, members, size, head, created, updated, role, openUntil}]}`; end-to-end: `{encryption: "e2ee", projects: [{id, size, head, epoch}]}` |
 | `POST /v1/admin/projects/{p}/open` | → project details with `role: "admin"`: read access (log, snapshot, objects, heads) for 12 hours (`sr_admin_opens`), recorded as `project.admin_open` |
 | `POST /v1/admin/projects/{p}/edit` | → details: an editor share for the administrator (`project.admin_edit`) |
 | `POST /v1/admin/projects/{p}/owner` | `{account}` → `{id, owner}`: an active member or administrator becomes the owner; the previous owner keeps an editor share |
 | `DELETE /v1/admin/projects/{p}` | → `204`: crypto-erase as the owner's delete; end-to-end: the ciphertext the service holds (log, objects, key wraps) is removed |
-| `GET /v1/admin/export` | → a streamed zip (stored, UTF-8 names; ZIP64 sizes and offsets from 4 GiB): `projects/<name>-<id8>/<path>` for every file of every project materialised from the server's state, `projects.json` (per project its folder, `seq`, `mainFile` and `missing`: assets whose object is not on the server, and files the project tree marks as conflicts, such as an invalid name, which are never written; every entry is a relative path without `.`, `..`, backslashes, colons or control characters, unique ignoring case), `members.json`, `audit.jsonl` (every event and a final `{"head": {seq, hash}}`, streamed with a data descriptor). One export at a time per replica (`429`); it holds one file in memory at a time (an asset is at most `sr_object_bytes`) |
-| `GET /v1/admin/audit?actor&action&target&targetType&from&to&before&limit` | → `{events: [{seq, time, actor, actorName, actorEmail, ip, action, targetType, target, detail, prev, hash}], head: {seq, hash}, next}` newest first; `action` matches an action or its first part (`project`); `from`/`to` in ms; `limit` ≤ 500; page with `before=next` |
+| `GET /v1/admin/export` | → a streamed zip (stored, UTF-8 names; ZIP64 sizes and offsets from 4 GiB): `projects/<name>-<id8>/<path>` for every file of every project materialised from the server's state, `projects.json` (per project its folder, `seq`, `mainFile` and `missing`: assets whose object is not on the server, and files the project tree marks as conflicts, such as an invalid name, which are never written; every entry is a relative path without `.`, `..`, backslashes, colons or control characters, unique ignoring case), `members.json`, `audit.jsonl` (every event of the organisation's chain and a final `{"head": {seq, hash}}`, streamed with a data descriptor); only the organisation's projects and members. One export at a time per replica (`429`); it holds one file in memory at a time (an asset is at most `sr_object_bytes`) |
+| `GET /v1/admin/audit?actor&action&target&targetType&from&to&before&limit` | → the organisation's chain: `{org, events: [{seq, time, actor, actorName, actorEmail, ip, action, targetType, target, detail, prev, hash}], head: {seq, hash}, next}` newest first; `action` matches an action or its first part (`project`); `from`/`to` in ms; `limit` ≤ 500; page with `before=next` |
 | `GET /v1/admin/audit/export?…&format=jsonl|csv` | → the filtered events oldest first, as JSON lines ending with `{"head": …}` or CSV (every field quoted, formula prefixes defused, a final `# head <seq>:<hash>` line); header `Scribyra-Audit-Head: <seq>:<hash>`; recorded as `audit.export` |
-| `GET /v1/admin/settings` | → the deployment's policy (providers without client IDs or secret files) and its `policy` hash |
+| `GET /v1/admin/settings` | → the deployment's policy (providers with their claims mapping, without client IDs or secret files; `adminSubjects` as a count), `notifyOnAdminAccess`, the caller's `org` and the `policy` hash |
 
 In end-to-end mode open, edit, transfer and export answer `409` (the service cannot read
 projects); members, the project list, deletion and the audit log work.
 
 **The admin area in the app** (`web/org-admin-dialog.js`): Remote backup → **Admin** (shown to
-administrators only): Members (role, Disable/Unblock, Remove with the new owner of their projects),
+administrators only): Members (role, read only once the app follows decision 9; Disable/Unblock, Remove with the new owner of their projects),
 Projects (Open as administrator, which opens a read-only copy labelled "Opened as administrator ·
 Read only"; Transfer; Delete with confirmation), Audit log (filters by actor, action, target and
 dates; Export JSON lines and CSV), Export (downloads the zip) and Settings (read only). Members
@@ -594,9 +614,11 @@ Its direct data-channel traffic never passes through the service.
 Signing in is OpenID Connect only, through the providers listed in `deployment.providers`
 (several per deployment). The service is a confidential relying party of each (authorization
 code flow, PKCE S256, `client_secret_basic`) and has no sign-in of its own: no passwords,
-passkeys, setup codes, invitation links or link codes. A login proves who someone is at the
-provider and carries their deployment role (administrator, member or guest); it grants no
-project keys. `public_url` and `origins` must be set: the app's origin must be in `origins`,
+passkeys, setup codes, invitation links or link codes. It is a pure relying party (design
+section 3, decision 9): who someone is, their email, the organisations they belong to, their role
+in each (administrator, member or guest) and whether they are a guest all come from the
+provider's tokens, re-read at every sign-in and refresh; the configuration names nobody. A login
+grants no project keys. `public_url` and `origins` must be set: the app's origin must be in `origins`,
 because the service only ever redirects back to a configured origin.
 
 **Register the service at each provider** as a confidential web client with:
@@ -615,30 +637,91 @@ because the service only ever redirects back to a configured origin.
 | `issuer` | required | `https://` (`http://` only on loopback), without query; must equal the `issuer` in the provider's `/.well-known/openid-configuration` character for character, including any trailing slash, or sign-in is refused |
 | `client_id`, `client_secret_file` | required | The client; the secret is read from its file (one line) when used, so a rotated file takes effect without a restart. It is never stored in the database, printed or logged; an unreadable file refuses start |
 | `email_domains` | `[]` | When set, only ID tokens with `email_verified: true` and an email in one of these lowercase domains are admitted (and, when the token has a Google `hd` claim, `hd` must be that email's domain) |
-| `groups_claim` | none | A claim holding an array of group names (at most 256 kept, longer than 256 bytes dropped); Entra ID app roles: `"roles"` |
-| `admin_groups` | `[]` | Members of these groups are administrators (needs `groups_claim`) |
-| `member_groups` | `[]` | When set, only members of these groups (or administrators) may sign in (needs `groups_claim`) |
-| `guest` | none | `{"claim", "equals"}`: the claim and value that mark a guest account (Entra `acct` = `1`). With `guests: "off"` such sign-ins are refused |
+| `preset` | one of `preset` and `claims` | `zitadel`, `keycloak`, `entra` or `google`: how this provider's claims name organisations, roles and guests (table below) |
+| `claims` | | A generic mapping of JSON paths into the ID token: `{roles, organisation?, organisation_name?, guest?: {path, equals}}`. `roles` names a string or a list of strings; without `organisation` the provider has one organisation. A path is `$` followed by `.key` segments (letters, digits, `_`, `-`) or `["key"]` segments for names with other characters, for example `$["urn:zitadel:iam:org:project:roles"]` or `$.resource_access.scribyra.roles`; segments select object members only (no wildcards, indexes or evaluation) |
+| `roles` | `{}` | Provider role names for each deployment role: `{"admin": [...], "member": [...], "guest": [...]}`; the highest a person holds in an organisation wins. At least one `admin` or `member` name (except `google`, which takes none) |
+| `zitadel_project_id` | none | `zitadel` only: the project whose roles count (its own roles claim is read first) and whose audience scope is asked for |
+| `keycloak_organizations` | `false` | `keycloak` only: ask for the `organization` scope and take organisations from that claim (Keycloak 26); without it the provider has one organisation |
+| `admin_subjects` | `[]` | `google` only: the exact `sub` values of administrators. Google's tokens carry no roles, so this is the one place a configuration names people (a Directory API group check may come later) |
 | `offline_access` | `false` | Adds the `offline_access` scope, which some providers require before they issue refresh tokens |
 | `session_hours` | 12 | 1–720: how long a login lasts |
 | `recheck_minutes` | 10 | 1–1440: how often a login with a refresh token is rechecked |
-| `scopes` | `[]` | Extra scopes beyond `openid email profile` |
+| `scopes` | `[]` | Extra scopes beyond `openid email profile` and those `offline_access` and the preset add |
 
-Group, guest and member rules apply at sign-in (refused sign-ins return to the app with
-`#scribyra-sso-error=guest` or `not_member`), again whenever a login is used (so a configuration
-change takes effect at once), and at each recheck from a refreshed ID token's claims. A person's
-account is the pair (provider, subject): the same email at two providers is two accounts. Every
-sign-in creates or refreshes the account (table `accounts`: provider, issuer, subject, email and
-whether it is verified, name, role, guest mark, state `active`, `blocked` or `disabled`, last
-seen); a disabled account cannot sign in.
+**Claims mapping.** Only the claims of the verified ID token the provider itself issued are read
+(never the userinfo response, never another provider's token), and an organisation is always the
+pair (provider, claim value), so one provider's `tid` or org ID can never name another provider's
+organisation:
 
-`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
+| Preset | Organisation | Roles | Guest | Scopes added |
+| --- | --- | --- | --- | --- |
+| `zitadel` | each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`); name: the map's value (the org's domain) | the role keys granted in that org | a role granted by an org other than `urn:zitadel:iam:user:resourceowner:id` (a project grant), or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
+| `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles` and `resource_access.{client_id}.roles` (another client's roles do not count) | a role mapped to `guest` | `organization` with `keycloak_organizations` |
+| `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B), or a role mapped to `guest` | `offline_access` |
+| `google` | `hd` (accounts without it are refused) | everyone a member; `admin_subjects` administrators | never | none |
+| generic `claims` | `claims.organisation`, `claims.organisation_name` | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
+
+A guest is never more than a guest. Zitadel only puts roles in ID tokens with the project's
+"Assert roles on authentication" and the application's "User roles inside ID token" settings on.
+Someone with no mapped role in any organisation is refused (`#scribyra-sso-error=no_role`; the
+app shows "Your account has no Scribyra role. Ask your administrator to grant one in <provider>."),
+guests are refused with `guest` when `guests: "off"` (always in end-to-end mode, which keeps a
+person's home organisation when only another one made them a guest), and a token without the
+organisation claim its mapping needs is refused with `no_organisation`. In every case the redeem
+answers `403 {"error": "<message>", "code": "<code>"}` too, so the app can tell them apart.
+
+**Accounts and memberships.** An account is `(issuer, subject)` (table `accounts`; a provider
+`id` that shares an issuer with another reaches the same account). Its profile (email,
+`email_verified`, name, `https` picture) is copied from the ID token at each sign-in and refresh;
+what the token lacks is taken from the provider's userinfo endpoint (whose `sub` must match; an
+`email_verified` from userinfo counts only for the email it comes with). A missing
+`email_verified` is false: such an email is never shown as the account's and never matches an
+invitation. Each organisation is a row of `organisations` (provider, claim value, name; random
+64-hex ID), made when a token first names it (a provider without an organisation claim gets its
+one organisation at start); each role is a row of `memberships` (account, organisation, role,
+state), recomputed from every token of that provider: a new organisation is `account.created`
+there, a changed role `account.role_changed`, an organisation the token no longer names loses the
+role (`to: null`; the person's projects stay in it). Memberships at other providers are not
+touched. A login acts only in organisations of the provider it signed in with.
+
+`POST /v1/sso/start {provider, return, challenge}` → `{url}`;`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
 `/v1/sso/callback/<provider>`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>`;
-`POST /v1/sso/redeem {code, verifier}` → `{token, expires, org, provider, role, subject, person,
-state, account, email, name}` (`state` is `unlinked`, `linked` or `blocked`; `account` is the
-account ID; `email` is the **verified** email or `null`; `subject.email` is whatever the provider
-sent, for the person's own display only); `GET /v1/sso/me` (same body without `token`) and
-`POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`. Sign-ins in progress, one-time
+`POST /v1/sso/redeem {code, verifier}` → the login with its `token`; `GET /v1/sso/me` (same body
+without `token`) and `POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`:
+
+```json
+{"token": "<64 hex>", "expires": 1763600000, "account": "<64 hex>", "provider": "acme",
+ "org": "<the deployment's ID>", "role": "member",
+ "orgs": [{"id": "<64 hex>", "name": "acme.zitadel.cloud", "provider": "acme", "role": "member", "guest": false},
+          {"id": "<64 hex>", "name": "partner.zitadel.cloud", "provider": "acme", "role": "guest", "guest": true}],
+ "email": "ben@acme.org", "emailVerified": true, "name": "Ben", "picture": "https://…",
+ "subject": {"email": "ben@acme.org", "name": "Ben"}, "person": null, "state": "unlinked"}
+```
+
+`orgs` lists the organisations the account may act in now (a role, not disabled or removed
+there; guests only with `guests: "shared"`), oldest first; `role`, `person` and `state` are for the
+first of them (`state` is `unlinked`, `linked` or `blocked`: the end-to-end link). `email` is the
+**verified** email or `null`; `subject.email` is whatever the provider sent, for the person's own
+display only. A session whose account has no organisation left answers `401`.
+
+### Organisations and the `Scribyra-Org` header
+
+Every `/v1/sr/` and `/v1/admin/` request acts in one organisation: the one its `Scribyra-Org:
+<org id>` header names (one of the login's `orgs`), or, without the header, the account's only
+organisation. The service checks membership of that organisation on every request (read from
+`memberships` each time, so a role the provider took away or an administrator's stop applies at
+once) and scopes everything to it; end-to-end routes take the organisation from their path and
+check it the same way. Error codes the app can show:
+
+| Status, `code` | When |
+| --- | --- |
+| `400 org_required` | The account is in several organisations and the request named none |
+| `404 unknown_org` | The header names an organisation the caller holds no role in (whether it exists is never confirmed) |
+| `404` `unknown project` | A project of another organisation (or none), whoever asks |
+| `403 no_role`, `guest`, `no_organisation`, `account_disabled`, `account_removed` | Redeem refused (also as `#scribyra-sso-error=<code>` for the first three) |
+| `403` `administrators only` | An admin route from someone who is not an administrator of the organisation |
+
+ Sign-ins in progress, one-time
 grants and used back-channel logout tokens are in PostgreSQL (`sso_flows`, `sso_grants`,
 `sso_logout_jtis`; only hashes of states and grant codes), so any replica can finish a sign-in
 another one started. A source (an IPv4 address, or an IPv6 /64: what one host or subscriber
@@ -656,8 +739,8 @@ organisation-managed mode and admin read access. Migration 0007 drops them from 
 database (pending link-code links are deleted; logins from before providers were configured are
 revoked).
 
-**What is stored.** In PostgreSQL: each login's provider, subject, email, name, groups, guest
-mark and provider session ID, the SHA-256 of the login token (never the token), and the
+**What is stored.** In PostgreSQL: each login's provider, subject, email, name, picture and
+provider session ID, the SHA-256 of the login token (never the token), and the
 provider's **refresh token in plain text** (table `sso_logins`), plus the links between
 provider subjects and members (`sso_links`, with the email only when verified). Client secrets stay in their files. Protect database access and backups
 accordingly. Expired and revoked logins are deleted after a week. Discovery documents
@@ -677,8 +760,10 @@ the provider (rotated refresh tokens are stored). Every replica runs the recheck
 is claimed first (`FOR UPDATE SKIP LOCKED`, its `checked` time moved in the same statement), so
 only one replica ever uses a given refresh token: two using it would look like token theft to a
 provider with reuse detection. A refreshed ID token, when the provider sends
-one, is verified like a sign-in's (without the nonce) and updates the login's groups and guest
-mark; an account that no longer passes the group or guest rules has its logins revoked. If the
+one, is verified like a sign-in's (without the nonce) and updates the account's profile and its
+memberships at that provider (organisations, roles, guest marks): a role taken away ends access to
+that organisation at once (its heads polls end), and an account left without any role there has
+its logins at that provider revoked (`session.revoked`, not blocked). If the
 provider answers `invalid_grant` (account disabled or deleted, consent or session revoked),
 every login of that person is revoked and their link is **blocked**: they can sign in at the
 provider again, but stay blocked until an administrator unlinks them. Their account is marked
@@ -687,7 +772,7 @@ client error (except 408 and 429) revokes only that login without blocking, so a
 wrong client secret does not block everyone. Network and server errors keep the login
 and retry on the next pass (the claim is undone); the service logs only counters
 (`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
-simply expire after `session_hours`: **group changes, guest marks and provider disablement
+simply expire after `session_hours`: **role changes, guest marks and provider disablement
 reach such logins only when they expire**, so set `offline_access: true` (or use a provider that
 issues refresh tokens without it, like Keycloak) wherever that matters. Each revocation of a linked member's login (also a
 sign-out or a back-channel logout) closes their device sessions at once.
@@ -709,25 +794,35 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
   `organizations` (their discovery `issuer` is a template and will not match). Use
   `offline_access` to receive refresh tokens. The `email` claim may be missing or not
   verified for many accounts, so `email_domains` can refuse legitimate users; test it
-  with your tenant before relying on it. Group claims are object IDs by default, and a
-  user in too many groups gets an overage indicator instead of the list, so prefer app roles
-  (`groups_claim: "roles"`). Mark guests with `guest: {"claim": "acct", "equals": "1"}`.
-- *Google Workspace*: issuer `https://accounts.google.com`. Use `email_domains` with
-  your Workspace domain: the `hd` claim is checked too. Google sends no groups claim.
-  Google issues refresh tokens only for offline access requests, which this service
+  with your tenant before relying on it. Use `preset: "entra"` with app roles (define them on
+  the app registration and assign them); a multi-tenant app gets one organisation per tenant.
+- *Zitadel*: issuer `https://<instance>.zitadel.cloud`; `preset: "zitadel"` with the project's
+  ID. Create the roles (for example `scribyra:admin`, `scribyra:member`) in the project, grant
+  them to users of your organisation, and to other organisations through project grants (their
+  users are then guests here). Turn on "Assert roles on authentication" and "User roles inside ID
+  token".
+- *Google Workspace*: issuer `https://accounts.google.com`; `preset: "google"` with
+  `admin_subjects`. The Workspace domain (`hd`) is the organisation; consumer accounts are
+  refused. Google issues refresh tokens only for offline access requests, which this service
   does not make, so Google logins are not rechecked and last for `session_hours`.
-- *Okta*: use a custom authorization server's issuer
-  (`https://<org>.okta.com/oauth2/<server-id>`, or `/oauth2/default`). Groups appear
-  only after you add a groups claim to that authorization server; name it with
-  `groups_claim`. Use `offline_access` for refresh tokens.
-- *Keycloak*: issuer `https://<host>/realms/<realm>`. Add a "Group Membership" mapper
-  to the client to get a groups claim. Keycloak issues refresh tokens without
-  `offline_access` and supports back-channel logout (set the client's back-channel
-  logout URL).
+- *Okta and others*: a generic `claims` mapping, for example `{"roles": "$.groups"}` once you
+  added a groups claim to the authorization server (`https://<org>.okta.com/oauth2/<server-id>`).
+  Use `offline_access` for refresh tokens.
+- *Keycloak*: issuer `https://<host>/realms/<realm>`; `preset: "keycloak"` with realm or client
+  roles. Keycloak issues refresh tokens without `offline_access` and supports back-channel
+  logout (set the client's back-channel logout URL).
 
 For local trials and the tests there is a minimal provider,
 `cargo run -p scribyra-sync --example test-idp -- --config idp.json`; see the comment
-at the top of `crates/sync/examples/test-idp.rs`. It is not for production use.
+at the top of `crates/sync/examples/test-idp.rs` (it issues Zitadel-, Keycloak-, Entra- and
+Google-shaped tokens, serves userinfo, and lets tests change a user's roles and organisations
+between refreshes). It is not for production use.
+
+**Migration `0032`** (this branch had no production data): accounts, sessions and server-readable
+projects made before it are removed (their blobs are queued for removal) and everyone signs in
+again; `accounts` is keyed by (issuer, subject) and loses `role`, `guest` and `admin_grant`;
+`organisations` and `memberships` are new; projects belong to an organisation. End-to-end
+organisations and their identity links are kept.
 
 ## Server compile
 
@@ -924,7 +1019,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `shutdown_grace_seconds` | 25 | 1–3600: after SIGTERM, how long in-flight requests may finish before the process exits 0 |
 | `blob_store`, `data`, `s3_endpoint`, `s3_region`, `s3_bucket`, `s3_access_key_id`, `s3_secret_access_key_file`, `s3_path_style` | filesystem, `service-data` | Blob store ([Storage fields](#storage-fields)). Several replicas need S3: a filesystem blob directory is locked by one process |
 | `service_key_file` | none | 32-byte master key; required for `encryption: "server"`; back it up apart from the database |
-| `deployment` | none | The organisation's policy ([Deployment](#deployment)); its fields as `SCRIBYRA_SERVICE_DEPLOYMENT_NAME`, `…_ENCRYPTION`, `…_OFFLINE`, `…_COMPILE`, `…_LINK_SHARING`, `…_GUESTS`, `…_ADMINS`, `…_PROVIDERS`, `…_QUOTAS`, `…_AUDIT_RETENTION_DAYS`, `…_COMPILE_LIMITS`, `…_TEXLIVE` |
+| `deployment` | none | The deployment's policy ([Deployment](#deployment)); its fields as `SCRIBYRA_SERVICE_DEPLOYMENT_NAME`, `…_ENCRYPTION`, `…_OFFLINE`, `…_COMPILE`, `…_LINK_SHARING`, `…_GUESTS`, `…_NOTIFY_ON_ADMIN_ACCESS`, `…_PROVIDERS` (each with its claims mapping, [Sign-in](#single-sign-on-oidc)), `…_QUOTAS`, `…_AUDIT_RETENTION_DAYS`, `…_COMPILE_LIMITS`, `…_TEXLIVE`. There is no `admins` field any more |
 | `sr_entry_bytes` | 16 MiB | Largest log entry or initial state (1 KiB to 64 MiB − 64 B) |
 | `sr_object_bytes` | 32 MiB | Largest asset or history object (same range) |
 | `sr_snapshot_entries`, `sr_snapshot_bytes` | 2000, 32 MiB | Snapshot after this many entries or stored bytes since the last |
@@ -933,6 +1028,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `sr_maintenance_seconds` | 30 | 1–3600: background erasure, floor and blob clean-up pass |
 | `entry_inline_bytes` | 65536 | Entries (sealed) up to this size stay in PostgreSQL |
 | `metrics_bind` | none (off) | Listener for Prometheus `/metrics` ([Server compile](#server-compile)); pods use `0.0.0.0:9090` |
+| `compile_worker_bind`, `compile_worker_in_process`, `compile_heartbeat_seconds`, `compile_heartbeat_timeout_seconds` | `127.0.0.1:8788`, `false`, 5, 30 | The compile worker's probe listener; running one worker inside `serve` (development); job heartbeats ([Server compile](#server-compile)) |
 | `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds`, `sso_starts_per_minute` | 60, 60, 60 | [Single sign-on](#single-sign-on-oidc) |
 | `audit_purge_seconds` | 86400 | How often the audit log's retention task runs (1 s to 7 days) |
 | `audit_retention_seconds` | none | Development and tests only: keep audit events this many seconds instead of `deployment.audit_retention_days`. Below 30 days it takes effect only after the tables' owner or a superuser lowered `audit_settings.floor_seconds` |
@@ -950,8 +1046,8 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `scribyra-sync compile-worker` | Take [server compile](#server-compile) jobs from PostgreSQL and run them in the sandbox; probes on `compile_worker_bind`. Needs server compile, S3 blobs (unless `serve` is stopped) and the sandbox's requirements | 0 after SIGTERM/SIGINT (running jobs finish or go back to the queue within `shutdown_grace_seconds`), 1 on a startup failure |
 | `scribyra-sync migrate` | As above | 0, or 1 |
 | `scribyra-sync verify` | Check every capability object's blob and the usage rows | 0 when consistent |
-| `scribyra-sync audit verify [<seq>:<hash>]` | Recompute the audit log's hash chain ([Administration](#administration-and-the-audit-log)) | 0 when the chain holds, 1 otherwise |
-| `scribyra-sync account unblock <email|provider:email|account>` | Recovery when no administrator can act (all disabled or removed): makes the one matching account active again (a verified email at any provider, a provider's verified email, or an account ID; several matches are refused) and records `account.unblocked` as `system` with `by: "cli"`. Prints `{"event":"account_unblocked","account","from","changed"}` or `{"event":"account_unblock_failed","reason"}`. No ownership lock, so it runs beside serving replicas | 0, or 1 |
+| `scribyra-sync audit verify [--org <org>] [<seq>:<hash>]` | Recompute the audit log's hash chains, every one or one organisation's ([Administration](#administration-and-the-audit-log)) | 0 when every chain checked holds, 1 otherwise |
+| `scribyra-sync account unblock <email|provider:email|account>` | Recovery when no administrator can act (all disabled or removed): makes the one matching account active again in every organisation that stopped it, and clears a provider block (a verified email at any provider, a provider's verified email, or an account ID; several matches are refused); records `account.unblocked` as `system` with `by: "cli"` in those organisations' chains. Roles still come from the provider. Prints `{"event":"account_unblocked","account","from","organisations","changed"}` or `{"event":"account_unblock_failed","reason"}`. No ownership lock, so it runs beside serving replicas | 0, or 1 |
 | `scribyra-sync migrate-sqlite <dir>` | One-time import of a milestone-S data directory | 0 |
 
 **Probes and signals:**

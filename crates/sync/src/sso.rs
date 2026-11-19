@@ -306,9 +306,10 @@ pub async fn apply_grants(tx: &mut sqlx::PgConnection, deployment: &Deployment, 
     }
     Ok(applied)
 }
-/// The organisations an account holds a role in at a provider (for auditing what concerns them).
+/// The organisations an account has a membership in at a provider, with a role or one just taken
+/// away (for auditing what concerns them).
 async fn account_orgs(conn: &mut sqlx::PgConnection, account: &str, provider: Option<&str>) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT m.org FROM memberships m JOIN organisations o ON o.org = m.org WHERE m.account = $1 AND ($2::text IS NULL OR o.provider = $2) AND m.role IS NOT NULL ORDER BY m.org")
+    sqlx::query_scalar("SELECT m.org FROM memberships m JOIN organisations o ON o.org = m.org WHERE m.account = $1 AND ($2::text IS NULL OR o.provider = $2) ORDER BY m.org")
         .bind(account)
         .bind(provider)
         .fetch_all(conn)
@@ -792,10 +793,13 @@ impl Sso {
     }
 
     /// An administrator disabled or removed the account in one organisation (in the caller's
-    /// transaction): its access there ends with the transaction (logins read memberships at each
-    /// request) and its heads polls check again. Returns the end-to-end (org, person) pairs of that
-    /// organisation whose device sessions [`Sso::announce`] closes once the transaction committed.
+    /// transaction): its sessions at that organisation's provider are revoked (it signs in again
+    /// for any other organisation it is in there), its access to this organisation ends until an
+    /// administrator re-enables it, and its heads polls check again. Returns the end-to-end (org,
+    /// person) pairs of that organisation whose device sessions [`Sso::announce`] closes once the
+    /// transaction committed.
     pub async fn stop_in(tx: &mut sqlx::PgConnection, account: &str, org: &str) -> Result<Vec<(String, String)>, sqlx::Error> {
+        sqlx::query("UPDATE sso_logins SET revoked = true WHERE account = $1 AND NOT revoked AND provider = (SELECT provider FROM organisations WHERE org = $2)").bind(account).bind(org).execute(&mut *tx).await?;
         let fired: Vec<(String, String)> =
             sqlx::query_as("SELECT l.org, l.person FROM sso_links l JOIN accounts a ON a.issuer = l.issuer AND a.subject = l.subject WHERE a.account = $1 AND l.org = $2").bind(account).bind(org).fetch_all(&mut *tx).await?;
         crate::server_projects::notify_account(&mut *tx, account).await?;

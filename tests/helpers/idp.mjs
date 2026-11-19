@@ -11,8 +11,10 @@ import {service,APP_ORIGIN} from './service.mjs';
 const freePort=()=>new Promise((resolve,reject)=>{const server=createServer();server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const {port}=server.address();server.close(()=>resolve(port));});});
 export const CLIENT_ID='scribyra-service';
 
-/** Verified users `<name>@acme.test` with password `pw-<name>`. */
-export const people=names=>names.map(n=>({sub:`sub-${n}`,username:n,password:`pw-${n}`,email:`${n}@acme.test`,email_verified:true,name:n[0].toUpperCase()+n.slice(1)}));
+/** The provider role names the test deployments map (a generic `$.roles` claims mapping). */
+export const ROLES={admin:'scribyra:admin',member:'scribyra:member',guest:'scribyra:guest'};
+/** Verified members `<name>@acme.test` with password `pw-<name>` (provider role `scribyra:member`). */
+export const people=names=>names.map(n=>({sub:`sub-${n}`,username:n,password:`pw-${n}`,email:`${n}@acme.test`,email_verified:true,name:n[0].toUpperCase()+n.slice(1),roles:[ROLES.member]}));
 
 export async function idp({publicUrl,users,shortcuts=false}){
  await mkdir(resolve('tmp'),{recursive:true});
@@ -28,22 +30,26 @@ export async function idp({publicUrl,users,shortcuts=false}){
  });
  return{issuer,secretFile:join(dir,'secret'),
   async control(path){const r=await fetch(`${issuer}/control/${path}`);if(!r.ok)throw Error(`control ${path}: ${r.status}`);},
+  /** Changes a user's fields (roles, provider shapes, claims) from the next token on. */
+  async set(user,fields){const r=await fetch(`${issuer}/control/set?user=${encodeURIComponent(user)}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(fields)});if(!r.ok)throw Error(`set ${user}: ${r.status}`);},
   async close(){child.kill('SIGTERM');await rm(dir,{recursive:true,force:true});}};
 }
 
 /**
  * A service whose end-to-end deployment "Acme Lab" signs in with its own test provider (id
- * `acme`, label "Acme account"); ana@acme.test is its administrator. `provider` adds to the
- * provider, `deployment` to the deployment object, the rest to the service configuration.
- * `close()` stops both.
+ * `acme`, label "Acme account", one organisation, roles from the token's `roles` claim); the
+ * provider gives the users named in `admins` (ana by default) the administrator role. `provider`
+ * adds to the provider, `deployment` to the deployment object, the rest to the service
+ * configuration. `close()` stops both.
  */
-export async function orgService({users=people(['ana','ben','cat','dan','eve','fay']),admins=['acme:ana@acme.test'],shortcuts=true,deployment={},provider:rules={},...overrides}={}){
+export async function orgService({users=people(['ana','ben','cat','dan','eve','fay']),admins=['ana'],shortcuts=true,deployment={},provider:rules={},...overrides}={}){
  const port=await freePort(),publicUrl=`http://127.0.0.1:${port}`;
+ users=users.map(u=>admins.includes(u.username)?{...u,roles:[...new Set([ROLES.admin,...(u.roles||[])])]}:u);
  const provider=await idp({publicUrl,users,shortcuts});
  let s;
  try{
   s=await service({bind:`127.0.0.1:${port}`,public_url:publicUrl,...overrides,
-   deployment:{name:'Acme Lab',encryption:'e2ee',admins,providers:[{id:'acme',label:'Acme account',issuer:provider.issuer,client_id:CLIENT_ID,client_secret_file:provider.secretFile,...rules}],...deployment}});
+   deployment:{name:'Acme Lab',encryption:'e2ee',providers:[{id:'acme',label:'Acme account',issuer:provider.issuer,client_id:CLIENT_ID,client_secret_file:provider.secretFile,claims:{roles:'$.roles'},roles:ROLES,...rules}],...deployment}});
  }catch(error){await provider.close();throw error;}
  const close=s.close;
  return Object.assign(s,{provider,async close(){await close();await provider.close();}});

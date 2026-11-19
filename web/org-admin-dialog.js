@@ -155,7 +155,7 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
   const s=await admin.settings(),dl=element('dl',null,'org-settings');dl.setAttribute('aria-label','Deployment settings');
   const add=(term,value)=>{dl.append(element('dt',term),element('dd',value));};
   add('Name',s.name);add('Encryption',s.encryption==='server'?'Server-readable':'End to end');add('Offline editing',s.offline?'On':'Off (online only)');add('Compile',s.compile);
-  add('Share links',s.linkSharing?'On':'Off');add('Guests',s.guests);add('Administrators (configured)',s.admins.join(', ')||'None');
+  add('Share links',s.linkSharing?'On':'Off');add('Guests',s.guests);if(s.admins)add('Administrators (configured)',s.admins.join(', ')||'None');
   add('Audit log kept',`${s.auditRetentionDays} days`);add('Quotas',`${size(s.quotas.deployment_bytes)} in all, ${size(s.quotas.project_bytes)} per project, ${size(s.quotas.member_bytes)} per member`);
   for(const p of s.providers)add(`Sign-in: ${p.label}`,[p.issuer,p.emailDomains.length?`domains ${p.emailDomains.join(', ')}`:'',p.adminGroups.length?`admin groups ${p.adminGroups.join(', ')}`:'',p.memberGroups.length?`member groups ${p.memberGroups.join(', ')}`:'',`sessions ${p.sessionHours} h`].filter(Boolean).join(' · '));
   add('Policy hash',s.policy);

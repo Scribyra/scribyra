@@ -1,16 +1,17 @@
 // Signing in to an end-to-end deployment in the real app with the repository's OIDC test
 // provider: the dialog starts from the deployment's address and its "Sign in with …" button;
 // the administrator creates the organisation; a colleague signs in, asks to join and is approved;
-// a guest account and someone outside the member groups are refused with a plain message; and a
+// a guest account and someone without a Scribyra role at the provider are refused with a plain
+// message; and a
 // member who signs out signs in again to keep syncing.
 import {test,expect} from '@playwright/test';
-import {orgService,people} from '../helpers/idp.mjs';
+import {orgService,people,ROLES} from '../helpers/idp.mjs';
 import {dialogOf,signIn,create,join,providerLogin} from '../helpers/org-browser.mjs';
 
 const users=[
- ...people(['ana','ben','cleo']).map(u=>({...u,groups:['lab']})),
- {sub:'sub-gus',username:'gus',password:'pw-gus',email:'gus@partner.test',email_verified:true,name:'Gus',groups:['lab'],claims:{acct:1}},
- {sub:'sub-olga',username:'olga',password:'pw-olga',email:'olga@acme.test',email_verified:true,name:'Olga',groups:['elsewhere']},
+ ...people(['ana','ben','cleo']),
+ {sub:'sub-gus',username:'gus',password:'pw-gus',email:'gus@partner.test',email_verified:true,name:'Gus',roles:[ROLES.member],claims:{acct:1}},
+ {sub:'sub-olga',username:'olga',password:'pw-olga',email:'olga@acme.test',email_verified:true,name:'Olga',roles:['other-app:user']},
 ];
 async function profile(browser,info){
  const context=await browser.newContext();
@@ -19,7 +20,7 @@ async function profile(browser,info){
 }
 
 test('joining through the organisation’s sign-in: the admin creates it, a colleague asks and is approved, guests and outsiders are refused',async({browser},info)=>{
- const lab=await orgService({users,shortcuts:false,provider:{groups_claim:'groups',member_groups:['lab'],guest:{claim:'acct',equals:'1'}}});
+ const lab=await orgService({users,shortcuts:false,provider:{claims:{roles:'$.roles',guest:{path:'$.acct',equals:'1'}}}});
  const contexts=[];
  try{
   // Nothing is contacted before the person enters an address and signs in.
@@ -44,7 +45,7 @@ test('joining through the organisation’s sign-in: the admin creates it, a coll
   await expect(dialogOf(ben.page).getByRole('list',{name:'Members'})).toContainText('ben@acme.test');
   expect(await lab.sql("SELECT count(*) FROM sso_links WHERE subject = 'sub-ben'")).toBe('1');
 
-  // A guest account and someone outside the member groups are turned away before anything else.
+  // A guest account and someone without a Scribyra role are turned away before anything else.
   const gus=await profile(browser,info);contexts.push(gus.context);
   await gus.page.getByRole('button',{name:'Remote backup',exact:true}).click();
   await dialogOf(gus.page).getByRole('textbox',{name:'Deployment address'}).fill(lab.config.public_url);
@@ -58,10 +59,10 @@ test('joining through the organisation’s sign-in: the admin creates it, a coll
   await dialogOf(olga.page).getByRole('button',{name:'Continue'}).click();
   await dialogOf(olga.page).getByRole('button',{name:'Sign in with Acme account'}).click();
   await providerLogin(olga.page,'olga');
-  await expect(olga.page.getByText('Your account is not in a group that may use this organisation’s Scribyra.',{exact:false})).toBeVisible({timeout:30000});
+  await expect(olga.page.getByText('Your account has no Scribyra role.',{exact:false})).toBeVisible({timeout:30000});
   expect(await lab.sql("SELECT count(*) FROM sso_logins WHERE subject IN ('sub-gus','sub-olga')")).toBe('0');
 
-  // Cleo is a member of the groups but nobody approved her: she waits, with no session.
+  // Cleo is a member at the provider but nobody approved her: she waits, with no session.
   const cleo=await profile(browser,info);contexts.push(cleo.context);
   await signIn(cleo.page,lab,'cleo');
   await expect(dialogOf(cleo.page)).toContainText('waiting to be let in',{timeout:30000});

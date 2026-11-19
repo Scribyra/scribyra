@@ -61,7 +61,7 @@ fn actions(events: &[Value]) -> Vec<String> {
 }
 /// The organisation of the test provider (the deployment's first, so its ID).
 fn org(sr: &Sr) -> String {
-    sr.env.org()
+    psql(sr, "SELECT org FROM deployment")
 }
 /// `scribyra-sync audit verify --org <org> [expect]` for that organisation's chain: (exit code,
 /// report).
@@ -149,7 +149,7 @@ fn every_admin_route_refuses_everyone_but_administrators() {
     assert_eq!(ben.details(&p).status, 200);
     assert_eq!(psql(&sr, "SELECT count(*) FROM audit_log WHERE action IN ('project.admin_open', 'project.deleted', 'account.disabled', 'export.everything', 'audit.export')"), "0");
     // Roles come from the provider: the admin area has no route that changes them.
-    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{ben_account}/role"), Some(json!({"role": "admin"}))).status, 405);
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{ben_account}/role"), Some(json!({"role": "admin"}))).status, 404);
     // The administrator reaches every read route.
     for path in ["/v1/admin/members", "/v1/admin/projects", "/v1/admin/audit", "/v1/admin/settings"] {
         assert_eq!(alice.call("GET", path, None).status, 200, "{path}");
@@ -570,7 +570,7 @@ fn disable_unblock_remove_transfer_open_and_edit_as_administrator() {
     let listed = alice.call("GET", "/v1/admin/members", None).json();
     let roles: Vec<(&str, &str)> = listed["members"].as_array().unwrap().iter().map(|m| (m["email"].as_str().unwrap(), m["role"].as_str().unwrap())).collect();
     assert_eq!(roles, [("alice@example.org", "admin"), ("ben@example.org", "member"), ("cat@example.org", "member")]);
-    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{cat_id}/role"), Some(json!({"role": "admin"}))).status, 405);
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{cat_id}/role"), Some(json!({"role": "admin"}))).status, 404);
 
     // Disable: sessions end at once (a waiting heads poll too), sign-in refused until unblocked.
     let version = cat.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
@@ -735,7 +735,7 @@ fn the_provider_taking_the_admin_role_away_demotes_at_the_next_recheck() {
     // Nobody demotes her in the admin area: the provider decides.
     let alice = sr.api(&sr.login("alice"));
     let erin_id = account_of(&erin);
-    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{erin_id}/role"), Some(json!({"role": "member"}))).status, 405);
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{erin_id}/role"), Some(json!({"role": "member"}))).status, 404);
     sr.env.idp.set("erin", json!({"roles": [MEMBER]}));
     psql(&sr, "UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked");
     eventually("erin's demotion", || erin.call("GET", "/v1/admin/members", None).status == 403);

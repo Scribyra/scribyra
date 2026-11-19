@@ -1,6 +1,6 @@
 // The admin area of a server-readable deployment in the real app (design slice 10), across three
 // browser profiles with the repository's OIDC test provider: Ben and Cat add projects and share;
-// Ana, an administrator through the deployment's `admins`, sees every project in Admin, opens
+// Ana, an administrator by her provider role, sees every project in Admin, opens
 // Ben's as administrator (read-only, and Ben's list then says an administrator opened it),
 // transfers Cat's to Ben, removes Ben (his open project stops syncing and what he owned passes to
 // Cat), deletes a project (gone for its members), exports everything (the zip holds the projects'
@@ -87,7 +87,7 @@ test('the admin area: every project, open as administrator, transfer, remove, de
   for(const path of ['/v1/admin/members','/v1/admin/projects','/v1/admin/audit','/v1/admin/export','/v1/admin/settings'])
    expect((await fetch(s.url+path,{headers:{Authorization:'ScribyraSSO '+catToken}})).status,path).toBe(403);
 
-  // Ana, an administrator by the deployment's admins list, sees every project and member.
+  // Ana, an administrator by her provider role, sees every project and member.
   await signIn(ana.page,s,'ana');
   let admin=await openAdmin(ana.page);
   await expect(admin.getByRole('tab',{name:'Members'})).toHaveAttribute('aria-selected','true');
@@ -172,6 +172,6 @@ test('the admin area: every project, open as administrator, transfer, remove, de
   for(const action of ['project.created','share.created','project.admin_open','project.transferred','account.removed','project.deleted','export.everything'])
    expect(lines.some(l=>l.action===action),action).toBe(true);
   expect(lines.at(-1).head.hash).toMatch(/^[0-9a-f]{64}$/);
-  expect(await s.sql("SELECT count(*) FROM audit_events WHERE action = 'audit.export'")).toBe('2');
+  expect(await s.sql("SELECT count(*) FROM audit_log WHERE action = 'audit.export'")).toBe('2');
  }finally{for(const c of contexts)await c.close().catch(()=>{});await s.close();}
 });

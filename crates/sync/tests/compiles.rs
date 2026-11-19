@@ -228,7 +228,7 @@ fn compile_modes_and_the_project_switch_are_enforced() {
     assert_eq!(dan.compile_status(&p).status, 200);
     // Each change of the switch is in the audit log once, with who made it (refusals are not).
     let modes: Vec<(String, String)> = postgres()
-        .psql(&both.db(), &format!("SELECT a.email || ' ' || (e.detail->>'mode') FROM audit_events e JOIN accounts a ON a.account = e.actor WHERE e.action = 'project.compile_mode' AND e.target_id = '{p}' ORDER BY e.seq"))
+        .psql(&both.db(), &format!("SELECT a.email || ' ' || (e.detail->>'mode') FROM audit_log e JOIN accounts a ON a.account = e.actor WHERE e.action = 'project.compile_mode' AND e.target_id = '{p}' ORDER BY e.seq"))
         .lines()
         .map(|l| l.split_once(' ').map(|(a, b)| (a.to_owned(), b.to_owned())).unwrap())
         .collect();
@@ -657,10 +657,10 @@ fn concurrent_requests_across_projects_never_pass_the_member_rate() {
 fn guests_cannot_change_where_a_project_compiles() {
     // Review L2: a guest editor could switch the compile mode, though guests may not share.
     let mut users = people();
-    users.as_array_mut().unwrap().push(json!({"sub": "sub-gus", "username": "gus", "password": "pw-gus", "email": "gus@partner.org", "email_verified": true, "name": "Gus", "claims": {"acct": "1"}}));
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-gus", "username": "gus", "password": "pw-gus", "email": "gus@partner.org", "email_verified": true, "name": "Gus", "roles": [MEMBER], "claims": {"acct": "1"}}));
     let mut d = deployment("both", json!({}));
     d["guests"] = json!("shared");
-    d["provider"] = json!({"guest": {"claim": "acct", "equals": "1"}});
+    d["provider"] = json!({"claims": {"roles": "$.roles", "guest": {"path": "$.acct", "equals": "1"}}});
     let sr = Sr::start(Blobs::Fs, users, json!({"compile_heartbeat_seconds": 1, "compile_heartbeat_timeout_seconds": 3}), d);
     let (ana, gus) = (sr.api(&sr.login("alice")), sr.api(&sr.login("gus")));
     let (p, _) = paper(&ana, "Guest edited", &hello("x"));

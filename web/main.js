@@ -301,7 +301,7 @@ async function openOrgPanel(prefill={}){
   if(prefill.server||orgServerConnected()&&!orgConnected())orgPanel=orgServerDialog({engine:serverEngine(),anchor,prefill,listProjects:()=>storage.listProjects(),onChanged:()=>{void refreshProjects();},onOpen:id=>openProject(id)});
   else orgPanel=orgDialog({engine:remoteBackup(),server:serverEngine,anchor,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
 }
-const SIGN_IN_ERRORS={guest:'Guest accounts can’t use this organisation’s Scribyra.',not_member:'Your account is not in a group that may use this organisation’s Scribyra. Ask your administrator.'};
+const SIGN_IN_ERRORS={guest:'Guest accounts can’t use this organisation’s Scribyra.',no_role:'Your account has no Scribyra role. Ask your administrator to grant one.',no_organisation:'Your identity provider did not say which organisation your account belongs to.',not_member:'Your account is not in a group that may use this organisation’s Scribyra. Ask your administrator.'};
 function takeOrgFragment(){
   const hash=location.hash;
   const kind=['#scribyra-sso=','#scribyra-sso-error='].find(prefix=>hash.startsWith(prefix));
