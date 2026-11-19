@@ -100,20 +100,18 @@ Everything about a deployment is in its one configuration file (`SCRIBYRA_SERVIC
     "offline": true,
     "compile": "both",
     "link_sharing": false,
-    "guests": "off",
-    "admins": ["it-admin@acme.org"],
+    "guests": "shared",
+    "notify_on_admin_access": true,
     "providers": [
       {
         "id": "acme",
         "label": "Acme account",
-        "issuer": "https://login.microsoftonline.com/<tenant>/v2.0",
+        "issuer": "https://acme.zitadel.cloud",
         "client_id": "…",
         "client_secret_file": "acme-oidc-secret",
-        "email_domains": ["acme.org"],
-        "groups_claim": "groups",
-        "admin_groups": ["scribyra-admins"],
-        "member_groups": [],
-        "guest": {"claim": "acct", "equals": "1"},
+        "preset": "zitadel",
+        "zitadel_project_id": "273800000000000001",
+        "roles": {"admin": ["scribyra:admin"], "member": ["scribyra:member"], "guest": ["scribyra:guest"]},
         "offline_access": true,
         "session_hours": 12,
         "recheck_minutes": 10
@@ -134,9 +132,9 @@ Everything about a deployment is in its one configuration file (`SCRIBYRA_SERVIC
 | `offline` | `true` | `false` makes the deployment online-only. |
 | `compile` | `"browser"` | `"browser"`, `"server"` or `"both"`. `"server"` and `"both"` need `encryption: "server"` and `texlive`. |
 | `link_sharing` | `false` | Whether editors may create share links (section 4). |
-| `guests` | `"off"` | `"off"` refuses provider guest accounts; `"shared"` admits them to projects shared with them only. |
-| `admins` | `[]` | Administrators whatever groups say; the bootstrap for a new deployment. `provider:email` (a verified email at that provider), a plain email only within a provider's `email_domains` (other providers do not vouch for it), or `issuer#subject`. |
-| `providers` | required, 1–16 | OIDC providers (section 3). Each `id` is a short lowercase name; each provider's redirect URI is `<public_url>/v1/sso/callback/<id>`, so a response counts only for the provider it came from. |
+| `guests` | `"off"` | `"off"` refuses accounts the provider marks as guests; `"shared"` admits them to projects shared with them only. Always `"off"` in end-to-end mode. |
+| `notify_on_admin_access` | `true` | Members see "An administrator opened this project on …" in a project an administrator opened; the access is audited either way. |
+| `providers` | required, 1–16 | OIDC providers (section 3). Each `id` is a short lowercase name; each provider's redirect URI is `<public_url>/v1/sso/callback/<id>`, so a response counts only for the provider it came from. Each provider maps its claims to organisations and roles with a `preset` (`zitadel`, `keycloak`, `entra`, `google`) or a generic `claims` mapping (section 3, "Identity, organisations and roles come from the provider"). There is no list of administrators in the configuration. |
 | `quotas` | as shown | Stored bytes per deployment, per project and per member's owned projects. Exceeding returns `507`; local saving continues. |
 | `audit_retention_days` | `400` | 30–3650; older audit events are purged by a recorded purge (section 5). |
 | `compile_limits` | as shown | Section 6. |
@@ -168,19 +166,41 @@ The token is a bearer token sent in `Authorization`; the app keeps it in `sessio
 
 **Logout.** "Sign out" calls `POST /v1/sso/logout`, which revokes the session; the app then forgets the token and, in an online-only deployment, deletes local copies. When the provider advertises `end_session_endpoint`, the app offers "Also sign out of Acme", which navigates there with `id_token_hint` (kept by the service, handed over once for this purpose) and `post_logout_redirect_uri`. Back-channel logout tokens (Keycloak and others) revoke sessions at once, as built. A provider that disables a person makes the next re-check fail with `invalid_grant`: the service revokes their sessions and marks the account **blocked** until an administrator unblocks it or the provider admits them again.
 
-**Group-to-role mapping (optional).** With `groups_claim`, members of `admin_groups` are administrators; when `member_groups` is non-empty, only people in it (or `admins`) may sign in at all. Roles from groups are recomputed at every sign-in and re-check, so removing someone from the admin group at the IdP takes effect within one re-check. Without groups, the `admins` list and the admin area decide roles. Entra ID users with many groups should use app roles in the `roles` claim (set `groups_claim: "roles"`).
+### Identity, organisations and roles come from the provider (Paul, 19 November 2026)
 
-**Guests.** Providers mark guests differently (Entra `acct = 1`, a guests group, a separate issuer); `guest` in the provider configuration names the claim and value. With `guests: "off"` such sign-ins are refused ("Guest accounts can't use Acme's Scribyra"). With `"shared"` a guest account can open projects shared with it, with the role it was given, but cannot create projects, browse the member directory or be made an administrator. Nobody becomes a guest any other way: there are no Scribyra-made guest accounts.
+Paul: "the answers are in how Zitadel works — user IDs should be received from the OIDC provider, including their emails, permissions (by Zitadel roles for example) and more." Scribyra is a pure relying party. It keeps no list of people, administrators or organisations of its own; it reads them from the provider's tokens at every sign-in and refresh.
+
+**Identity.** An account is `(issuer, sub)`. Email, `email_verified`, name and picture are copied from the ID token (and the userinfo endpoint when the token lacks them) at each sign-in and refresh. An email counts for matching invitations only when `email_verified` is true; a missing `email_verified` is false.
+
+**Claims mapping.** Each provider names how its claims become an organisation, roles and guest status, either with a preset or with a generic mapping of JSON paths:
+
+| Preset | Organisation | Roles | Guest | Scopes requested |
+| --- | --- | --- | --- | --- |
+| `zitadel` | Each organisation that granted a role: the keys of the role's org map in `urn:zitadel:iam:org:project:{projectId}:roles` (or `urn:zitadel:iam:org:project:roles`); the name from that map's value; the home organisation from `urn:zitadel:iam:user:resourceowner:id` | The role keys of that claim | Granted a role by an organisation other than the user's resource owner (a project grant to another org), or holding a role mapped to `guest` | `openid profile email urn:zitadel:iam:org:project:id:{projectId}:aud urn:zitadel:iam:org:projects:roles` |
+| `keycloak` | `organization` claim (Keycloak 26 organisations) when configured, else one organisation per provider | `realm_access.roles` and `resource_access.{client_id}.roles`; `groups` optionally | A mapped role | `openid profile email` (+ `organization`) |
+| `entra` | `tid` (tenant) | `roles` (app roles); `groups` optionally | `acct = 1` (B2B guest) or a mapped role | `openid profile email offline_access` |
+| `google` | `hd` (Workspace domain); accounts without `hd` are refused | None in the token: everyone in an allowed domain is a member; administrators by `admin_subjects` (exact `sub` values) or a Google group checked through the Directory API (later) | None | `openid profile email` |
+| generic | `claims.organisation` (JSON path) and `claims.organisation_name` | `claims.roles` (JSON path to a string or a list) | `claims.guest {path, equals}` or a mapped role | `scopes` |
+
+`roles` maps provider role names to Scribyra's deployment roles, for example `{"admin": ["scribyra:admin"], "member": ["scribyra:member"], "guest": ["scribyra:guest"]}`; the highest mapped role wins. A user with no mapped role in any organisation is refused: "Your account has no Scribyra role. Ask your administrator to grant one in <provider>." Only claims from the provider that issued the token are read; organisations are scoped by provider, so `tid` from one issuer can never name an organisation of another.
+
+**Organisations.** A deployment serves one or several organisations, each identified by `(provider, organisation claim)`. Without an organisation claim the provider has one organisation. Organisations are isolated from each other: projects, sharing, the member directory, the admin area and the audit log chain are per organisation, and an administrator administers only the organisations in which they hold `admin`. A person with roles in two organisations has one account and works in one organisation at a time (the app's organisation switcher); projects never move between organisations.
+
+**Guests.** Whatever the provider marks as guest, as in the table. A guest sees only projects explicitly shared with them, cannot create projects, browse the directory or be an administrator. `guests: "off"` refuses them. End-to-end deployments admit no guests.
+
+**Lifecycle.** Accounts and organisation memberships are created just in time at first sign-in. Roles, organisations and guest status are recomputed from every refreshed ID token (re-check interval, default 10 minutes, so `offline_access` is required for prompt revocation) and at each sign-in; a removed role, a refused refresh token or a back-channel logout cuts access at once (sessions revoked, long polls ended). Removing someone's last role in an organisation keeps their projects there (ownership passes to an administrator of that organisation the next time one acts, or explicitly). A share to an email nobody has signed in with yet stays pending and becomes effective when an account with that verified email signs in as a member of the same organisation (or as an allowed guest of it). SCIM provisioning (so that people can be shared with before their first sign-in, and removals arrive without waiting for a refresh) is a possible later addition.
+
+**Administrator access.** Administrators can open any project of their organisation (section 5). With `notify_on_admin_access` (default on) members see "An administrator opened this project on …" in that project; the access is always audited.
 
 ### Accounts and roles
 
-| Deployment role | Can |
+| Deployment role (per organisation) | Can |
 | --- | --- |
-| **Administrator** | Everything (section 5). |
-| **Member** | Create projects; share their projects; see the member directory (names and emails) to share with. |
+| **Administrator** | Everything in their organisation (section 5). |
+| **Member** | Create projects; share their projects; see their organisation's member directory (names and emails) to share with. |
 | **Guest** | Open projects shared with them; nothing else. |
 
-Accounts are created at first sign-in (members and admitted guests). An administrator can disable an account (sessions revoked at once, sign-in refused) and remove it (shares removed, owned projects transferred to a chosen member or to the administrator).
+Roles are assigned in the provider only. The admin area shows them read-only with the provider they come from; it can disable an account in Scribyra (sessions revoked, sign-in refused until re-enabled) as an emergency stop, but granting or removing roles is done in the provider.
 
 ### End-to-end mode: binding device keys to OIDC identities
 
@@ -188,7 +208,7 @@ End-to-end mode still needs device keys, because only devices hold project keys.
 
 - **Session.** Every org session requires a live OIDC session. `POST /v1/auth/session` takes the OIDC session token *and* a device signature over `(service, org, device, OIDC session hash, server challenge)`; it succeeds only if the device is active in the membership log for the person linked to that OIDC account. A device key alone is never enough; an OIDC session alone gives no keys. Device sessions end with the OIDC session.
 - **Joining.** Someone who signs in and has no person yet sends `person.request` with their new device's keys; an administrator's app shows "Ben (ben@acme.org, via Acme) asks to join" and signs `person.approve`. The service links `(provider, subject)` to the person when it accepts the request. Invitations by email (section 4) pre-fill the role and let the admin's app approve a matching request in one step; the approval is still an admin's signature, because the clients cannot verify a provider's claims.
-- **Bootstrap.** The organisation's genesis is signed by the first configured administrator to sign in; the service accepts a genesis only from an OIDC session of an account in `admins`, and only once.
+- **Bootstrap.** The organisation's genesis is signed by the first person to sign in with the provider role mapped to `admin` in that organisation; the service accepts a genesis only from such a session, and only once per organisation.
 - **New devices.** A new device of a signed-in person posts a device request (the slice 5 SSO path); an existing device of that person compares codes and signs `device.add`; with no device left, the recovery kit plus an OIDC session re-enrols, or an administrator re-enrols after comparing codes.
 - **Blocking.** Provider disablement closes device sessions at once; key access ends with the next epoch once an administrator removes the person (Appendix A).
 
@@ -196,7 +216,7 @@ End-to-end mode still needs device keys, because only devices hold project keys.
 
 **Projects have one owner** (who created it, or to whom it was transferred) and shares: `(project, account, role)` with roles editor, reviewer or viewer, as before mapped to the app's modes (Editing/Reviewing/Viewing; reviewers and viewers comment).
 
-**Invitations.** An owner or editor invites by email with a role: `POST /v1/sr/projects/{p}/invitations {email, role}`. An email counts only at a provider that vouches for it, as for `admins`: a plain email names accounts at providers whose `email_domains` include its domain (or at the deployment's only provider), `provider:email` that provider's accounts; with several providers and none vouching, the inviter names one. If such an account with that verified email exists the share is created at once; otherwise the invitation waits and turns into a share the first time someone signs in with that verified email through such a provider. Emails are stored and compared in one normal form (trimmed, Unicode lowercase). Invitations expire (default 30 days) and can be withdrawn. Inviting does not send email in this slice; the app shows "Ask Ben to sign in to Acme's Scribyra", and the project appears in his list. Guests can be invited only when `guests: "shared"`.
+**Invitations.** An owner or editor invites by email with a role: `POST /v1/sr/projects/{p}/invitations {email, role}`. Invitations stay inside the project's organisation: the email names an account of that organisation (same provider and organisation claim) or, with `guests: "shared"`, a guest of it. If such an account with that verified email exists the share is created at once; otherwise the invitation waits and turns into a share the first time someone signs in with that verified email as a member (or allowed guest) of that organisation. Emails are stored and compared in one normal form (trimmed, Unicode lowercase). Invitations expire (default 30 days) and can be withdrawn. Inviting does not send email in this slice; the app shows "Ask Ben to sign in to Acme's Scribyra", and the project appears in his list. Guests can be invited only when `guests: "shared"`.
 
 **Share links** (`link_sharing: true` only, slice 13): an editor creates a link that grants viewer or reviewer access to any signed-in account of the deployment that opens it (never anonymous, never to accounts the deployment refuses). Links can be revoked and are audited.
 
@@ -375,16 +395,16 @@ spec:
   offline: true
   linkSharing: false
   guests: "off"
-  admins: [it-admin@acme.org]
+  notifyOnAdminAccess: true
   providers:
     - id: acme
       label: Acme account
-      issuer: https://login.microsoftonline.com/<tenant>/v2.0
+      issuer: https://acme.zitadel.cloud
       clientId: "…"
       clientSecretRef: {name: acme-oidc, key: client-secret}
-      emailDomains: [acme.org]
-      groupsClaim: groups
-      adminGroups: [scribyra-admins]
+      preset: zitadel
+      zitadelProjectId: "273800000000000001"
+      roles: {admin: ["scribyra:admin"], member: ["scribyra:member"], guest: ["scribyra:guest"]}
   masterKeyRef: {name: acme-master-key, key: key}   # generated by the operator if absent; must be backed up
   postgres:
     external: {urlSecretRef: {name: acme-db, key: url}}
@@ -507,6 +527,10 @@ The former slices "passkeys and teams" and "switching encryption modes" are remo
 - 10 November: encryption as a per-organisation setting — **replaced** by decision 5. Recovery by re-share, recovery code and optional org recovery key — **kept for end-to-end mode**. Sign-in order (invite links, passkeys, OIDC) — **replaced** by decision 2. PostgreSQL and the blob storage trait — **kept**. Admin read access as a setting — **removed**.
 - 17 November: SSO first-class — **kept** (now the only sign-in); invitations with roles — **kept** as sharing; device sync — **kept**; online compile discussion — **decided** by decision 6 (native TeX Live, not BusyTeX under wasmtime).
 - Architect, 9 November: role scope at receivers — **kept** for end-to-end mode; server-readable mode checks roles on the server (slice 12).
+
+### Paul, 19 November 2026
+
+9. Scribyra is a pure OIDC relying party, "how Zitadel works": identity, email, organisation membership, roles and guest status come from the provider's tokens, re-evaluated on every refresh; no administrator lists in the configuration; several organisations per deployment when the provider names them (section 3). Administrator access to members' projects is a setting, `notify_on_admin_access`, default on, always audited.
 
 ### Open questions for Paul
 
