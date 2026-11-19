@@ -410,6 +410,7 @@ also in the organisations that lost them); an organisation the person left, or w
 administrator disabled or removed them, does not see their later sessions.
 | `account.created`, `account.role_changed` | An account's first sign-in into an organisation; a role the provider changed at a sign-in or refresh (`to: null` when it took the role away) | `{provider, role}`; `system`, `{from, to, by: "provider"}` |
 | `account.disabled`, `account.unblocked`, `account.removed` | Admin area; `account unblock` (`system`, `by: "cli"`) | `{from}`; removal `{transferredTo, projects, shares}` |
+| `organisation.renamed` | An administrator renamed the organisation | the organisation; `{from, to}` |
 | `project.created`, `project.renamed`, `project.deleted`, `project.transferred` | Owners, editors and administrators (`admin: true` when an administrator acted) | target the project |
 | `project.admin_open`, `project.admin_edit` | Open or edit as administrator | |
 | `project.compile_mode` | `PUT …/settings` | `{mode}` |
@@ -472,6 +473,7 @@ disable each other.
 | `GET /v1/admin/export` | → a streamed zip (stored, UTF-8 names; ZIP64 sizes and offsets from 4 GiB): `projects/<name>-<id8>/<path>` for every file of every project materialised from the server's state, `projects.json` (per project its folder, `seq`, `mainFile` and `missing`: assets whose object is not on the server, and files the project tree marks as conflicts, such as an invalid name, which are never written; every entry is a relative path without `.`, `..`, backslashes, colons or control characters, unique ignoring case), `members.json`, `audit.jsonl` (every event of the organisation's chain and a final `{"head": {seq, hash}}`, streamed with a data descriptor); only the organisation's projects and members. One export at a time per replica (`429`); it holds one file in memory at a time (an asset is at most `sr_object_bytes`) |
 | `GET /v1/admin/audit?actor&action&target&targetType&from&to&before&limit` | → the organisation's chain: `{org, events: [{seq, time, actor, actorName, actorEmail, ip, action, targetType, target, detail, prev, hash}], head: {seq, hash}, next}` newest first; `action` matches an action or its first part (`project`); `from`/`to` in ms; `limit` ≤ 500; page with `before=next` |
 | `GET /v1/admin/audit/export?…&format=jsonl|csv` | → the filtered events oldest first, as JSON lines ending with `{"head": …}` or CSV (every field quoted, formula prefixes defused, a final `# head <seq>:<hash>` line); header `Scribyra-Audit-Head: <seq>:<hash>`; recorded as `audit.export` |
+| `PUT /v1/admin/organisation` | `{name}` (1–128 characters) → `{org, name}`: renames this organisation; no token renames it afterwards |
 | `GET /v1/admin/settings` | → the deployment's policy (providers with their claims mapping, without client IDs or secret files; `adminSubjects` as a count), `notifyOnAdminAccess`, the caller's `org` and the `policy` hash |
 
 In end-to-end mode open, edit, transfer and export answer `409` (the service cannot read
@@ -685,7 +687,7 @@ organisation:
 | `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles`, `resource_access.{client_id}.roles` (another client's roles do not count) and `groups` (a leading `/` dropped); with organisations, see below | a role mapped to `guest` | `organization` with `keycloak_organizations` |
 | `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B); without `acct`, an `idp` claim other than the tenant's own `https://sts.windows.net/{tid}/` (or refused with `entra_require_acct`); or a role mapped to `guest` | `offline_access` |
 | `google` | `hd` (accounts without it are refused, and so is a domain outside `hosted_domains`, else `email_domains`) | everyone a member; `admin_subjects` administrators | never | none |
-| generic `claims` | `claims.organisation`, `claims.organisation_name` | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
+| generic `claims` | `claims.organisation`, `claims.organisation_name` (names a new organisation only) | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
 
 **Keycloak roles and organisations.** Realm, client and group roles belong to no organisation, so
 for someone whose token lists several organisations they count nowhere (review M4: an
@@ -712,7 +714,11 @@ what the token lacks is taken from the provider's userinfo endpoint (whose `sub`
 `email_verified` is false: such an email is never shown as the account's and never matches an
 invitation. Each organisation is a row of `organisations` (provider, claim value, name; random
 64-hex ID), made when a token first names it (a provider without an organisation claim gets its
-one organisation at start); each role is a row of `memberships` (account, organisation, role,
+one organisation at start). Its name is the first token's; later only a preset's organisation
+name, which the provider itself sets (a Zitadel organisation's domain, a Keycloak alias, a Google
+domain), updates it, never a generic `claims.organisation_name` (which people may be able to edit
+at their provider, so the last sign-in used to rename the organisation), and after an
+administrator renamed it (`PUT /v1/admin/organisation`) no token does; each role is a row of `memberships` (account, organisation, role,
 state), recomputed from every token of that provider: a new organisation is `account.created`
 there, a changed role `account.role_changed`, an organisation the token no longer names loses the
 role (`to: null`; the person's projects stay in it). Memberships at other providers are not

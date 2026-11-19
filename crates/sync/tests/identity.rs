@@ -517,3 +517,37 @@ fn invitations_pick_members_unless_a_guest_is_invited_and_ask_when_several_share
     let unknown = ana.call("POST", &format!("/v1/sr/projects/{pa}/invitations"), Some(json!({"email": "dee@shared.test", "role": "editor", "account": account(&sr, "ana")})));
     assert_eq!(unknown.status, 404);
 }
+
+#[test]
+fn a_generic_organisation_name_is_kept_and_only_presets_or_administrators_rename() {
+    // Review (low): a generic `claims.organisation_name` (which users may be able to edit at
+    // their provider) renamed the organisation at every sign-in: the last one won.
+    let named = |name: &str, roles: &[&str], org_name: &str| user(name, roles, json!({"claims": {"org": "lab", "org_name": org_name}}));
+    let users = json!([named("alice", &[ADMIN], "Lab"), named("bob", &[MEMBER], "Bob owns this now")]);
+    let provider = json!({"claims": {"roles": "$.roles", "organisation": "$.org", "organisation_name": "$.org_name"}});
+    let sr = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": provider}));
+    let c = sr.env.client();
+    let alice = c.login("alice");
+    assert_eq!(alice["orgs"][0]["name"], "Lab");
+    assert_eq!(c.login("bob")["orgs"][0]["name"], "Lab", "a later sign-in does not rename it");
+    // An administrator renames it, audited.
+    let admin = sr.api(&token(&alice));
+    let renamed = admin.call("PUT", "/v1/admin/organisation", Some(json!({"name": " Acme Lab "})));
+    assert_eq!((renamed.status, renamed.json()["name"].as_str()), (200, Some("Acme Lab")));
+    assert_eq!(admin.call("PUT", "/v1/admin/organisation", Some(json!({"name": ""}))).status, 400);
+    assert_eq!(sr.api(&token(&c.login("bob"))).call("PUT", "/v1/admin/organisation", Some(json!({"name": "Mine"}))).status, 403);
+    assert_eq!(c.login("alice")["orgs"][0]["name"], "Acme Lab");
+    let event = admin.call("GET", "/v1/admin/audit?action=organisation.renamed", None).json()["events"][0].clone();
+    assert_eq!(event["detail"], json!({"from": "Lab", "to": "Acme Lab"}));
+    // A preset's organisation name (set by the provider) still updates it, until an administrator
+    // renames it.
+    let z = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"provider": zitadel_provider()}));
+    let c = z.env.client();
+    assert_eq!(c.login("ana")["orgs"][0]["name"], "org100.zitadel.test");
+    z.env.idp.set("ana", json!({"zitadel": {"resourceowner": "100", "project_id": "42", "roles": {ADMIN: {"100": "acme.example"}}}}));
+    let ana = c.login("ana");
+    assert_eq!(ana["orgs"][0]["name"], "acme.example");
+    assert_eq!(z.api(&token(&ana)).call("PUT", "/v1/admin/organisation", Some(json!({"name": "Acme"}))).status, 200);
+    z.env.idp.set("ana", json!({"zitadel": {"resourceowner": "100", "project_id": "42", "roles": {ADMIN: {"100": "other.example"}}}}));
+    assert_eq!(c.login("ana")["orgs"][0]["name"], "Acme");
+}

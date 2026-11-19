@@ -224,12 +224,17 @@ pub async fn memberships(pool: &sqlx::PgPool, deployment: &Deployment, account: 
 /// other gets a random ID, so the first organisation to sign in can never take it (review H1). In
 /// an end-to-end deployment each organisation also has its membership log's `orgs` row.
 pub async fn organisation(tx: &mut sqlx::PgConnection, deployment: &Deployment, deployment_org: &str, provider: &Configured, claim: &str, name: Option<&str>) -> Result<String, sqlx::Error> {
-    let update = "UPDATE organisations SET name = COALESCE($3, name) WHERE provider = $1 AND claim = $2 RETURNING org";
-    if let Some(org) = sqlx::query_scalar::<_, String>(update).bind(&provider.id).bind(claim).bind(name).fetch_optional(&mut *tx).await? {
+    // Only a preset's organisation name (set by the provider itself) renames an organisation later;
+    // a generic `claims.organisation_name` may be the person's own to edit at their provider, so
+    // it names the organisation once, at its first sign-in (review: the last sign-in renamed it).
+    // An administrator's rename is never overridden.
+    let renames = name.filter(|_| provider.preset.is_some());
+    let update = "UPDATE organisations SET name = CASE WHEN renamed THEN name ELSE COALESCE($3, name) END WHERE provider = $1 AND claim = $2 RETURNING org";
+    if let Some(org) = sqlx::query_scalar::<_, String>(update).bind(&provider.id).bind(claim).bind(renames).fetch_optional(&mut *tx).await? {
         return Ok(org);
     }
     sqlx::query("SELECT pg_advisory_xact_lock(hashtext('scribyra-organisations'))").execute(&mut *tx).await?;
-    if let Some(org) = sqlx::query_scalar::<_, String>(update).bind(&provider.id).bind(claim).bind(name).fetch_optional(&mut *tx).await? {
+    if let Some(org) = sqlx::query_scalar::<_, String>(update).bind(&provider.id).bind(claim).bind(renames).fetch_optional(&mut *tx).await? {
         return Ok(org);
     }
     let primary = deployment.primary().is_some_and(|(p, c)| p.id == provider.id && c == claim);
