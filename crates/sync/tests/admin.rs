@@ -100,6 +100,18 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
+/// Runs `sql` in a transaction held open for `seconds` by another connection (as a superuser), and
+/// returns once that connection is waiting with its changes uncommitted.
+fn hold(sr: &Sr, sql: &str, seconds: f64) -> std::thread::JoinHandle<()> {
+    let marker = random_hex(8);
+    let script = format!("BEGIN; {sql}; SELECT pg_sleep({seconds}) /* {marker} */; COMMIT;");
+    let url = postgres().url(sr.db().rsplit('/').next().unwrap());
+    let held = std::thread::spawn(move || {
+        postgres().psql(&url, &script);
+    });
+    eventually("the other transaction's lock", || psql(sr, &format!("SELECT count(*) FROM pg_stat_activity WHERE query LIKE '%{marker}%' AND query NOT LIKE '%pg_stat_activity%'")) == "1");
+    held
+}
 fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -639,6 +651,28 @@ fn configured_administrators_stay_and_an_operator_can_always_get_back_in() {
     let unblocked: Vec<Value> = events(&alice).into_iter().filter(|e| e["action"] == "account.unblocked").collect();
     assert_eq!(unblocked.iter().map(|e| (e["actor"].as_str().unwrap(), e["target"].as_str().unwrap(), e["detail"].clone())).collect::<Vec<_>>(), [("system", alice_id.as_str(), json!({"from": "disabled", "by": "cli"})), ("system", cat_id.as_str(), json!({"from": "disabled", "by": "cli"}))]);
     assert_eq!(verify(&sr, None).0, 0);
+}
+
+#[test]
+fn projects_never_pass_to_an_account_disabled_meanwhile() {
+    // Review L1: the heir's row was read without a lock, so a transfer or removal could hand
+    // projects to an account being disabled at the same moment.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let ben = sr.api(&sr.login("ben"));
+    let cat = sr.api(&sr.login("cat"));
+    let (ben_id, cat_id) = (account_of(&ben), account_of(&cat));
+    let p = ben.create("Paper");
+    let held = hold(&sr, &format!("UPDATE accounts SET state = 'disabled' WHERE account = '{cat_id}'"), 1.5);
+    let reply = alice.call("POST", &format!("/v1/admin/projects/{p}/owner"), Some(json!({"account": cat_id})));
+    held.join().unwrap();
+    assert_eq!(reply.status, 409, "{}", String::from_utf8_lossy(&reply.body));
+    psql(&sr, &format!("UPDATE accounts SET state = 'active' WHERE account = '{cat_id}'"));
+    let held = hold(&sr, &format!("UPDATE accounts SET state = 'disabled' WHERE account = '{cat_id}'"), 1.5);
+    let reply = alice.call("POST", &format!("/v1/admin/members/{ben_id}/remove"), Some(json!({"transfer": cat_id})));
+    held.join().unwrap();
+    assert_eq!(reply.status, 409, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(psql(&sr, &format!("SELECT owner FROM sr_projects WHERE project = '{p}'")), ben_id);
 }
 
 #[test]

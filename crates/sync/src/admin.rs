@@ -310,7 +310,8 @@ async fn remove(State(a): State<Shared>, Path(account): Path<String>, source: So
         if state == "removed" {
             return Err(error(StatusCode::CONFLICT, "this account was removed already"));
         }
-        let heir: Option<(String, String)> = sqlx::query_as("SELECT role, state FROM accounts WHERE account = $1").bind(&to).fetch_optional(&mut *tx).await.map_err(internal)?;
+        // Locked, so the heir cannot be disabled or removed while the projects pass (review L1).
+        let heir: Option<(String, String)> = sqlx::query_as("SELECT role, state FROM accounts WHERE account = $1 FOR UPDATE").bind(&to).fetch_optional(&mut *tx).await.map_err(internal)?;
         match heir {
             _ if to == account => return Err(error(StatusCode::BAD_REQUEST, "projects cannot pass to the account being removed")),
             Some((role, state)) if role != "guest" && state == "active" => {}
@@ -505,11 +506,13 @@ async fn transfer(State(a): State<Shared>, Path(p): Path<String>, source: Source
     check!(a.readable());
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        // The heir's row is locked (account rows before project rows, as removal locks them), so
+        // it cannot be disabled or removed while the project passes (review L1).
+        let heir: Option<(String, String)> = sqlx::query_as("SELECT role, state FROM accounts WHERE account = $1 FOR UPDATE").bind(&request.account).fetch_optional(&mut *tx).await.map_err(internal)?;
         let owner = live(&p, &mut tx).await?;
         if owner == request.account {
             return Err(error(StatusCode::CONFLICT, "that account owns this project already"));
         }
-        let heir: Option<(String, String)> = sqlx::query_as("SELECT role, state FROM accounts WHERE account = $1").bind(&request.account).fetch_optional(&mut *tx).await.map_err(internal)?;
         match heir {
             Some((role, state)) if role != "guest" && state == "active" => {}
             Some(_) => return Err(error(StatusCode::CONFLICT, "projects can pass only to an active member or administrator")),
