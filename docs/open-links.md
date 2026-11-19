@@ -140,6 +140,8 @@ repository for pulling and pushing. Separately, this browser keeps
 `scribyra:open-links:v1` in local storage (source → project IDs) for **Open existing
 copy**.
 
+Screenshots (Chromium): `docs/screenshots/open-links/`.
+
 Privacy: [privacy page](../site/privacy.html), “Things only you can start”. Telemetry:
 none ([telemetry](telemetry.md)).
 
