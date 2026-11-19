@@ -707,7 +707,14 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCo
    }
    const seq=Math.max(link.seq,...(link.mine||[]));
    progress('Queued on server…');
-   const asked=await client.compile(link.project,seq);let job=asked.job,status=null;
+   let asked;
+   try{asked=await client.compile(link.project,seq);}
+   catch(error){
+    // The project was switched to the browser meanwhile: this copy follows before the next poll.
+    if(error instanceof ServiceError&&error.status===409){const mode={...remote?.[link.project]?.compile,mode:'browser'};if(remote?.[link.project])remote={...remote,[link.project]:{...remote[link.project],compile:mode}};await db.put('links',{...await db.get('links',localId),compile:'browser'});onCompile(localId,mode);}
+    throw error;
+   }
+   let job=asked.job,status=null;
    if(!isId(job))throw new ServiceError(0,'The server sent an invalid compile job.');
    if(asked.state!=='done'){
     const deadline=now()+30*60*1000;

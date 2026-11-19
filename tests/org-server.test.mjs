@@ -202,7 +202,7 @@ test('server compile: the badge, the choice of where a project compiles, and whe
 test('the engine compiles on the server at the version it uploaded, keeps the PDF, shows a TeX error’s log, and an online-only deployment deletes the PDF with the copy',async()=>{
   const s=await compileService();let engine;
   try{
-    const id=await personalProject('Compile paper','COMPILE_MARKER'),compiles=[];
+    const id=await personalProject('Compile paper','COMPILEMARKER'),compiles=[];
     engine=orgServer({appOrigin:APP_ORIGIN,fetchImpl:fetch,onCompile:(localId,compile)=>compiles.push([localId,compile.state])});
     await signIn(engine,s,'ana');assert.equal(engine.info.compile,'both');
     const added=await engine.add(id);await settled(engine,added.localId);
@@ -210,12 +210,21 @@ test('the engine compiles on the server at the version it uploaded, keeps the PD
     assert.deepEqual(await engine.compileChoice(added.localId),{mode:'browser',canCompile:true,canSwitch:true,project:added.project,job:null,state:null});
     await assert.rejects(engine.compileOnServer(added.localId),/compiles in the browser/);
     assert.equal(await engine.setCompileMode(added.project,'server'),'server');
+    // Switched back by someone else: a copy that still thinks `server` is refused and follows at once.
+    const followed=compiles.length;
+    assert.equal((await srClient(s.url,(await ssoLogin(s,'ana')).token).call('PUT',`/v1/sr/projects/${added.project}/settings`,{compile:'browser'})).status,200);
+    if((await engine.compileChoice(added.localId)).mode==='server'){
+      await assert.rejects(engine.compileOnServer(added.localId),/compiles in the browser now/);
+      assert.equal((await engine.compileChoice(added.localId)).mode,'browser');
+    }
+    assert(compiles.length>followed,'the app was told');
+    assert.equal(await engine.setCompileMode(added.project,'server'),'server');
     assert.equal((await engine.compileChoice(added.localId)).mode,'server');
     // An edit saved but not yet sent goes up before the compile, which runs at that version.
     const doc=await storage.loadProject(added.localId),file=[...doc.share.keys()].find(k=>k.startsWith('text:'));
     doc.getText(file).insert(0,'% SAVED_NOT_SENT\n');await storage.saveProject(added.localId,doc);
     const steps=[],done=await engine.compileOnServer(added.localId,{progress:text=>steps.push(text)});
-    assert.equal(done.state,'done');assert.equal(steps[0],'Sending your changes to the server…');assert(steps.includes('Queued on server…'),steps.join());
+    assert.equal(done.state,'done',done.log);assert.equal(steps[0],'Sending your changes to the server…');assert(steps.includes('Queued on server…'),steps.join());
     const ana=srClient(s.url,(await ssoLogin(s,'ana')).token),status=(await ana.call('GET',`/v1/sr/projects/${added.project}/compile`)).body;
     assert.equal(status.head,2);assert.equal(done.record.seq,2);assert.equal(status.pdf.job,done.record.job);assert.equal(status.pdf.fromHead,true);
     assert.equal(Buffer.from(done.record.bytes.subarray(0,5)).toString(),'%PDF-');
@@ -238,7 +247,7 @@ test('the engine compiles on the server at the version it uploaded, keeps the PD
   // Online-only, compile `server`: every project compiles there, and sign-out deletes the PDF too.
   const o=await compileService({compile:'server',deployment:{offline:false}});
   try{
-    const id=await personalProject('Online compile','ONLINE_COMPILE');
+    const id=await personalProject('Online compile','ONLINECOMPILE');
     engine=orgServer({appOrigin:APP_ORIGIN,fetchImpl:fetch});
     await signIn(engine,o,'ana');
     const added=await engine.add(id);await settled(engine,added.localId);
