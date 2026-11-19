@@ -60,7 +60,7 @@ test('bibliography, plugin and Zotero modules record nothing themselves',async()
  const {readFile,readdir}=await import('node:fs/promises');
  const web=(await readdir(new URL('../web/',import.meta.url))).filter(name=>/^plugin.*\.js$/.test(name)||['bibtex.js','bib-text.js','bibliography-import.js'].includes(name)).map(name=>'web/'+name);
  const zotero=(await readdir(new URL('../plugins/zotero/src/',import.meta.url))).filter(name=>name.endsWith('.js')).map(name=>'plugins/zotero/src/'+name);
- assert.equal(web.length,14,web.join());assert.equal(zotero.length,5,zotero.join());
+ assert.equal(web.length,14,web.join());assert.equal(zotero.length,6,zotero.join());
  const packages=(await readdir(new URL('../plugins/dist/',import.meta.url))).map(name=>'plugins/dist/'+name);
  for(const name of [...web,...zotero,...packages]){
   const text=await readFile(new URL('../'+name,import.meta.url),'utf8');

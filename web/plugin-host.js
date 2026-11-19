@@ -6,7 +6,7 @@
 import {matchesAny,PluginError} from './plugin-manifest.js';
 import {createSandbox} from './plugin-sandbox.js';
 import {pluginStore} from './plugin-store.js';
-import {projectFiles,projectNode,assertPath} from './model.js';
+import {projectFiles,projectNode,assertPath,freePath} from './model.js';
 import {AgentOrigin} from './change-origins.js';
 import {delegatedAuthorId} from './direct-provenance.js';
 import {directEnabled} from './direct-state.js';
@@ -20,14 +20,6 @@ const text=(value,max,name)=>{if(typeof value!=='string'||value.length>max)throw
 const KEY=/^[A-Za-z0-9._:/-]{1,128}$/;
 const FORBIDDEN_HEADERS=/^(accept-charset|accept-encoding|access-control-.*|connection|content-length|cookie2?|date|dnt|expect|host|keep-alive|origin|referer|set-cookie|te|trailer|transfer-encoding|upgrade|via|proxy-.*|sec-.*)$/i;
 const METHODS=new Set(['GET','HEAD','POST','PUT','PATCH','DELETE']);
-const freePathOf=(doc,path)=>{
-  const taken=new Set(projectFiles(doc).map(file=>file.path.toLowerCase()));
-  if(!taken.has(path.toLowerCase()))return path;
-  const slash=path.lastIndexOf('/'),dot=path.lastIndexOf('.'),stem=dot>slash?path.slice(0,dot):path,ext=dot>slash?path.slice(dot):'';
-  for(let n=2;n<1000;n++){const next=`${stem}-${n}${ext}`;if(!taken.has(next.toLowerCase()))return next;}
-  throw failure('invalid_request','Choose another file name.');
-};
-export {freePathOf as freePath};
 
 /**
  * Starts one plugin for the open project. `env` is supplied by the app:
@@ -131,7 +123,7 @@ export function startPlugin({record,pkg,env,container}){
       need('project.write');const now=project(),path=text(params?.path,240,'Path');
       try{assertPath(path);}catch(error){throw failure('invalid_request',error.message);}
       if(!matchesAny(granted['project.write'].create,path))throw failure('permission_denied',`This plugin may not create “${path}”.`);
-      return freePathOf(now.doc,path);
+      try{return freePath(now.doc,path);}catch(error){throw failure('invalid_request',error.message);}
     },
     'project.create':async params=>{
       need('project.write');const now=project();writeMode(now,{create:true});

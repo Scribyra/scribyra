@@ -56,7 +56,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle, bracketMatching, indentUnit } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
-import { projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
+import { freePath, projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
 import * as storage from './storage.js';
 import { readBrowserFiles, readDirectory, readDroppedFiles } from './import-files.js';
 import {readBibliography} from './bibtex.js';

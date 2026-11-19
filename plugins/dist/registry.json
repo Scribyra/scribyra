@@ -14,8 +14,8 @@
       "version": "1.0.0",
       "api": 1,
       "package": "com.scribyra.zotero-1.0.0.scribyra-plugin.json",
-      "sha256": "71106b9a539c614e5589fbfaebb1728c6149c1cf846f2674e99a717b40e2b273",
-      "size": 68465,
+      "sha256": "a7974e40f3b7c2061fc8eefd99eb3ce257294b60cbc4239de9e2a2470c483ec9",
+      "size": 70800,
       "permissions": {
        "bibliography": true,
        "network": [
@@ -47,6 +47,6 @@
  "signature": {
   "alg": "ECDSA-P256-SHA256",
   "keyId": "scribyra-plugins-dev-2026-11",
-  "value": "hqyYEg/FAsmJIJLZteNLq2OgHQ5VxFRXsszu/f2GKaAHR9r/B8Ic0CVh2KwJhkP0MP4O6wYM1ggEEKbz8mFiyg=="
+  "value": "vFOg32nW01s14GGTrAKvwxT9WYkl2OaqCn+84LmYGIarzOvCFja7Fro6+3FjsoIreowa78L/+7nUvfjWDqs7Ow=="
  }
 }

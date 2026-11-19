@@ -7,6 +7,8 @@
 //   secrets 'key-<userId>'      the API key
 //   projectData 'link:<fileId>' {fileId, userId, library, collection, format, version,
 //                                items, textHash, linkedAt, refreshedAt}
+import {sha256Hex} from './sha256.js';
+
 export function zoteroStore(scribyra){
   const call=(method,params)=>scribyra.call(method,params);
   async function accounts(){return (await call('storage.get',{key:'accounts'}))||{};}
@@ -40,7 +42,4 @@ export function zoteroStore(scribyra){
     async unlink(fileId){await call('projectData.delete',{key:`link:${fileId}`});},
   };
 }
-export async function textHash(text){
-  const digest=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
-  return [...new Uint8Array(digest)].map(byte=>byte.toString(16).padStart(2,'0')).join('');
-}
+export async function textHash(text){return sha256Hex(text);}

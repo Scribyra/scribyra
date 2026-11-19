@@ -1,13 +1,16 @@
-// Bibliography import and Zotero links in all three engines, against the fake Zotero
-// Web API (tests/helpers/fake-zotero.mjs). The app's code addresses https://api.zotero.org;
-// an init script sends those requests on to the fake on 127.0.0.1, so the browser makes
-// real cross-origin requests with CORS preflights. Nothing contacts the real Zotero.
+// Bibliography import (built in) and the Zotero plugin (plugins/zotero, docs/plugins.md)
+// in all three engines, against the fake Zotero Web API (tests/helpers/fake-zotero.mjs).
+// Each test installs the official Zotero plugin through the Plugins manager and consent.
+// The plugin addresses https://api.zotero.org through the host's fetch proxy; an init
+// script sends those requests on to the fake on 127.0.0.1, so the browser makes real
+// cross-origin requests with CORS preflights. Nothing contacts the real Zotero.
 import {test,expect} from '@playwright/test';
 import {zipSync,unzipSync,strToU8} from 'fflate';
 import {mkdirSync} from 'node:fs';
 import {readFile} from 'node:fs/promises';
 import AxeBuilder from '@axe-core/playwright';
 import {fakeZotero} from '../helpers/fake-zotero.mjs';
+import {installZotero} from './plugin-helpers.js';
 test.use({actionTimeout:15000});
 test.setTimeout(180000);
 
@@ -45,11 +48,13 @@ async function start(page,fake){
   const seen=[];page.on('request',request=>{seen.push({url:request.url(),key:request.headers()['zotero-api-key']||null});});
   return {server,seen};
 }
-async function open(page,files={'main.tex':MAIN}){
+async function open(page,files={'main.tex':MAIN},{install=true}={}){
   await page.goto('/');const chooser=page.waitForEvent('filechooser');await page.getByRole('button',{name:'Import ZIP',exact:true}).click();
   await (await chooser).setFiles({name:'zotero-paper.zip',mimeType:'application/zip',buffer:Buffer.from(zipSync(Object.fromEntries(Object.entries(files).map(([path,text])=>[path,strToU8(text)]))))});
   await expect(page.locator('.cm-content')).toBeVisible();
+  if(install)await installZotero(page);
 }
+const ZOTERO_ACTION=action=>`com.scribyra.zotero:${action}`;
 const notice=page=>page.getByRole('status',{name:'Workspace notification',exact:true});
 const source=(page,path)=>page.evaluate(path=>window.scribyra.agent.readSource({path,startLine:1,endLine:200}).value?.content??null,path);
 const keys=text=>[...text.matchAll(/@\w+\{([^,]+),/g)].map(match=>match[1]);
@@ -74,11 +79,11 @@ async function link(page,{collection='Thesis',library='My Library',format,screen
   if(collection)await dialog.getByLabel('Collection').selectOption({label:collection});
   if(format)await dialog.getByLabel('Format').selectOption(format);
   await expect(dialog.getByLabel('Read-only API key')).toHaveValue('');
-  if(screenshot){await shoot(page,'zotero-link-dialog',dialog);const axe=await new AxeBuilder({page}).include('.zotero-link').analyze();expect(axe.violations.map(v=>v.id)).toEqual([]);}
+  if(screenshot){await shoot(page,'zotero-link-dialog',dialog);const axe=await new AxeBuilder({page}).include('.plugin-dialog').analyze();expect(axe.violations.map(v=>v.id)).toEqual([]);}
   await dialog.getByRole('button',{name:'Link and import'}).click();
   await expect(dialog).toBeHidden();
 }
-/** Everything the project can leave this device as, and every store except the device-local Zotero one. */
+/** Everything the project can leave this device as, and every store, including the plugin's device-local secrets. */
 async function projectTraces(page){
   return page.evaluate(async()=>{
     const decode=async value=>value instanceof Uint8Array||value instanceof ArrayBuffer?new TextDecoder('latin1').decode(value):value instanceof Blob?new TextDecoder('latin1').decode(await value.arrayBuffer()):JSON.stringify(value,(k,v)=>v instanceof Uint8Array?new TextDecoder('latin1').decode(v):v);
@@ -128,12 +133,13 @@ test('link a collection: initial fetch, linked file, autocomplete, and the key n
     // history, localStorage or sessionStorage; not in the source ZIP, the complete backup or diagnostics.
     await page.evaluate(()=>new Promise(resolve=>setTimeout(resolve,600)));
     const traces=await projectTraces(page);
-    expect(traces.databases['scribyra-zotero']).toContain(KEY);
-    expect(Object.keys(traces.databases)).toContain('scribyra-v1');
-    for(const [name,text] of Object.entries(traces.databases))if(name!=='scribyra-zotero')expect(text.includes(KEY),name).toBe(false);
+    // The key is only in the plugins' device-only secrets database.
+    expect(traces.databases['scribyra-plugin-secrets']).toContain(KEY);
+    expect(Object.keys(traces.databases)).toContain('scribyra-v1');expect(Object.keys(traces.databases)).toContain('scribyra-plugins');
+    for(const [name,text] of Object.entries(traces.databases))if(name!=='scribyra-plugin-secrets')expect(text.includes(KEY),name).toBe(false);
     expect(traces.databases['scribyra-v1']).toContain('lovelace_sketch_1843');
     expect(traces.local.includes(KEY)).toBe(false);expect(traces.session.includes(KEY)).toBe(false);
-    expect(await page.evaluate(key=>new Promise(resolve=>{const request=indexedDB.open('scribyra-zotero');request.onsuccess=()=>{const db=request.result;const all=db.transaction('links').objectStore('links').getAll();all.onsuccess=()=>{db.close();resolve(JSON.stringify(all.result).includes(key));};};}),KEY)).toBe(false);
+    expect(traces.databases['scribyra-plugins']).toContain('lovelace_sketch_1843');
     let download=page.waitForEvent('download');await page.getByRole('button',{name:'Export',exact:true}).click();
     const zip=await downloaded(await download);expect(new TextDecoder().decode(unzipSync(zip)['zotero.bib'])).toBe(text);expect(containsKey(zip)).toBe(false);
     const panel=page.getByRole('region',{name:'Project history',exact:true});
@@ -167,9 +173,9 @@ test('refresh with Zotero changes and a conflicting local edit: diff, per-entry 
     const dialog=page.getByRole('dialog',{name:'Refresh from Zotero'});await expect(dialog).toBeVisible();
     await expect(dialog).toContainText('You edited this file since the last refresh.');
     await expect(dialog).toContainText('Zotero has 1 added, 2 changed, 1 removed; 1 entry was also edited here.');
-    const row=key=>dialog.locator(`.zotero-change[data-key="${key}"]`);
+    const row=key=>dialog.locator(`.plugin-group[data-key="${key}"]`);
     // Conflict first, defaulting to this file's version, with a field-level diff.
-    await expect(dialog.locator('.zotero-change').first()).toHaveAttribute('data-key','lovelace_sketch_1843');
+    await expect(dialog.locator('.plugin-group[data-key]').first()).toHaveAttribute('data-key','lovelace_sketch_1843');
     await expect(row('lovelace_sketch_1843')).toContainText('Edited here too');
     await expect(row('lovelace_sketch_1843').getByRole('radio',{name:'Keep this file’s version'})).toBeChecked();
     await expect(row('lovelace_sketch_1843').getByRole('row',{name:/title/})).toContainText('{Sketch of the {Analytical Engine}, with notes}');
@@ -181,7 +187,7 @@ test('refresh with Zotero changes and a conflicting local edit: diff, per-entry 
     await expect(row('turing_computable_1936')).toContainText('Cited in main.tex');
     await expect(row('turing_computable_1936').getByRole('radio',{name:'Keep it in this file'})).toBeChecked();
     await shoot(page,'zotero-refresh-diff',dialog);
-    const axe=await new AxeBuilder({page}).include('.zotero-refresh').analyze();expect(axe.violations.map(v=>v.id)).toEqual([]);
+    const axe=await new AxeBuilder({page}).include('.plugin-dialog').analyze();expect(axe.violations.map(v=>v.id)).toEqual([]);
     await row('lovelace_sketch_1843').getByRole('radio',{name:'Use Zotero’s version'}).check();
     await row('turing_computable_1936').getByRole('radio',{name:'Remove it here too'}).check();
     await dialog.getByRole('button',{name:'Apply choices'}).click();await expect(dialog).toBeHidden();
@@ -232,11 +238,11 @@ test('refresh without local edits applies directly; offline refresh says so; Vie
     for(const [mode,reason] of [['viewing','Viewing is read only. Switch to Editing to refresh from Zotero.'],['reviewing','Reviewing records suggestions, and Zotero changes many entries at once. Switch to Editing to refresh from Zotero.']]){
       await page.getByRole('combobox',{name:'Editor mode'}).selectOption(mode);
       await expect(bar.getByRole('button',{name:'Refresh from Zotero'})).toBeDisabled();
-      await page.evaluate(()=>window.scribyra.action('zotero-refresh'));await expect(notice(page)).toHaveText(new RegExp(reason.replace(/[.]/g,'\\.')));
+      await page.evaluate(value=>window.scribyra.action('plugin-bar',value),ZOTERO_ACTION('refresh'));await expect(notice(page)).toHaveText(new RegExp(reason.replace(/[.]/g,'\\.')));
       await page.locator('.tree-root').click({button:'right'});const menu=page.getByRole('menu');
       for(const name of ['Import bibliography…','Link to Zotero…'])await expect(menu.getByRole('menuitem',{name:new RegExp(`^${name}`)})).toBeDisabled();
       await page.keyboard.press('Escape');
-      await page.evaluate(()=>window.scribyra.action('zotero-link'));await expect(notice(page)).toContainText(mode==='viewing'?'Viewing is read only. Switch to Editing to link Zotero.':'Switch to Editing to link Zotero.');
+      await page.evaluate(value=>window.scribyra.action('plugin-file-action',value+':'),ZOTERO_ACTION('link'));await expect(notice(page)).toContainText(mode==='viewing'?'Viewing is read only. Switch to Editing to link Zotero.':'Switch to Editing to link Zotero.');
       await expect(page.getByRole('dialog',{name:'Link to Zotero'})).toBeHidden();
     }
     expect(await source(page,'zotero.bib')).toBe(text);
@@ -285,7 +291,8 @@ const BROKEN=`@article{smith2020,
 @article{smith2020, title={Duplicate}}
 `;
 test('import bibliography from the tree menu and by drag and drop: problems reported, keys kept, names never clash',async({page})=>{
-  await open(page);
+  // Built in: no plugin is installed for this.
+  await open(page,undefined,{install:false});
   let chooser=page.waitForEvent('filechooser');await rootMenu(page,'Import bibliography');
   await (await chooser).setFiles({name:'refs.bib',mimeType:'text/x-bibtex',buffer:Buffer.from(BROKEN)});
   const report=page.getByRole('dialog',{name:'Bibliography check'});await expect(report).toBeVisible();
@@ -328,6 +335,6 @@ test('without the CORS headers api.zotero.org sends, the browser blocks the resp
     await expect(dialog.getByRole('status')).toHaveText('Scribyra could not reach api.zotero.org. Check your connection and try again; nothing in the project changed.');
     await expect(dialog.getByRole('button',{name:'Link and import'})).toBeDisabled();
     await dialog.getByRole('button',{name:'Cancel'}).click();
-    const traces=await projectTraces(page);expect(traces.databases['scribyra-zotero']||'').not.toContain(KEY);
+    const traces=await projectTraces(page);for(const text of Object.values(traces.databases))expect(text).not.toContain(KEY);
   }finally{await server.close();}
 });

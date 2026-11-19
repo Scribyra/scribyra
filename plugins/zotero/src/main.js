@@ -29,7 +29,7 @@ function modeBlocked(mode,doing){
 let online=true;
 async function hostFetch(url,init={}){
   try{
-    const result=await call('net.fetch',{url,method:init.method||'GET',headers:Object.entries(init.headers||{}),requestId:Math.random().toString(36).slice(2)},{signal:init.signal});
+    const result=await call('net.fetch',{url,method:init.method||'GET',headers:Object.entries(init.headers||{}),requestId:`r${Date.now().toString(36)}${Math.random().toString(36).slice(2)}`},{signal:init.signal});
     online=true;
     const status=result.status,headers=new Headers(result.headers);
     return {status,ok:status>=200&&status<300,headers,json:async()=>JSON.parse(result.body),text:async()=>result.body};
