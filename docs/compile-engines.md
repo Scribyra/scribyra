@@ -2,7 +2,7 @@
 
 Measured 19 November 2026 on branch `feature/wasm-compile`, after Paul's decision of that day to compile on the server with **the browser's own WebAssembly TeX engine**, keeping native TeX Live only if the numbers demand it. `deployment.compile_engine` selects `wasm` (default) or `native` ([service](service.md#server-compile), [design section 6](org-sync-design.md#6-server-compile)).
 
-**Recommendation: keep the WebAssembly engine as the only engine we offer; do not offer native TeX Live as a "fast" option, and delete it after one release.** Every document compiles on the server to the same pages and text as in the browser, and native's output was the same too, so native would add no capability. Its speed lead is real but bounded: 1.3–3.4× on small documents and 1.8× (about 2 minutes) on the 305-page thesis. It costs a second TeX distribution to secure, patch and keep in step: 2.6 GB for a TeX Live that compiles all five documents, against 0.5 GB for Node and the runtime. Most of the WebAssembly engine's extra time has a known cause we can fix (below).
+**Recommendation: keep the WebAssembly engine as the only engine we offer; do not offer native TeX Live as a "fast" option, and delete it after one release.** Every document compiles on the server to the same pages and text as in the browser, and native's output was the same too, so native would add no capability. Its speed lead is real but bounded: 1.3–3.3× on small documents and 1.7–1.8× (about 100 s more: 3.9 against 2.2 minutes) on the 305-page thesis. It costs a second TeX distribution to secure, patch and keep in step: 2.6 GB for a TeX Live that compiles all five documents, against 0.5 GB for Node and the runtime. Most of the WebAssembly engine's extra time has a known cause we can fix (below).
 
 ## Method
 
@@ -48,7 +48,7 @@ Wall-clock seconds, median (min–max), with CPU seconds and LuaLaTeX passes. Se
 | article + Biber (13 pages) | 41.4 (40.2–47.0), CPU 40.0, 7 passes | 40.2 (39.5–41.1), CPU 40.0 | 22.1 (21.5–25.5), CPU 22.1, 3 passes | 47.8 | 1.8× |
 | beamer (39 pages) | 65.4 (63.4–65.7), CPU 64.7, 8 passes | 62.7 (57.8–63.8), CPU 62.6 | 18.8 (18.4–29.4), CPU 18.6, 2 passes | 90.6 | 3.3× |
 | tikz (13 pages) | 50.1 (49.0–50.4), CPU 49.8, 5 passes | 49.7 (48.7–50.2), CPU 49.7 | 16.7 (16.5–17.0), CPU 16.5, 1 pass | 65.5 | 3.0× |
-| thesis + Biber (305 pages) | THESIS_COLD | THESIS_WARM | 134.9 (132.0–139.3), CPU 131.7, 3 passes | 271.7 | THESIS_RATIO |
+| thesis + Biber (305 pages) | 242.6 (238.5–247.2), CPU 239.3, 8 passes | 230.9 (230.1–242.2), CPU 230.3 | 134.9 (132.0–139.3), CPU 131.7, 3 passes | 271.7 | 1.7–1.8× |
 
 What the numbers say:
 
@@ -70,7 +70,7 @@ Peak memory of the job's cgroup (every process plus scratch), maximum over the r
 | article | 857 MiB | 147 MiB |
 | beamer | 703 MiB | 170 MiB |
 | tikz | 590 MiB | 144 MiB |
-| thesis | THESIS_PEAK MiB | 301 MiB |
+| thesis | 942 MiB | 301 MiB |
 
 - **Where the memory goes.** Node itself, the engine's WebAssembly heap and the 45 MB LuaLaTeX baseline unpacked into the engine's in-memory file system together put a WebAssembly job at 0.5–0.9 GiB: 3–5× native. Keep `memory_mib` at 1536 or more (the default is 2048), and size worker pods at about 1 GiB per concurrent job plus Node's overhead.
 - **The engine's own ceiling.** This BusyTeX build caps its WebAssembly heap at **576 MiB**: Emscripten's `MAXIMUM_MEMORY`, not wasm32's 4 GB. A document that needs more fails with `limit_memory` and a log saying so; `crates/compile/tests/wasm.rs` checks that message. None of the five documents came close. Raising the cap means rebuilding BusyTeX with a larger `MAXIMUM_MEMORY`, up to 4 GB.
