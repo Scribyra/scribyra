@@ -112,7 +112,8 @@ pub struct Membership {
 /// A valid (unexpired, unrevoked, still admitted) login.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Login {
-    /// The deployment's ID (`GET /v1/deployment` `org`), which is also its first organisation's.
+    /// The deployment's ID (which the primary organisation, when configured, holds): scopes the
+    /// login to this deployment, not an organisation.
     pub org: String,
     pub account: String,
     /// The configured provider's ID.
@@ -217,9 +218,10 @@ pub async fn memberships(pool: &sqlx::PgPool, deployment: &Deployment, account: 
         .collect())
 }
 /// The organisation `(provider, claim)`, made the first time a token names it (`claim` empty: the
-/// provider's one organisation). The first organisation a deployment makes takes the deployment's
-/// ID, so a deployment with one organisation keeps the ID its end-to-end clients sign with; in an
-/// end-to-end deployment each organisation also has its membership log's `orgs` row.
+/// provider's one organisation). Only the organisation the configuration names
+/// ([`Deployment::primary`]) takes the deployment's ID, which end-to-end clients sign with; every
+/// other gets a random ID, so the first organisation to sign in can never take it (review H1). In
+/// an end-to-end deployment each organisation also has its membership log's `orgs` row.
 pub async fn organisation(tx: &mut sqlx::PgConnection, deployment: &Deployment, deployment_org: &str, provider: &Configured, claim: &str, name: Option<&str>) -> Result<String, sqlx::Error> {
     let update = "UPDATE organisations SET name = COALESCE($3, name) WHERE provider = $1 AND claim = $2 RETURNING org";
     if let Some(org) = sqlx::query_scalar::<_, String>(update).bind(&provider.id).bind(claim).bind(name).fetch_optional(&mut *tx).await? {
@@ -229,8 +231,11 @@ pub async fn organisation(tx: &mut sqlx::PgConnection, deployment: &Deployment, 
     if let Some(org) = sqlx::query_scalar::<_, String>(update).bind(&provider.id).bind(claim).bind(name).fetch_optional(&mut *tx).await? {
         return Ok(org);
     }
+    let primary = deployment.primary().is_some_and(|(p, c)| p.id == provider.id && c == claim);
+    // [`Sso::prepare`] makes the primary organisation at start (and refuses to start when another
+    // holds the ID), so a taken ID here only means a race lost to that.
     let taken: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM organisations WHERE org = $1)").bind(deployment_org).fetch_one(&mut *tx).await?;
-    let org = if taken { random_hex() } else { deployment_org.to_owned() };
+    let org = if primary && !taken { deployment_org.to_owned() } else { random_hex() };
     let name = match (name, claim) {
         (Some(name), _) => name.to_owned(),
         (None, "") => provider.label.clone(),
@@ -500,16 +505,33 @@ impl Sso {
         })
     }
 
-    /// Makes the one organisation of each provider whose tokens name none, in the configured
-    /// order, so the first such takes the deployment's ID (called at every start).
-    pub async fn prepare(&self) -> Result<(), sqlx::Error> {
+    /// Called at every start: makes the primary organisation ([`Deployment::primary`]) with the
+    /// deployment's ID, then the one organisation of each provider whose tokens name none. Refuses
+    /// to start (`{"event":"deployment_org_conflict"}`) when the deployment's ID is held by an
+    /// organisation that is not the primary one (made by a sign-in before review H1, or the
+    /// configuration named another), or the primary one has another ID: an operator decides.
+    pub async fn prepare(&self) -> Result<(), crate::store::Error> {
         let (Some(deployment), Some(org)) = (&self.deployment, &self.org) else { return Ok(()) };
-        for provider in deployment.providers.iter().filter(|p| crate::claims::single_organisation(p)) {
+        let primary = deployment.primary();
+        let fixed = deployment.providers.iter().filter_map(|p| Some((p, crate::claims::fixed_organisation(p)?)));
+        for (provider, claim) in primary.clone().into_iter().chain(fixed) {
             let mut tx = self.store.pool.begin().await?;
-            organisation(&mut tx, deployment, org, provider, "", None).await?;
+            organisation(&mut tx, deployment, org, provider, &claim, None).await?;
             tx.commit().await?;
         }
+        let holder: Option<(String, String)> = sqlx::query_as("SELECT provider, claim FROM organisations WHERE org = $1").bind(org).fetch_optional(&self.store.pool).await?;
+        let wanted = primary.map(|(p, claim)| (p.id.clone(), claim));
+        if holder.is_some() && holder != wanted || wanted.is_some() && holder.is_none() {
+            println!("{}", json!({"event": "deployment_org_conflict", "holder": holder.as_ref().map(|(p, _)| p), "primary": wanted.as_ref().map(|(p, _)| p)}));
+            return Err("the deployment's ID belongs to an organisation other than deployment.primary_organisation".into());
+        }
         Ok(())
+    }
+    /// The deployment's ID as clients see it (`GET /v1/deployment` and the login's `org`): only
+    /// when an organisation holds it (a primary organisation is configured).
+    fn primary_org(&self) -> Option<&str> {
+        self.deployment.as_ref()?.primary()?;
+        self.org.as_deref()
     }
     /// The deployment and the provider with this ID, if both are configured.
     /// Counts a sign-in start from `source`; `false` past `sso_starts_per_minute`.
@@ -1033,18 +1055,23 @@ fn expect<'a>(configured: &'a Configured, nonce: Option<&'a str>) -> Expect<'a> 
 }
 
 /// A login as `/v1/sso/redeem` and `/v1/sso/me` show it (docs/service.md): the account's profile,
-/// its organisations with their roles (`orgs`, oldest first) and, for the first of them, `role`
-/// and the end-to-end link (`person`, `state`). `org` is the deployment's ID.
-fn login_json(login: &Login, link: Option<(String, bool)>) -> Value {
+/// its organisations with their IDs and roles (`orgs`, oldest first; `primary` marks the one
+/// holding the deployment's ID) and, for the first of them, `role` and the end-to-end link
+/// (`person`, `state`). `org` is the primary organisation's ID, `null` without one.
+fn login_json(login: &Login, primary: Option<&str>, link: Option<(String, bool)>) -> Value {
     let state = match &link {
         None => "unlinked",
         Some((_, false)) => "linked",
         Some((_, true)) => "blocked",
     };
-    let orgs: Vec<Value> = login.orgs.iter().map(|m| json!({"id": m.org, "name": m.name, "provider": login.provider, "role": m.role.as_str(), "guest": m.role == Role::Guest})).collect();
+    let orgs: Vec<Value> = login
+        .orgs
+        .iter()
+        .map(|m| json!({"id": m.org, "name": m.name, "provider": login.provider, "role": m.role.as_str(), "guest": m.role == Role::Guest, "primary": Some(m.org.as_str()) == primary}))
+        .collect();
     json!({
         "expires": login.expires.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-        "org": login.org,
+        "org": primary,
         "provider": login.provider,
         "role": login.orgs.first().map(|m| m.role.as_str()),
         "orgs": orgs,
@@ -1064,9 +1091,12 @@ pub fn bearer(headers: &HeaderMap) -> Option<&str> {
 }
 
 /// `GET /v1/deployment`: what the app needs before anyone signs in. Public; no secret and no
-/// provider client setting leaves the service.
+/// provider client setting leaves the service. `org` is the primary organisation's ID (the
+/// deployment's), `null` when none is configured: then the app takes each organisation's ID from
+/// the login's `orgs`.
 async fn deployment_route(State(s): State<Shared>) -> Response {
-    let (Some(d), Some(org)) = (&s.deployment, &s.org) else { return error(StatusCode::NOT_FOUND, "this service has no deployment") };
+    let (Some(d), Some(_)) = (&s.deployment, &s.org) else { return error(StatusCode::NOT_FOUND, "this service has no deployment") };
+    let org = s.primary_org();
     let providers: Vec<Value> = d.providers.iter().map(|p| json!({"id": p.id, "label": p.label})).collect();
     (
         [(header::CACHE_CONTROL, "no-store")],
@@ -1234,7 +1264,7 @@ async fn callback_flow(State(s): State<Shared>, axum::extract::Path(provider): a
     if provider != flow.provider {
         return fail(&flow.return_to, "idp_error");
     }
-    let (Some((deployment, configured)), Some(org)) = (s.configured(&flow.provider), s.org.clone()) else {
+    let (Some((deployment, configured)), Some(_)) = (s.configured(&flow.provider), s.org.as_ref()) else {
         return fail(&flow.return_to, "not_configured");
     };
     if query.contains_key("error") {
@@ -1319,7 +1349,10 @@ async fn callback_flow(State(s): State<Shared>, axum::extract::Path(provider): a
         Ok(false) | Err(_) => return fail(&flow.return_to, "unavailable"),
     }
     log("sso_callback", "ok");
-    redirect(format!("{}/#scribyra-sso={grant}&org={org}", flow.return_to))
+    match s.primary_org() {
+        Some(primary) => redirect(format!("{}/#scribyra-sso={grant}&org={primary}", flow.return_to)),
+        None => redirect(format!("{}/#scribyra-sso={grant}", flow.return_to)),
+    }
 }
 
 #[derive(Deserialize)]
@@ -1463,7 +1496,7 @@ async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::s
         Ok(link) => link,
         Err(e) => return internal(e),
     };
-    let mut body = login_json(&login, link);
+    let mut body = login_json(&login, s.primary_org(), link);
     body["token"] = json!(token);
     log("sso_login", "ok");
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
@@ -1476,7 +1509,7 @@ async fn me(State(s): State<Shared>, headers: HeaderMap) -> Response {
         Err(e) => return internal(e),
     };
     match s.linked_person(&login.orgs[0].org, &login).await {
-        Ok(link) => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(login_json(&login, link))).into_response(),
+        Ok(link) => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(login_json(&login, s.primary_org(), link))).into_response(),
         Err(e) => internal(e),
     }
 }

@@ -35,7 +35,7 @@ fn rs256_sign_in_me_logout_and_replays() {
     let (status, outcome) = c.callback(&callback);
     assert_eq!(status, 302);
     let Some(Outcome::Grant { grant, org: returned }) = outcome else { panic!("{outcome:?}") };
-    assert_eq!(returned, org);
+    assert_eq!(returned, Some(org.clone()));
     // The state is single use.
     let (status, outcome) = c.callback(&callback);
     assert_eq!((status, outcome), (400, None));
@@ -48,7 +48,7 @@ fn rs256_sign_in_me_logout_and_replays() {
     assert_eq!(login["subject"], json!({"email": "alice@example.org", "name": "Alice Example"}));
     // Identity and organisations come from the provider's token: one organisation (the provider
     // names none), which took the deployment's ID, and alice's role in it.
-    assert_eq!(login["orgs"], json!([{"id": org, "name": "Test account", "provider": "test", "role": "admin", "guest": false}]));
+    assert_eq!(login["orgs"], json!([{"id": org, "name": "Test account", "provider": "test", "role": "admin", "guest": false, "primary": true}]));
     assert_eq!((login["email"].as_str(), login["emailVerified"].as_bool(), login["picture"].as_str()), (Some("alice@example.org"), Some(true), None));
     let token = login["token"].as_str().unwrap().to_owned();
     assert_eq!(token.len(), 64);

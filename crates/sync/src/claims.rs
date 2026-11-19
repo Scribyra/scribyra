@@ -187,13 +187,15 @@ fn grant(claim: String, name: Option<String>, role: Option<Role>, guest: bool) -
     Some(Grant { claim, name, role: if guest { Role::Guest } else { role }, guest })
 }
 
-/// Whether this provider's tokens never name an organisation: then it has exactly one.
-pub fn single_organisation(provider: &Provider) -> bool {
-    match (provider.preset, &provider.claims) {
+/// The one organisation (its claim value) of a provider whose tokens never name one, so the
+/// configuration alone fixes it; `None` when tokens name organisations.
+pub fn fixed_organisation(provider: &Provider) -> Option<String> {
+    let single = match (provider.preset, &provider.claims) {
         (Some(Preset::Keycloak), _) => !provider.keycloak_organizations,
         (None, Some(rules)) => rules.organisation.is_none(),
         _ => false,
-    }
+    };
+    single.then(String::new)
 }
 /// The organisations, roles and guest marks this provider's token gives `subject`, after the
 /// deployment's guest policy; or why it gives none.

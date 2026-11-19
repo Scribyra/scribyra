@@ -338,3 +338,47 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
     let off = Sr::start(Blobs::Fs, json!([{"sub": "e2", "username": "gil", "password": "pw-gil", "email": "gil@guest.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "t", "acct": 1}}]), json!({}), json!({"provider": {"claims": null, "preset": "entra"}}));
     assert_eq!(off.env.client().sign_in("gil").0, Outcome::Error("guest".into()));
 }
+
+#[test]
+fn only_the_configured_primary_organisation_takes_the_deployments_id() {
+    // Review H1: the first organisation to sign in took the deployment's ID, which end-to-end
+    // clients sign with (and which migration 0032 kept, with its links). Organisation 200 signing
+    // in first took it over.
+    let deployment_of = |env: &Env| fetch(&format!("{}/v1/deployment", env.service.url), None).json();
+    let id = |env: &Env| postgres().psql(env.service.database_url(), "SELECT org FROM deployment");
+    let claim_of = |env: &Env, org: &str| postgres().psql(env.service.database_url(), &format!("SELECT claim FROM organisations WHERE org = '{org}'"));
+    // No primary organisation: nobody gets the ID, and the app is told so.
+    let mut first = Env::start("RS256", zitadel_users(), json!({}), json!({"provider": zitadel_provider()}));
+    let env = &first;
+    let c = env.client();
+    let (outcome, verifier) = c.sign_in("bea");
+    let Outcome::Grant { grant, org: None } = outcome else { panic!("{outcome:?}") };
+    let bea = c.redeem(&grant, &verifier).json();
+    assert_ne!(bea["orgs"][0]["id"], json!(id(env)), "the first organisation to sign in does not take the deployment's ID");
+    assert_eq!((bea["org"].clone(), bea["orgs"][0]["primary"].clone()), (Value::Null, json!(false)));
+    assert_eq!(deployment_of(env)["org"], Value::Null);
+    assert_eq!(c.me(&token(&bea)).json()["orgs"][0]["primary"], json!(false));
+    assert_ne!(c.login("ana")["orgs"][0]["id"], json!(id(env)));
+    assert_eq!(postgres().psql(env.service.database_url(), &format!("SELECT count(*) FROM organisations WHERE org = '{}'", id(env))), "0");
+    // An organisation that is not the primary one holding the ID (as a sign-in made it before
+    // this fix) refuses the start: an operator decides.
+    let bea_org = bea["orgs"][0]["id"].as_str().unwrap().to_owned();
+    first.service.stop();
+    postgres().psql(first.service.database_url(), &format!("UPDATE deployment SET org = '{bea_org}'"));
+    let refused = first.service.start().unwrap_err();
+    assert!(refused.contains("deployment_org_conflict"), "{refused}");
+    // Named in the configuration: made at start with the ID, whoever signs in first.
+    let env = Env::start("RS256", zitadel_users(), json!({}), json!({"provider": zitadel_provider(), "primary_organisation": {"provider": "test", "organisation": "100"}}));
+    let deployment = id(&env);
+    assert_eq!(claim_of(&env, &deployment), "100");
+    assert_eq!(deployment_of(&env)["org"], json!(deployment));
+    let c = env.client();
+    let (outcome, verifier) = c.sign_in("bea");
+    let Outcome::Grant { grant, org } = outcome else { panic!("{outcome:?}") };
+    assert_eq!(org, Some(deployment.clone()));
+    let bea = c.redeem(&grant, &verifier).json();
+    assert_ne!(bea["orgs"][0]["id"], json!(deployment));
+    assert_eq!((bea["org"].clone(), bea["orgs"][0]["primary"].clone()), (json!(deployment), json!(false)));
+    let ana = c.login("ana");
+    assert_eq!((ana["orgs"][0]["id"].clone(), ana["orgs"][0]["primary"].clone()), (json!(deployment), json!(true)));
+}

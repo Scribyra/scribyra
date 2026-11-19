@@ -511,6 +511,10 @@ pub struct Deployment {
     #[serde(default = "yes")]
     pub notify_on_admin_access: bool,
     pub providers: Vec<Provider>,
+    /// The organisation that takes the deployment's ID (`GET /v1/deployment` `org`, the ID
+    /// end-to-end clients sign with). See [`Deployment::primary`].
+    #[serde(default)]
+    pub primary_organisation: Option<PrimaryOrganisation>,
     #[serde(default)]
     pub quotas: Quotas,
     #[serde(default = "audit_days")]
@@ -533,6 +537,16 @@ impl Config {
     pub fn audit_retention(&self) -> u64 {
         self.audit_retention_seconds.unwrap_or_else(|| self.deployment.as_ref().map_or(400, |d| d.audit_retention_days) as u64 * 24 * 3600)
     }
+}
+/// The organisation the configuration names to take the deployment's ID: a provider's
+/// organisation claim value, or (omitted) the one organisation of a provider whose tokens name
+/// none.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrimaryOrganisation {
+    pub provider: String,
+    #[serde(default)]
+    pub organisation: Option<String>,
 }
 /// How a provider's claims name organisations, roles and guests (design section 3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -806,6 +820,15 @@ impl Deployment {
                 return Err("deployment.providers[].scopes must be at most 16 scope names");
             }
         }
+        if let Some(primary) = &self.primary_organisation {
+            let Some(p) = self.provider(&primary.provider) else { return Err("deployment.primary_organisation.provider must be the id of a configured provider") };
+            match (crate::claims::fixed_organisation(p), &primary.organisation) {
+                (Some(fixed), Some(claim)) if *claim != fixed => return Err("deployment.primary_organisation.organisation: that provider has one organisation; leave organisation out"),
+                (None, None) => return Err("deployment.primary_organisation needs organisation (the organisation claim value) for a provider whose tokens name organisations"),
+                (_, Some(claim)) if !short_text(claim, 255) => return Err("deployment.primary_organisation.organisation must be an organisation claim value"),
+                _ => {}
+            }
+        }
         if self.encryption == Encryption::E2ee && self.guests != Guests::Off {
             return Err("deployment.guests must be \"off\" in an end-to-end deployment");
         }
@@ -833,6 +856,23 @@ impl Deployment {
     }
     pub fn provider(&self, id: &str) -> Option<&Provider> {
         self.providers.iter().find(|p| p.id == id)
+    }
+    /// The organisation (provider, claim value) that takes the deployment's ID (review H1): the one
+    /// `primary_organisation` names, or, when the deployment has a single provider whose
+    /// organisation the configuration fixes (its tokens name none), that one. Otherwise none: no
+    /// organisation a token names ever takes it, so the first to sign in cannot claim the ID
+    /// end-to-end clients sign with.
+    pub fn primary(&self) -> Option<(&Provider, String)> {
+        match &self.primary_organisation {
+            Some(primary) => {
+                let p = self.provider(&primary.provider)?;
+                Some((p, primary.organisation.clone().or_else(|| crate::claims::fixed_organisation(p))?))
+            }
+            None => match self.providers.as_slice() {
+                [only] => Some((only, crate::claims::fixed_organisation(only)?)),
+                _ => None,
+            },
+        }
     }
 }
 
@@ -943,6 +983,26 @@ mod tests {
         p["scopes"] = json!(["groups"]);
         let c = config(deployment(json!({"providers": [p], "guests": "shared"}))).unwrap();
         assert_eq!(c.deployment.unwrap().providers[0].scope(), "openid email profile offline_access groups");
+    }
+
+    #[test]
+    fn the_primary_organisation_is_named_by_the_configuration() {
+        let zitadel = json!({"id": "z", "label": "Z", "issuer": "https://z.example", "client_id": "c", "client_secret_file": "s", "preset": "zitadel", "roles": {"member": ["m"]}});
+        let primary = |d: serde_json::Value| config(d).map(|c| c.deployment.unwrap().primary().map(|(p, claim)| (p.id.clone(), claim)));
+        // One provider with one organisation: that one.
+        assert_eq!(primary(deployment(json!({}))).unwrap(), Some(("acme".into(), String::new())));
+        // Review H1: a provider whose tokens name organisations gives none the deployment's ID
+        // unless the configuration names one.
+        assert_eq!(primary(deployment(json!({"providers": [zitadel]}))).unwrap(), None);
+        assert_eq!(primary(deployment(json!({"providers": [zitadel], "primary_organisation": {"provider": "z", "organisation": "100"}}))).unwrap(), Some(("z".into(), "100".into())));
+        // Two providers: only an explicit choice.
+        assert_eq!(primary(deployment(json!({"providers": [provider(), zitadel]}))).unwrap(), None);
+        assert_eq!(primary(deployment(json!({"providers": [provider(), zitadel], "primary_organisation": {"provider": "acme"}}))).unwrap(), Some(("acme".into(), String::new())));
+        let refused = |p: serde_json::Value| primary(deployment(json!({"providers": [provider(), zitadel], "primary_organisation": p}))).err().expect("refused");
+        assert!(refused(json!({"provider": "nobody"})).contains("configured provider"));
+        assert!(refused(json!({"provider": "z"})).contains("needs organisation"));
+        assert!(refused(json!({"provider": "acme", "organisation": "x"})).contains("leave organisation out"));
+        assert!(refused(json!({"provider": "z", "organisation": ""})).contains("claim value"));
     }
 
     #[test]

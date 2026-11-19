@@ -175,6 +175,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `guests` | `"off"` | `"off"` refuses what the provider marks as guests ([Sign-in](#single-sign-on-oidc)); `"shared"` admits them to projects shared with them. Must be `"off"` in an end-to-end deployment |
 | `notify_on_admin_access` | `true` | Members see "An administrator opened this project on …" (`adminActivity` in project details, `adminOpened` in lists and heads); `false` hides it from them. The access is audited either way |
 | `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
+| `primary_organisation` | see below | `{"provider": "<id>", "organisation": "<claim value>"}`: the organisation that holds the deployment's ID. `organisation` is left out for a provider whose tokens name no organisation (its one organisation) and required otherwise |
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
 | `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour`, `per_project_per_minute`, `active_per_member`, `active_per_owner`, `retention_days` ([Server compile](#server-compile)) |
@@ -183,11 +184,25 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 There is **no list of people or administrators** in the configuration (design decision 9):
 identity, organisations, roles and guest status come from each provider's tokens. The deployment's
 ID is random, made at first start and recorded with the mode (a database that already held
-exactly one organisation from before keeps it); the first organisation the deployment makes
-(the first provider's, at the first start, when its tokens name no organisation) takes that ID, so
-a deployment with one organisation keeps the ID end-to-end clients sign with. `GET /v1/deployment`
-is public and answers `{name, encryption, offline, compile, linkSharing, providers: [{id, label}],
-org}` (`org`: the deployment's ID); issuers, client IDs and secrets never leave the service.
+exactly one organisation from before keeps it, with its end-to-end membership log and links).
+
+**The primary organisation** is the one organisation that holds the deployment's ID: the one
+`primary_organisation` names or, without it, when the deployment has a single provider whose
+tokens name no organisation, that provider's one organisation. It is made at every start if
+missing. No other organisation ever takes the ID: before this rule (review H1) the first
+organisation to *sign in* took it, so with a provider whose tokens name organisations (Zitadel,
+Entra, Keycloak organisations, Google, a generic `claims.organisation`) a stranger's organisation
+could take over the ID, membership log and links end-to-end clients use. Without a primary
+organisation every organisation has a random ID. A start finds the ID held by another
+organisation than the primary one (or the primary one holding another ID) and refuses with
+`{"event":"deployment_org_conflict","holder":"<provider id>","primary":"<provider id>"}`: name
+the right organisation in `primary_organisation` or, if a stranger's sign-in took the ID under the
+old rule, restore from a backup taken before it (the organisation's projects, links and audit
+chain hang off its ID).
+
+`GET /v1/deployment` is public and answers `{name, encryption, offline, compile, linkSharing,
+providers: [{id, label}], org}`; `org` is the primary organisation's ID (the deployment's), or
+`null` when there is none. Issuers, client IDs and secrets never leave the service.
 
 ### Organisation routes (end-to-end deployments)
 
@@ -685,16 +700,17 @@ there, a changed role `account.role_changed`, an organisation the token no longe
 role (`to: null`; the person's projects stay in it). Memberships at other providers are not
 touched. A login acts only in organisations of the provider it signed in with.
 
-`POST /v1/sso/start {provider, return, challenge}` → `{url}`;`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
-`/v1/sso/callback/<provider>`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>`;
+`POST /v1/sso/start {provider, return, challenge}` → `{url}`; the provider redirects to
+`/v1/sso/callback/<provider>`, which redirects to `<return>/#scribyra-sso=<grant>&org=<org>` (`&org=`
+only with a primary organisation);
 `POST /v1/sso/redeem {code, verifier}` → the login with its `token`; `GET /v1/sso/me` (same body
 without `token`) and `POST /v1/sso/logout` take `Authorization: ScribyraSSO <token>`:
 
 ```json
 {"token": "<64 hex>", "expires": 1763600000, "account": "<64 hex>", "provider": "acme",
- "org": "<the deployment's ID>", "role": "member",
- "orgs": [{"id": "<64 hex>", "name": "acme.zitadel.cloud", "provider": "acme", "role": "member", "guest": false},
-          {"id": "<64 hex>", "name": "partner.zitadel.cloud", "provider": "acme", "role": "guest", "guest": true}],
+ "org": "<the primary organisation's ID, or null>", "role": "member",
+ "orgs": [{"id": "<64 hex>", "name": "acme.zitadel.cloud", "provider": "acme", "role": "member", "guest": false, "primary": true},
+          {"id": "<64 hex>", "name": "partner.zitadel.cloud", "provider": "acme", "role": "guest", "guest": true, "primary": false}],
  "email": "ben@acme.org", "emailVerified": true, "name": "Ben", "picture": "https://…",
  "subject": {"email": "ben@acme.org", "name": "Ben"}, "person": null, "state": "unlinked"}
 ```
@@ -704,6 +720,15 @@ there; guests only with `guests: "shared"`), oldest first; `role`, `person` and 
 first of them (`state` is `unlinked`, `linked` or `blocked`: the end-to-end link). `email` is the
 **verified** email or `null`; `subject.email` is whatever the provider sent, for the person's own
 display only. A session whose account has no organisation left answers `401`.
+
+**Which organisation ID the app uses (the H1 contract).** The ID of an organisation is always
+`orgs[].id` of the login; the end-to-end routes (`/v1/orgs/{org}/…`, the session challenge, signed
+events, wraps and entries) and the `Scribyra-Org` header take that ID. `GET /v1/deployment` `org`
+and the login's `org` are only the primary organisation's ID (the one marked `primary: true`) and
+are `null` without one; they are never "the organisation" of someone who signs in, and an app must
+not compare a login's organisations against them or sign with them on their own. An app that
+remembers an end-to-end connection keys it by the organisation ID it chose from `orgs` (and asks
+the person to choose when `orgs` lists several).
 
 ### Organisations and the `Scribyra-Org` header
 

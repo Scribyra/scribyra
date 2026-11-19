@@ -254,7 +254,8 @@ pub struct Started {
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
-    Grant { grant: String, org: String },
+    /// `org`: the primary organisation's ID, when the deployment has one.
+    Grant { grant: String, org: Option<String> },
     Error(String),
 }
 impl Client<'_> {
@@ -319,7 +320,7 @@ impl Client<'_> {
         post_json(&self.url("/v1/sso/logout"), Some(token), &json!({}))
     }
 }
-/// Parse `{APP}/#scribyra-sso=<grant>&org=<org>` or `{APP}/#scribyra-sso-error=<code>`.
+/// Parse `{APP}/#scribyra-sso=<grant>[&org=<org>]` or `{APP}/#scribyra-sso-error=<code>`.
 pub fn parse_return(location: &str) -> Outcome {
     let fragment = location.strip_prefix(&format!("{APP}/#")).unwrap_or_else(|| panic!("unexpected redirect {location}"));
     let pairs: std::collections::HashMap<String, String> = url::form_urlencoded::parse(fragment.as_bytes()).into_owned().collect();
@@ -327,5 +328,5 @@ pub fn parse_return(location: &str) -> Outcome {
         assert_eq!(pairs.len(), 1);
         return Outcome::Error(code.clone());
     }
-    Outcome::Grant { grant: pairs["scribyra-sso"].clone(), org: pairs["org"].clone() }
+    Outcome::Grant { grant: pairs["scribyra-sso"].clone(), org: pairs.get("org").cloned() }
 }
