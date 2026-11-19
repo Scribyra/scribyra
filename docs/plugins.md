@@ -575,9 +575,89 @@ origins its permissions name, and nothing else.
 - `project.freePath` tells a plugin whether paths matching its `create` globs exist.
 - Commands and file actions run only while their `ui.*` permission is granted.
 
+## Security review
+
+An independent adversarial review of the sandbox and the capability enforcement found
+10 confirmed bugs, none of them a sandbox escape. Each was fixed, with a regression test.
+
+| Finding | Severity | Fix |
+| --- | --- | --- |
+| Request size measured by `JSON.stringify` on the main thread: a huge typed array froze the page; a `Map` passed as tiny | high | Bounded walk over plain JSON data only |
+| Rollback restored a revoked permission | medium | Revocations kept in the record, across updates and rollbacks |
+| A plugin tree action fell through into Import folder (missing `break`) | medium | `break`; test that no file picker opens |
+| Contributed citation keys could carry TeX into files through completion | medium | Keys limited to BibTeX key characters |
+| Notices, More tools items and file bars were unattributed (spoofing) | medium | "<Plugin>:" on notices, plugin name on items and bars, Scribyra item names and hidden characters refused |
+| A dismissed dialog granted activation, so a plugin could reopen modals forever | medium | Activation from gestures only; a 2 s pause and a new gesture needed after Dismiss |
+| Redraw calls unthrottled | medium | Paced per plugin; app redraws coalesced per frame |
+| A sideload from another URL took over an installed plugin and its secrets | low–medium | Another site is a conflict until the old plugin is uninstalled |
+| Revoking `ui.command`/`ui.fileAction` left the items working | low | Contributions and their dispatch need the grant |
+| `**/main.tex` matched `domain.tex` | low | `**/` matches whole folders |
+
+Lower-risk items also fixed:
+
+- Store writes are checked after a plugin stops.
+- The file picker closes when its plugin stops.
+- Consent says when an origin is on this computer or the local network.
+- The runtime also removes `WebSocketStream` and `FontFace`. A test shows a worker started in
+  the sandbox frame inherits the deny-all CSP.
+- Migration respects the policy and takes the highest compatible version.
+- Package file names cannot be `__proto__` or similar.
+- "Scribyra" in a plugin's name or publisher is reserved for official plugins.
+
+Accepted and documented:
+
+- `project.freePath` shows whether paths matching the plugin's create globs exist.
+- In Editing, history credits plugin edits to the person.
+
 ## Verification results
 
-Recorded when the implementation and its tests land.
+On November 19, 2026, Linux, software-rendered WebKit, against the final code:
+
+- **`nix develop -c npm test`:** Rust 171 pass, 0 fail, 2 existing ignores; JavaScript and
+  WASM 1,275 tests: 1,269 pass, 0 fail, 6 existing optional-service skips. This includes
+  `tests/plugins.test.mjs` 19/19 and `tests/zotero.test.mjs` 18/18.
+  - An earlier run under concurrent browser load failed once in the unrelated folders CLI
+    test `explicit_native_diagnostics…`. It passed alone (4/4), and the full rerun
+    without load passed.
+- **Browser specs**, together: `plugins` (6), `zotero` (8), `workspace`, `editor`,
+  `accessibility`, `menus`, `agent-surface`. Chromium 51/51, Firefox 51/51, WebKit 51/51.
+- **After `npm run build:pages`:** `pages-domains` 2/2 per engine, and
+  `python3 scripts/ci-telemetry.py browser-pages` 14/14.
+- **Builds:** `npm run build`, the Pages build and the final `npm run build` pass.
+- **Screenshots** in `docs/screenshots/plugins/`, light and dark, were reviewed: the
+  manager (empty, installed, developer mode), consent, a template plugin's dialog, and
+  Zotero's link dialog, linked file and refresh diff. Reviewing them found stray "null"
+  text and broken radio layout, both fixed with a regression check.
+
+What the plugin specs prove in all three engines:
+
+- **Consent.** Nothing is fetched or run before install, and Cancel installs nothing.
+- **Lifecycle.** Install, disable, enable, reload and uninstall, with all data and secrets
+  removed.
+- **A malicious plugin is refused:**
+  - It runs in an opaque origin with no DOM, storage, network globals, eval or cookies.
+  - It cannot read another project, files outside its globs, another plugin's key, data
+    or links, or contact undeclared, credentialed or app origins.
+  - It cannot write outside its scope, or open dialogs or files without a gesture.
+  - It cannot use HTML or `javascript:` links in dialogs.
+  - In Viewing it is refused. In Reviewing its changes become suggestions credited to
+    "Probe (plugin)".
+  - The sandbox frame itself and a worker inside it are blocked by the CSP.
+- **Review regressions:** the cases in the table above.
+- **Updates.** Re-consent asks only for new permissions. Rollback, revoke and grant again
+  work, and a revocation survives rollback.
+- **Developer mode.** Turning it off stops sideloaded plugins. Official ids are reserved.
+  A takeover from another site is refused.
+- **Tampering.** A tampered official package is refused.
+- **Templates.** Both run: JavaScript, and Rust compiled to WASM with cargo in the test.
+
+Not covered:
+
+- Real-world review of third-party plugins.
+- The organisation policy delivered by a deployment; it is a build setting today and
+  unit-tested only.
+- Real assistive technology.
+- `ui.panel`.
 
 ## Open decisions
 
