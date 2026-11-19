@@ -27,24 +27,24 @@ function permissionList(permissions,{label='Permissions'}={}){
  * Asks before installing or updating. `added` lists only what is new for an update.
  * Resolves to true when the person agrees.
  */
-export function consentDialog({manifest,source,sourceUrl,sha256,existing=null,added}){
+export function consentDialog({manifest,source,sourceUrl,sha256,existing=null,added,regrant=false}){
   return new Promise(resolve=>{
     const update=!!existing,newOnly=update&&Object.keys(added).length>0;
-    const title=update?`Update ${manifest.name} to ${manifest.version}?`:`Install ${manifest.name}?`;
+    const title=regrant?`Allow ${manifest.name} again?`:update?`Update ${manifest.name} to ${manifest.version}?`:`Install ${manifest.name}?`;
     const dialog=el('dialog',{className:'modal plugin-consent','aria-label':title});restoreDialogFocus(dialog);
     const finish=value=>{dialog.close();dialog.remove();resolve(value);};
     dialog.append(
       el('h2',{text:title}),
-      el('p',{className:'plugin-meta',text:`${manifest.name} ${manifest.version} · by ${manifest.publisher}${update?` · now ${existing.version}`:''}`}),
+      el('p',{className:'plugin-meta',text:`${manifest.name} ${manifest.version} · by ${manifest.publisher}${update&&!regrant?` · now ${existing.version}`:''}`}),
       manifest.description?el('p',{text:manifest.description}):null,
       source==='developer'?el('div',{className:'plugin-warning',role:'alert'},
         el('strong',{text:'Not reviewed by Scribyra.'}),
         el('p',{text:`This plugin comes from ${sourceUrl} and is not signed. Install it only if you trust its author and have read its code. It runs in a sandbox, but whatever you allow below, it can do.`}),
         el('p',{className:'plugin-hash'},'SHA-256 ',el('code',{text:sha256}))):el('p',{className:'plugin-text tone-note',text:sourceText(source)}),
-      el('h3',{text:newOnly?'This version asks for more:':update?'It asks for nothing new.':'It will be able to:'}),
+      el('h3',{text:regrant?'It will be able to:':newOnly?'This version asks for more:':update?'It asks for nothing new.':'It will be able to:'}),
       newOnly||!update?permissionList(newOnly?added:manifest.permissions,{label:newOnly?'New permissions':'Permissions'}):null,
       el('p',{className:'plugin-text tone-muted',text:'It runs in a sandbox: it cannot see your other projects, this browser’s storage, other plugins’ data, or any address not listed. You can revoke permissions, disable or uninstall it anytime in More tools → Plugins.'}),
-      el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button(update?'Update':'Install',()=>finish(true),{primary:true})));
+      el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button(regrant?'Allow':update?'Update':'Install',()=>finish(true),{primary:true})));
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
     document.body.append(dialog);dialog.showModal();dialog.querySelector('.button.primary').focus();
   });
@@ -125,7 +125,7 @@ export function pluginManager({system,catalog,fetchPackage,policy,notify}){
             return el('li',{'data-permission':line.key,'data-granted':String(granted)},el('span',{text:line.text}),
               granted?button('Revoke',()=>void work(async()=>{await system.revoke(record.id,line.key);say(`${name} can no longer: ${line.text.toLowerCase()}.`);}),{'aria-label':`Revoke: ${line.text}`,'data-focus':`perm:${record.id}:${line.key}`,disabled:busy})
                 :el('span',{className:'plugin-revoked'},el('small',{text:'Revoked'}),button('Grant again',()=>void work(async()=>{
-                  if(!await consentDialog({manifest:record.manifest,source:record.source,sourceUrl:record.sourceUrl,sha256:record.sha256,existing:{version:record.version},added:{[line.key]:record.manifest.permissions[line.key]}}))return;
+                  if(!await consentDialog({manifest:record.manifest,source:record.source,sourceUrl:record.sourceUrl,sha256:record.sha256,existing:{version:record.version},added:{[line.key]:record.manifest.permissions[line.key]},regrant:true}))return;
                   await system.grant(record.id,line.key);say(`${name} can again: ${line.text.toLowerCase()}.`);}),{'aria-label':`Grant again: ${line.text}`,'data-focus':`perm:${record.id}:${line.key}`,disabled:busy})));
           })),
           el('div',{className:'plugin-card-actions'},

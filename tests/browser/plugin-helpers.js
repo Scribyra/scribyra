@@ -82,6 +82,7 @@ export async function sideload(page,url,{consentName,accept=true}={}){
   await manager.getByLabel('Plugin package URL').fill(url);await manager.getByRole('button',{name:'Install from URL'}).click();
   const consent=page.getByRole('dialog',{name:consentName});await expect(consent).toBeVisible();
   await expect(consent.getByRole('alert')).toContainText('Not reviewed by Scribyra.');
-  if(accept)await consent.getByRole('button',{name:/^(Install|Update)$/}).click();else await consent.getByRole('button',{name:'Cancel'}).click();
+  // accept: true installs, false cancels, null leaves the dialog open for the caller.
+  if(accept===true)await consent.getByRole('button',{name:/^(Install|Update)$/}).click();else if(accept===false)await consent.getByRole('button',{name:'Cancel'}).click();
   return consent;
 }
