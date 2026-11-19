@@ -145,7 +145,7 @@ test('staging pages get noindex, a banner and robots, and no sitemap, without to
  }finally{await rm(root,{recursive:true,force:true});}
 });
 test('production site pages are indexable, with a sitemap of scribyra.com pages; staging turns that off',async()=>{
- const pages=['index.html','privacy.html','licenses.html','telemetry.html'];
+ const pages=['index.html','privacy.html','licenses.html','telemetry.html','open.html'];
  for(const name of pages){const html=await readFile(join('site',name),'utf8');assert.doesNotMatch(html,/<meta\s+name="robots"/i,name);assert.match(stagingHtml(html),/<meta name="robots" content="noindex, nofollow">/,name);}
  const robots=await readFile('site/robots.txt','utf8');assert.match(robots,/^User-agent: \*\nAllow: \/\n/);assert.doesNotMatch(robots,/^Disallow: \/$/m);assert.match(robots,/^Disallow: \/field-test\/$/m);assert.match(robots,/^Sitemap: https:\/\/scribyra\.com\/sitemap\.xml$/m);assert.notEqual(robots,ROBOTS);
  const sitemap=await readFile('site/sitemap.xml','utf8'),urls=[...sitemap.matchAll(/<loc>([^<]+)<\/loc>/g)].map(m=>m[1]);

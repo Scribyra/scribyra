@@ -4,6 +4,7 @@ import {cloneProject,blobRefs,knownBlob,installBlob,copyBlobs} from './assets.js
 import {SCHEMA_VERSION,validateProjectState,validatePeerState,validateRetainedState,MAX_RETAINED_BYTES} from './model.js';
 import {concurrentBinaryVersions,binaryRecoverySources} from './binary-recovery.js';
 import {registerRemoteOrigin} from './change-origins.js';
+import {validImportSource} from './open-link.js';
 
 export const PEER_UPDATE=Symbol('direct peer update');
 export function hex(bytes){const parts=[];for(let i=0;i<bytes.length;i+=8192)parts.push(Array.from(bytes.subarray(i,i+8192),b=>b.toString(16).padStart(2,'0')).join(''));return parts.join('');}
@@ -18,7 +19,7 @@ export function checkHello(value,lineage){
 }
 // Shared with local tabs: validate the complete merged state, never just the delta.
 function validatePeerMetadata(doc,baseline){
- const types={schemaVersion:'number',lineageId:'string',name:'string',mainFile:'string',engine:'string',texEnvironment:'object',texLinkOrigin:'string'},meta=doc.getMap('meta');
+ const types={schemaVersion:'number',lineageId:'string',name:'string',mainFile:'string',engine:'string',texEnvironment:'object',texLinkOrigin:'string',importSource:'object'},meta=doc.getMap('meta');
  for(const [key,value]of meta){
   if(key.startsWith('directProof:')){if(!validateProofEntry(doc,key,value))throw Error('Unverified edit: a peer sent an invalid record proof. Your local copy is unchanged.');}
   else if(key.startsWith('directClaim:')){if(!validateClaimEntry(doc,key,value))throw Error('Unverified edit: a peer sent an invalid claim to earlier records. Your local copy is unchanged.');}
@@ -30,6 +31,9 @@ function validatePeerMetadata(doc,baseline){
  // first join, but a peer cannot impose it on a project that already has content.
  const before=baseline.getMap('meta');
  if(meta.get('texLinkOrigin')!==before.get('texLinkOrigin')&&(baseline.getMap('files').size||meta.get('texLinkOrigin')!=='link'))throw Error('Invalid peer project metadata.');
+ // Where an open link imported the project from: well-formed, and fixed once the project has content.
+ if(meta.has('importSource')&&!validImportSource(meta.get('importSource')))throw Error('Invalid peer project metadata.');
+ if(JSON.stringify(meta.get('importSource')??null)!==JSON.stringify(before.get('importSource')??null)&&baseline.getMap('files').size)throw Error('Invalid peer project metadata.');
 }
 export function validateReplica(doc){
  if(doc.getMap('meta').get('schemaVersion')!==SCHEMA_VERSION)throw Error('The committed project needs a different Scribyra version.');

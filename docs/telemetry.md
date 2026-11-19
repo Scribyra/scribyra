@@ -79,6 +79,13 @@ the Zotero plugin's sources and the built packages never call the recorder. The 
 changes a plugin makes are ordinary local-only `command` and `storage_commit` work. See
 [Zotero](zotero.md).
 
+Open in Scribyra links add no operation either. The link, its host, repository,
+ref, folder, file names, sizes, commit and skip report record nothing
+(`tests/telemetry-consent.test.mjs` checks that the `web/open-link*` modules,
+`site/open-link-format.js` and `site/open.js` never call the recorder); creating
+the project is local-only `command` and `storage_commit` work, and an import and
+compile is an ordinary `compile`. See [Open links](open-links.md).
+
 Start records are omitted; error outcomes/categories are removed without error
 consent, and measurements are filtered independently. Every sent value is coarse;
 local diagnostics keep exact values.

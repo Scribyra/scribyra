@@ -28,6 +28,11 @@
   <a href="https://scribyra.com/"><img src="https://img.shields.io/badge/Website-eeebfc?style=for-the-badge" alt="Website" height="36"></a>
 </p>
 
+<p align="center">
+  <a href="https://app.scribyra.com/#open?repo=github.com/Scribyra/scribyra&path=fixtures/article&name=Scribyra%20sample%20article"><img src="https://scribyra.com/badge.svg" alt="Open in Scribyra" height="28"></a>
+  <br><sub>Opens the sample article in <code>fixtures/article</code>. <a href="https://scribyra.com/open.html">Make a badge for your own repository</a> · <a href="docs/open-links.md">link format</a></sub>
+</p>
+
 <br>
 
 <p align="center">
