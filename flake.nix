@@ -39,6 +39,11 @@
       SCRIBYRA_BWRAP = "${pkgs.bubblewrap}/bin/bwrap";
       SCRIBYRA_TEXLIVE = "${pkgs.texliveSmall}";
       SCRIBYRA_TEXLIVE_CLOSURE = "${pkgs.closureInfo { rootPaths = [ pkgs.texliveSmall ]; }}/store-paths";
+      # The WebAssembly engine (the default): the pinned Node and the closure the sandbox binds
+      # (Node, a bash for the in-namespace rlimits, coreutils for tests). The compile runtime
+      # itself comes from `node scripts/wasm-compile-runtime.mjs <dir>` (SCRIBYRA_WASM_RUNTIME).
+      SCRIBYRA_NODE = "${pkgs.nodejs_22}/bin/node";
+      SCRIBYRA_WASM_CLOSURE = "${pkgs.closureInfo { rootPaths = [ pkgs.nodejs_22 pkgs.bash pkgs.coreutils ]; }}/store-paths";
       PLAYWRIGHT_BROWSERS_PATH = "${pkgs.playwright-driver.browsers}";
       PLAYWRIGHT_SKIP_VALIDATE_HOST_REQUIREMENTS = "true";
       PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH = if pkgs.stdenv.hostPlatform.isLinux then "${pkgs.chromium}/bin/chromium" else "";

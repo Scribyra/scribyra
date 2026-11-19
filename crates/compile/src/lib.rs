@@ -4,13 +4,18 @@
 //! the (bounded) log. [`Bubblewrap`] is the runner: one bwrap sandbox per job with an empty
 //! network namespace, a read-only bind of exactly the TeX Live closure, a size-limited tmpfs as
 //! the only writable path, a seccomp filter and rlimits. Blocking; [`spawn`] runs a job on its
-//! own thread as a future that cancels the job when dropped.
+//! own thread as a future that cancels the job when dropped. The same runner can instead run
+//! the browser's WebAssembly engine under Node ([`Bubblewrap::wasm`]), with packages from a
+//! shared, integrity-checked [`PackageCache`].
 
 mod bwrap;
+pub mod cache;
 mod cgroup;
 pub mod seccomp;
+mod wasm;
 
 pub use bwrap::{store_closure, Bubblewrap, RawOutcome};
+pub use cache::{PackageCache, Packages};
 pub use cgroup::Confinement;
 
 /// The in-sandbox driver script (for tests that run it under the raw hook).
