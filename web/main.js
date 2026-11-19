@@ -21,8 +21,13 @@ import {companionHost,CompanionOrigin} from './companion-host.js';
 import {connectCompanion} from './companion-connection.js';
 import {companionDialog} from './companion-dialog.js';
 import {environmentDialog} from './environment-dialog.js';
-import {zoteroController,sourceLabel,freePath} from './zotero.js';
-import './zotero.css';
+import {checkImport} from './bibliography-import.js';
+import {pluginSystem} from './plugin-system.js';
+import {pluginManager,pickFileDialog} from './plugin-ui.js';
+import {openPluginDialog} from './plugin-dialog.js';
+import {normalPolicy} from './plugin-manifest.js';
+import {migrateLegacyZotero} from './plugin-migration.js';
+import './plugin.css';
 import {trackComposition,compositionInProgress,composingEvent,restoreDialogFocus} from './input.js';
 trackComposition(document);
 import init, { main as startApp, TelemetryRecorder } from './pkg/scribyra_app.js';
@@ -51,7 +56,7 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle, bracketMatching, indentUnit } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import { yCollab, yUndoManagerKeymap } from 'y-codemirror.next';
-import { projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
+import { freePath, projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
 import * as storage from './storage.js';
 import { readBrowserFiles, readDirectory, readDroppedFiles } from './import-files.js';
 import {readBibliography} from './bibtex.js';
@@ -78,7 +83,7 @@ let diagnostics,diagnosticsPanel,remoteDiagnostics,consentDiagnostics;
 const startupAt=performance.now(),dashboardTitle=document.title;
 let providerPanel;const providerConnections=new Map();
 let environmentPanel,companionPanel,companion;let pdfBuild=null,leavingProject=false;
-let allProjects = [], doc, projectId, editor, sync, pdfBytes, commands;
+let allProjects = [], doc, projectId, editor, sync, pdfBytes, commands, plugins = null;
 let collaboration,agent,agentOwner,transientProject=false,direct,openingDirectAttempt,completionIndex=null;
 let initialDirectInvite=location.hash.startsWith('#direct=')?location.href:'';
 if(initialDirectInvite)history.replaceState(null,'',location.pathname+location.search);
@@ -103,16 +108,32 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
 const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
-const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
+const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...pluginRender(),...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
 const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision,emit,activate:activateFile,notify:notice,wireTree,mutate:run=>{assertUiMutation(collaboration?.review.state.mode);return run();}});
 const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision,emit,notify:notice,showRectangle:showSourceRectangle,clearMarker:clearSourceHighlight,activate:(id,line)=>{activateFile(id);selectSourceLine(line);}});
-// Bibliography import and Zotero links (docs/zotero.md). Links and keys stay on this device.
-const zotero=zoteroController({context:()=>doc&&!leavingProject&&commands?{doc,projectId,commands,mode:collaboration?.review.state.mode,transient:transientProject}:null,notify:message=>notice(message),activate:id=>activateFile(id),onLinks:()=>{zoteroBar();emit();}});
-function zoteroBar(){
-  const link=state.active?zotero.linked(state.active):null;
-  state.zotero=link?{linked:true,summary:`Linked to Zotero · ${sourceLabel(link)}${link.refreshedAt?` · refreshed ${new Date(link.refreshedAt).toLocaleString(undefined,{dateStyle:'medium',timeStyle:'short'})}`:''}`}:{linked:false,summary:''};
+// Plugins (docs/plugins.md): installed per browser, each in its own sandbox, reaching
+// the open project only through the capability API. Zotero is one (plugins/zotero).
+// The policy is a build setting until organisation deployments deliver it.
+const pluginPolicy=normalPolicy(import.meta.env.VITE_SCRIBYRA_PLUGIN_POLICY);
+const pluginCatalog=()=>import('./plugin-catalog.js');
+let pluginMode=null,pluginActive=null;
+plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),changed:()=>emit(),env:{
+  project:()=>doc&&!leavingProject&&commands&&collaboration?{doc,projectId,commands,collaboration,owner:agentOwner,mode:collaboration.review.state.mode,transient:transientProject,activeFileId:state.active}:null,
+  notify:message=>notice(message),activate:id=>activateFile(id),
+  openDialog:options=>openPluginDialog(options),pickFile:options=>pickFileDialog(options),
+  fetch:(...args)=>globalThis.fetch(...args),
+}});
+// Links and keys of the former built-in Zotero move into its plugin (only if any exist).
+plugins.before(migrateLegacyZotero({catalog:pluginCatalog,policy:pluginPolicy}).then(moved=>{if(moved)notice(`Zotero is now a plugin. Your ${moved.links} Zotero ${moved.links===1?'link':'links'} and ${moved.keys} ${moved.keys===1?'key':'keys'} moved into it on this device; see More tools → Plugins.`);}));
+/** What plugins contribute to the next render; also tells them about mode and file changes. */
+function pluginRender(){
+  if(!plugins)return {fileBar:null,pluginCommands:[]};
+  const mode=collaboration?.review.state.mode||null,current=doc&&!leavingProject?state.active||null:null;
+  if(mode!==pluginMode){pluginMode=mode;if(mode)plugins.modeChanged(mode);}
+  if(current!==pluginActive){pluginActive=current;plugins.activeFileChanged(current);}
+  return {fileBar:current?plugins.bar(current,mode):null,pluginCommands:doc?plugins.commands():[]};
 }
 function persistWorkspace() {
   if (!projectId || !doc || transientProject) return;
@@ -134,7 +155,7 @@ function captureSelection() {
 }
 const syntaxColors={'#708':'keyword','#219':'keyword','#05a':'special','#164':'variable','#a11':'string','#00f':'number','#085':'variable','#a50':'type','#777':'comment','#c00':'invalid'};
 const accessibleHighlight=HighlightStyle.define(defaultHighlightStyle.specs.map(style=>({...style,...(style.color?{color:syntaxColors[style.color]?`var(--syntax-${syntaxColors[style.color]})`:'var(--text)'}:{})})));
-function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
+function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>plugins?.completionIndex(completionIndex)??completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
 // Comments stay available in Viewing; anything that decides a suggestion or changes accepted source does not.
 const viewingRefuses=new Set(['suggestion.accept','suggestion.reject','suggestion.withdraw','review.acceptAll','review.acceptSet','review.propose','review.retry','review-accept-visible','review-reject-visible','change.undo','change.redo']);
 function activateFile(id,start,end=start) {
@@ -200,7 +221,7 @@ function refreshDoc(openFirst = false) {
   if(openFirst&&!state.active)state.active=(state.files.find(f=>f.id===state.mainFile)||state.files.find(f=>!f.binary)||state.files[0])?.id||'';
   if (!state.files.some(f => f.id === state.active)) state.active = state.tabs[0]?.id || '';
   if(state.active&&!state.tabs.some(f=>f.id===state.active))state.tabs.push(state.files.find(f=>f.id===state.active));
-  workspace.activeChanged();persistWorkspace();zoteroBar();
+  workspace.activeChanged();persistWorkspace();
   emit();
   requestAnimationFrame(() => { mountEditor(); wireTree(); });
 }
@@ -283,7 +304,7 @@ async function leaveProject({save=true,directAttempt}={}) {
   try{if(save)await flushSave();}catch(error){leavingProject=false;throw error;}
   agent?.close();agent=null;window.scribyra.agent=null;
   tabSession?.close();tabSession=null; persistWorkspace(); workspace.leave(); navigation.clear(); selections.clear(); clearTimeout(autoTimer); autoPending=false; builds.close(); state.busy = false;
-  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;zotero.close();
+  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;plugins.projectClosed();
   clearAsset(); collapsed.clear(); sourcePositions.clear(); lastSource=null;
   sync?.close(); sync = null; editor?.destroy(); editor = null; mountedFile = null;
   for (const manager of undoManagers.values()) manager.destroy(); undoManagers.clear();
@@ -331,7 +352,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   Object.assign(state,collaboration.state);
   agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,mode:()=>collaboration?.review.state.mode,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
   window.scribyra.agent=agent.api;
-  loadWorkspace();void zotero.load(id);texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
+  loadWorkspace();void plugins.projectOpened();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');
   if(previousEngine!=='lualatex') { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
   refreshDoc(); state.selected = state.active; emit();
@@ -467,7 +488,7 @@ async function importBibliography(client=commands,expected) {
   const wrong=files.find(file=>!/\.bib$/i.test(file.name));if(wrong)throw new Error(`“${wrong.name}” is not a .bib file. Export BibTeX or BibLaTeX from Zotero or your reference manager, then import that file.`);
   const entries=await readBrowserFiles(files,directory),renamed=[];
   for(const entry of entries){const path=freePath(targetDoc,entry.path);if(path!==entry.path){renamed.push(`${entry.path} → ${path}`);entry.path=path;}}
-  if(!await zotero.checkImport(entries))return;
+  if(!await checkImport(entries))return;
   importEntries(targetDoc,entries,client,expected,destination);
   const count=entries.reduce((sum,entry)=>sum+readBibliography(entry.content).entries.length,0);
   notice(`Imported ${entries.length===1?entries[0].path:`${entries.length} bibliography files`} with ${count} ${count===1?'entry':'entries'}; citation keys are unchanged.${renamed.length?` A file with that name existed, so it was imported as ${renamed.join(', ')}.`:''}`);
@@ -502,7 +523,7 @@ function wireFileDrop(area) {
     try {
       const directory=directoryAt(e),local=e.dataTransfer.getData(type);
       if(local){const item=JSON.parse(local);if(item.projectId!==projectId)throw new Error('Move files within the same project. Use export/import between projects.');const node=projectNode(doc,item.id);if(!node)throw new Error('The dragged item no longer exists.');await moveWithReview(node.id,directory+node.name);}
-      else {const targetDoc=doc,destination=destinationGuard(),entries=await readDroppedFiles(e.dataTransfer,directory);if(await zotero.checkImport(entries))importEntries(targetDoc,entries,commands,undefined,destination);}
+      else {const targetDoc=doc,destination=destinationGuard(),entries=await readDroppedFiles(e.dataTransfer,directory);if(await checkImport(entries))importEntries(targetDoc,entries,commands,undefined,destination);}
     }catch(error){displayError(error);}
   };
 }
@@ -603,7 +624,7 @@ async function treeMenu(id,origin={},client=commands,expected){
   const row=id?treeRow(id):null,button=row?.querySelector('.file-menu'),anchor=origin.point?undefined:origin.anchor||button||document.querySelector('.tree-root');
   const blocked=treeEditBlocked(),target=doc;
   const menuSignature=()=>client===commands&&doc===target?JSON.stringify([nodeShape(id),state.trashCount,treeEditBlocked()]):null,seen=menuSignature();
-  const opened=openMenu({label:node?`${node.folder?'Folder':'File'} actions`:'Project files',title:node?node.path:'Project files',note:blocked||undefined,items:treeMenuItems(node,{blocked,trashCount:state.trashCount,linked:!!(node&&zotero.linked(node.id))}),anchor,point:origin.point,scope:workspaceRoot(),
+  const opened=openMenu({label:node?`${node.folder?'Folder':'File'} actions`:'Project files',title:node?node.path:'Project files',note:blocked||undefined,items:treeMenuItems(node,{blocked,trashCount:state.trashCount,pluginItems:plugins.fileActions(node,{mode:collaboration?.review.state.mode,blocked})}),anchor,point:origin.point,scope:workspaceRoot(),
     returnFocus:()=>id?treeRow(id)?.querySelector('[data-node]')||document.querySelector('.tree-root'):document.querySelector('.tree-root'),
     // Closes when what the menu offers changes, not when any file's text does.
     watchOptions:menuSignature,
@@ -625,12 +646,17 @@ async function treeMenu(id,origin={},client=commands,expected){
     case 'new-file': case 'new-folder': state.selected=id;emit();await addNode(choice==='new-file'?'file':'folder',next,client,expected);break;
     case 'upload': {
       state.selected=id;emit();const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('',true),entries=await readBrowserFiles(files,directory);
-      if(await zotero.checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
+      if(await checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
     }
     case 'import-bibliography': state.selected=id||'';emit();await importBibliography(client,expected);break;
-    case 'zotero-link': state.selected=id||'';emit();await zotero.link({directory:selectedDirectory()});break;
-    case 'zotero-refresh': await zotero.refresh(id);break;
-    case 'zotero-panel': await zotero.panel();break;
+    default:
+      // A plugin's tree action: “plugin:<id>:<action>”. Folders and the root pass their folder.
+      if(choice.startsWith('plugin:')){
+        const [,plugin,action]=choice.split(':');
+        if(!node||node.folder){state.selected=id||'';emit();}
+        await plugins.runFileAction(plugin,action,{nodeId:node&&!node.folder?id:null,directory:!node||node.folder?selectedDirectory():''});
+      }
+      break;
     case 'import-folder': state.selected='';emit();await importFolder(client,expected);break;
     case 'restore': client.run({op:'trash.restore'},expected);if(!state.active)activateFile(state.mainFile||state.files[0]?.id);notice('Last deletion restored with its original contents.');break;
   }
@@ -776,7 +802,7 @@ async function action(name, value = '', detail = {}) {
         const choice = await openMenu({label:'Project actions',anchor,items:[{label:'Open project',value:'open',icon:'open'},...(backup?[{label:'Export pre-upgrade backup',value:'backup',icon:'download'}]:[]),{separator:true},{label:'Delete project',value:'delete',icon:'trash',danger:true}]});
         if (choice === 'open') await openProject(value);
         if (choice === 'backup') { const original = new Y.Doc(); try { Y.applyUpdate(original, backup); download(exportZip(original), 'pre-upgrade-sources.zip', 'application/zip'); } finally { original.destroy(); } }
-        if (choice === 'delete' && await openPrompt({title:'Delete project',message:'Deleting a local project cannot be undone. Export a backup first.',label:'Delete project',danger:true,anchor})) { await storage.deleteProject(value); await zotero.forgetProject(value); await refreshProjects(); }
+        if (choice === 'delete' && await openPrompt({title:'Delete project',message:'Deleting a local project cannot be undone. Export a backup first.',label:'Delete project',danger:true,anchor})) { await storage.deleteProject(value); await plugins.forgetProject(value); await refreshProjects(); }
         break;
       }
       case 'add-file': await addNode('file',detail,client,expected);break;
@@ -784,13 +810,20 @@ async function action(name, value = '', detail = {}) {
       case 'file-menu': await treeMenu(value,detail,client,expected);break;
       case 'upload-files': {
         const targetDoc = doc, directory = selectedDirectory(), destination = destinationGuard(), uploads = await pickFiles('', true), entries = await readBrowserFiles(uploads,directory);
-        if(await zotero.checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
+        if(await checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
       }
       case 'import-folder': await importFolder();break;
       case 'import-bibliography': await importBibliography(client,expected);break;
-      case 'zotero': await zotero.panel();break;
-      case 'zotero-link': await zotero.link({directory:selectedDirectory()});break;
-      case 'zotero-refresh': await zotero.refresh(value||state.active);break;
+      case 'plugins': await pluginManager({system:plugins,catalog:pluginCatalog,policy:pluginPolicy,notify:notice,fetchPackage:readPluginPackage});break;
+      // Plugin contributions: “<plugin id>:<command or action>”, and for tree actions “:<node id>”.
+      case 'plugin-command': {const [plugin,command]=value.split(':');await plugins.runCommand(plugin,command);break;}
+      case 'plugin-bar': {const [plugin,action]=value.split(':');if(state.active)await plugins.runBarAction(plugin,action,state.active);break;}
+      case 'plugin-file-action': {
+        const [plugin,action,nodeId='']=value.split(':'),node=nodeId?projectNode(doc,nodeId):null;
+        if(nodeId&&!node)break;
+        if(!node||node.folder){state.selected=nodeId;emit();}
+        await plugins.runFileAction(plugin,action,{nodeId:node&&!node.folder?nodeId:null,directory:!node||node.folder?selectedDirectory():''});break;
+      }
       case 'insert-figure': {
         const snippet=figureSnippet(doc,value),target=projectNode(doc,lastSource)||projectNode(doc,state.mainFile);
         if(!target||target.binary||target.folder||! /\.(tex|ltx)$/i.test(target.path))throw new Error('Open a TeX source file first, then select the figure.');
@@ -958,3 +991,12 @@ if(initialDirectInvite){try{const invitation=parseInvite(initialDirectInvite);
       enable:async()=>{await enableDirectSessions();direct?.close();direct=null;placeholder.destroy();initialDirectInvite=text;await openInvitedProject(invitation);}});
     initialDirectInvite='';direct.show();
   }}catch(error){notice(error.message);}}
+
+/** A sideloaded plugin package (developer mode only; docs/plugins.md#registry). */
+async function readPluginPackage(url){
+  const response=await fetch(url,{credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer'}).catch(()=>{throw new Error(`Scribyra could not read ${url}. The server must allow cross-origin requests (CORS).`);});
+  if(!response.ok)throw new Error(`The plugin package could not be read (HTTP ${response.status}).`);
+  const bytes=new Uint8Array(await response.arrayBuffer());
+  if(bytes.length>4*1024*1024)throw new Error('This plugin package is larger than 4 MiB.');
+  return bytes;
+}

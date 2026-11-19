@@ -1,0 +1,20 @@
+{
+  "manifestVersion": 1,
+  "id": "org.example.word-count-rust",
+  "name": "Word count (Rust)",
+  "version": "1.0.0",
+  "publisher": "Example",
+  "description": "Counts the words in the open project's TeX files, in Rust compiled to WebAssembly.",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "project.read": {"files": ["*.tex"]},
+    "ui.dialog": true,
+    "ui.command": true
+  },
+  "contributes": {
+    "commands": [
+      {"id": "count", "label": "Word count (Rust)", "hint": "Words per TeX file"}
+    ]
+  }
+}
