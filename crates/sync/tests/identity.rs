@@ -281,7 +281,9 @@ fn one_providers_claims_never_reach_another_providers_organisation() {
 fn keycloak_entra_google_and_profiles_from_userinfo() {
     let users = json!([
         {"sub": "k1", "username": "kim", "password": "pw-kim", "email": "kim@k.test", "email_verified": true, "name": "Kim",
-         "keycloak": {"realm_roles": ["offline_access", MEMBER], "client_roles": {CLIENT_ID: [ADMIN]}, "organization": {"lab": {}, "acme": {}}}},
+         "keycloak": {"realm_roles": ["offline_access", MEMBER, "acme:scribyra:member"], "client_roles": {CLIENT_ID: ["lab:scribyra:admin"]}, "organization": {"lab": {}, "acme": {}}}},
+        // In two organisations with an unprefixed administrator role: an administrator of neither.
+        {"sub": "k3", "username": "kit", "password": "pw-kit", "email": "kit@k.test", "email_verified": true, "keycloak": {"client_roles": {CLIENT_ID: [ADMIN]}, "organization": ["lab", "acme"]}},
         {"sub": "k2", "username": "kai", "password": "pw-kai", "email": "kai@k.test", "email_verified": true, "keycloak": {"client_roles": {"other": [ADMIN]}, "organization": ["lab"]}},
         {"sub": "e1", "username": "ed", "password": "pw-ed", "email": "ed@e.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "tenant-1", "acct": 0}},
         {"sub": "e2", "username": "gil", "password": "pw-gil", "email": "gil@guest.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "tenant-1", "acct": 1}},
@@ -304,7 +306,8 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
     let kim = c.login("kim");
     let mut kim_orgs: Vec<(&str, &str)> = kim["orgs"].as_array().unwrap().iter().map(|o| (o["name"].as_str().unwrap(), o["role"].as_str().unwrap())).collect();
     kim_orgs.sort();
-    assert_eq!(kim_orgs, [("acme", "admin"), ("lab", "admin")]);
+    assert_eq!(kim_orgs, [("acme", "member"), ("lab", "admin")], "roles named for an organisation count there only");
+    assert_eq!(c.sign_in("kit").0, Outcome::Error("no_role".into()), "unprefixed roles are no organisation's when the token names several");
     let lab = kim["orgs"].as_array().unwrap().iter().find(|o| o["name"] == "lab").unwrap()["id"].as_str().unwrap().to_owned();
     assert_eq!(c.sign_in("kai").0, Outcome::Error("no_role".into()), "another client's roles do not count");
     let uma = c.login("uma");

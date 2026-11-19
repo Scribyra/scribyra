@@ -622,6 +622,10 @@ pub struct Provider {
     /// Keycloak 26 organisations: ask for and read the `organization` claim.
     #[serde(default)]
     pub keycloak_organizations: bool,
+    /// Keycloak organisations: realm, client and group roles without an `<alias>:` prefix count
+    /// in every organisation of someone in several (otherwise only in someone's only one).
+    #[serde(default)]
+    pub roles_apply_to_all_organisations: bool,
     /// Google: the exact `sub` values of administrators (the only identities the configuration
     /// names, because Google's tokens carry no roles).
     #[serde(default)]
@@ -779,6 +783,9 @@ impl Provider {
         }
         if self.keycloak_organizations && self.preset != Some(Preset::Keycloak) {
             return Err("deployment.providers[].keycloak_organizations is for the keycloak preset only");
+        }
+        if self.roles_apply_to_all_organisations && !self.keycloak_organizations {
+            return Err("deployment.providers[].roles_apply_to_all_organisations needs keycloak_organizations");
         }
         Ok(())
     }
@@ -1047,6 +1054,8 @@ mod tests {
         assert!(refused(json!({"zitadel_project_id": "1"})).contains("zitadel preset only"));
         assert!(refused(json!({"preset": "zitadel", "zitadel_project_id": "abc"})).contains("(digits)"));
         assert!(refused(json!({"keycloak_organizations": true, "preset": "entra"})).contains("keycloak preset only"));
+        assert!(refused(json!({"roles_apply_to_all_organisations": true})).contains("needs keycloak_organizations"));
+        with(json!({"roles_apply_to_all_organisations": true, "keycloak_organizations": true})).unwrap();
         // Each preset asks for the scopes its claims need.
         assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_id": "273800000000000001"})), "openid email profile urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
         assert_eq!(scope(json!({"preset": "zitadel"})), "openid email profile urn:zitadel:iam:org:projects:roles");

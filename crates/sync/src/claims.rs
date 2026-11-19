@@ -9,7 +9,7 @@
 //! | Preset | Organisation | Roles | Guest |
 //! | --- | --- | --- | --- |
 //! | `zitadel` | each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role granted by an organisation other than `urn:zitadel:iam:user:resourceowner:id`, or a role mapped to guest |
-//! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles` | a role mapped to guest |
+//! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles`, `groups`; with several organisations only `<alias>:<role>` names count (in that one), unless `roles_apply_to_all_organisations` | a role mapped to guest |
 //! | `entra` | `tid` | `roles` | `acct = 1`, or a role mapped to guest |
 //! | `google` | `hd` (refused without, and unless in `hosted_domains`, else `email_domains`) | everyone a member, `admin_subjects` administrators | never |
 //! | generic | `claims.organisation` (else the provider's one), `claims.organisation_name` | `claims.roles` | `claims.guest {path, equals}`, or a role mapped to guest |
@@ -227,7 +227,10 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
         (Some(Preset::Keycloak), _) => {
             let realm = claims.get("realm_access").and_then(|r| r.get("roles"));
             let client = claims.get("resource_access").and_then(|r| r.get(&provider.client_id)).and_then(|c| c.get("roles"));
-            let role = mapped(provider, strings(realm).into_iter().chain(strings(client)));
+            // Group names (a group membership mapper), without a full path's leading slash.
+            let groups = strings(claims.get("groups")).into_iter().map(|g| g.strip_prefix('/').unwrap_or(g));
+            let names: Vec<&str> = strings(realm).into_iter().chain(strings(client)).chain(groups).take(MAX_ROLE_NAMES).collect();
+            let role = mapped(provider, names.iter().copied());
             if provider.keycloak_organizations {
                 // Keycloak 26: a list of aliases, or an object keyed by alias (with attributes).
                 let aliases: Vec<String> = match claims.get("organization") {
@@ -239,7 +242,14 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
                 if aliases.is_empty() {
                     return Err(Refusal::NoOrganisation);
                 }
+                // Realm and client roles are not per organisation (review M4): they count in every
+                // organisation only for someone in one, or with roles_apply_to_all_organisations;
+                // otherwise only roles named `<alias>:<role>` count, in that organisation.
+                let everywhere = aliases.len() == 1 || provider.roles_apply_to_all_organisations;
                 for alias in aliases.into_iter().take(MAX_ORGS) {
+                    let own = names.iter().filter_map(|n| n.strip_prefix(alias.as_str())?.strip_prefix(':'));
+                    let own = mapped(provider, own);
+                    let role = if everywhere { [role, own].into_iter().flatten().max_by_key(|r| rank(*r)) } else { own };
                     let org_name = Some(alias.clone());
                     grants.extend(grant(alias, org_name, role, false));
                 }
@@ -357,11 +367,26 @@ mod tests {
         let other = claims(json!({"resource_access": {"other": {"roles": ["scribyra:admin"]}}}));
         assert_eq!(map(&p, Guests::Off, &other, "u"), Err(Refusal::NoRole));
         let p = provider(json!({"preset": "keycloak", "keycloak_organizations": true}));
-        let orgs = claims(json!({"realm_access": {"roles": ["scribyra:member"]}, "organization": {"acme": {"id": ["1"]}, "lab": {}}}));
+        let orgs = claims(json!({"realm_access": {"roles": ["acme:scribyra:member", "lab:scribyra:member"]}, "organization": {"acme": {"id": ["1"]}, "lab": {}}}));
         assert_eq!(map(&p, Guests::Off, &orgs, "u"), Ok(vec![g("acme", Some("acme"), Role::Member, false), g("lab", Some("lab"), Role::Member, false)]));
         let list = claims(json!({"realm_access": {"roles": ["scribyra:member"]}, "organization": ["acme"]}));
         assert_eq!(map(&p, Guests::Off, &list, "u"), Ok(vec![g("acme", Some("acme"), Role::Member, false)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"realm_access": {"roles": ["scribyra:member"]}})), "u"), Err(Refusal::NoOrganisation));
+        // Review M4: in several organisations, a realm or client role is no organisation's: an
+        // administrator of one is not made one of all. Roles named `<alias>:<role>` (realm,
+        // client or group names) count in that organisation only.
+        let admin = claims(json!({"realm_access": {"roles": ["scribyra:admin"]}, "organization": ["acme", "lab"]}));
+        assert_eq!(map(&p, Guests::Off, &admin, "u"), Err(Refusal::NoRole));
+        let scoped = claims(json!({"realm_access": {"roles": ["scribyra:member", "lab:scribyra:member"]}, "resource_access": {"scribyra": {"roles": ["acme:scribyra:admin"]}}, "groups": ["/lab:scribyra:guest", "other:scribyra:admin"], "organization": ["acme", "lab"]}));
+        assert_eq!(map(&p, Guests::Shared, &scoped, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false), g("lab", Some("lab"), Role::Member, false)]));
+        // In one organisation every role is that organisation's, prefixed or not.
+        let one = claims(json!({"realm_access": {"roles": ["scribyra:admin"]}, "organization": ["acme"]}));
+        assert_eq!(map(&p, Guests::Off, &one, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false)]));
+        // The configuration can say realm roles apply in every organisation.
+        let mut all = p.clone();
+        all.roles_apply_to_all_organisations = true;
+        assert_eq!(map(&all, Guests::Off, &admin, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false), g("lab", Some("lab"), Role::Admin, false)]));
+        assert_eq!(map(&all, Guests::Off, &scoped, "u"), Ok(vec![g("acme", Some("acme"), Role::Admin, false), g("lab", Some("lab"), Role::Member, false)]));
     }
 
     #[test]

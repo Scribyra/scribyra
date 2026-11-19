@@ -657,6 +657,7 @@ because the service only ever redirects back to a configured origin.
 | `roles` | `{}` | Provider role names for each deployment role: `{"admin": [...], "member": [...], "guest": [...]}`; the highest a person holds in an organisation wins. At least one `admin` or `member` name (except `google`, which takes none) |
 | `zitadel_project_id` | none | `zitadel` only: the project whose roles count (its own roles claim is read first) and whose audience scope is asked for |
 | `keycloak_organizations` | `false` | `keycloak` only: ask for the `organization` scope and take organisations from that claim (Keycloak 26); without it the provider has one organisation |
+| `roles_apply_to_all_organisations` | `false` | `keycloak` with `keycloak_organizations` only: realm, client and group roles without an organisation prefix count in *every* organisation of someone in several. Off, they count only for someone in exactly one organisation, and someone in several needs roles named `<alias>:<role>` (below) |
 | `hosted_domains` | `[]` | `google` only: the Workspace domains (`hd`) admitted; another domain is refused with `domain`. A `google` provider needs this or `email_domains` (then those domains are the admitted `hd` values), or it refuses to start: without either, every Workspace domain in the world could sign in |
 | `admin_subjects` | `[]` | `google` only: the exact `sub` values of administrators. Google's tokens carry no roles, so this is the one place a configuration names people (a Directory API group check may come later) |
 | `offline_access` | `false` | Adds the `offline_access` scope, which some providers require before they issue refresh tokens |
@@ -672,10 +673,18 @@ organisation:
 | Preset | Organisation | Roles | Guest | Scopes added |
 | --- | --- | --- | --- | --- |
 | `zitadel` | each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`); name: the map's value (the org's domain) | the role keys granted in that org | a role granted by an org other than `urn:zitadel:iam:user:resourceowner:id` (a project grant), or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
-| `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles` and `resource_access.{client_id}.roles` (another client's roles do not count) | a role mapped to `guest` | `organization` with `keycloak_organizations` |
+| `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles`, `resource_access.{client_id}.roles` (another client's roles do not count) and `groups` (a leading `/` dropped); with organisations, see below | a role mapped to `guest` | `organization` with `keycloak_organizations` |
 | `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B), or a role mapped to `guest` | `offline_access` |
 | `google` | `hd` (accounts without it are refused, and so is a domain outside `hosted_domains`, else `email_domains`) | everyone a member; `admin_subjects` administrators | never | none |
 | generic `claims` | `claims.organisation`, `claims.organisation_name` | `claims.roles` | `claims.guest` (the same string, number or boolean, or a list containing it), or a role mapped to `guest` | `scopes` |
+
+**Keycloak roles and organisations.** Realm, client and group roles belong to no organisation, so
+for someone whose token lists several organisations they count nowhere (review M4: an
+administrator of one organisation became one of all), unless `roles_apply_to_all_organisations`
+is set. Name a role for one organisation as `<alias>:<role>`, where `<role>` is a name the `roles`
+mapping lists: for example a client role or group `acme:scribyra:admin` makes an administrator of
+organisation `acme` only. Someone in exactly one organisation gets their unprefixed roles there
+too; the highest role wins.
 
 A guest is never more than a guest. Zitadel only puts roles in ID tokens with the project's
 "Assert roles on authentication" and the application's "User roles inside ID token" settings on.
@@ -835,7 +844,7 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
   added a groups claim to the authorization server (`https://<org>.okta.com/oauth2/<server-id>`).
   Use `offline_access` for refresh tokens.
 - *Keycloak*: issuer `https://<host>/realms/<realm>`; `preset: "keycloak"` with realm or client
-  roles. Keycloak issues refresh tokens without `offline_access` and supports back-channel
+  roles (with organisations, per-organisation `<alias>:<role>` client roles or groups). Keycloak issues refresh tokens without `offline_access` and supports back-channel
   logout (set the client's back-channel logout URL).
 
 For local trials and the tests there is a minimal provider,
