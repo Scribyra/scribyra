@@ -47,8 +47,7 @@ pub struct Admin {
     store: Arc<Store>,
     sso: Arc<Sso>,
     sr: Arc<Sr>,
-    /// One export at a time per replica (each holds a project's files in memory while it is
-    /// written).
+    /// One export at a time per replica (each holds one file in memory while it is written).
     exports: Arc<Semaphore>,
 }
 type Shared = Arc<Admin>;
@@ -821,7 +820,9 @@ fn chrono_like(ms: i64) -> Option<String> {
 /// server's state, `projects.json` (what each folder holds; `missing` lists the files left out:
 /// assets not on the server, and files the tree marks as conflicts, whose paths are not
 /// trustworthy), `members.json` and `audit.jsonl` (every event, ending with the head). Entry
-/// names are unique (also ignoring case). Recorded (`export.everything`) before it starts.
+/// names are unique (also ignoring case). One file is in memory at a time (an asset is read when
+/// it is written; the audit log is streamed in pages). Recorded (`export.everything`) before it
+/// starts.
 async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -> Response {
     let caller = admin!(a, headers, source);
     let projects = check!(a.readable()).clone();
@@ -837,17 +838,18 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
     let store = a.store.clone();
     tokio::spawn(async move {
         let _permit = permit;
-        let mut zip = Zip { out: Writer(tx), entries: Vec::new(), offset: 0 };
+        let mut zip = Zip { out: Writer(tx), entries: Vec::new(), offset: 0, streaming: None };
         let mut manifest = Vec::new();
         let mut folders = std::collections::HashSet::new();
         for (id, name, owner) in &ids {
             let folder = folder_name(name, id, &mut folders);
             let mut entry = json!({"id": id, "name": name, "owner": owner, "folder": format!("projects/{folder}")});
-            match projects.materialise(id).await {
+            // Assets are read one at a time as they are written (review L3), not all at once.
+            match projects.materialise_at(id, None, false).await {
                 Ok(m) => {
                     let mut missing = Vec::new();
                     let mut names = std::collections::HashSet::new();
-                    for file in &m.files {
+                    for file in m.files {
                         if matches!(file.content, server_projects::Content::Folder) {
                             continue;
                         }
@@ -855,19 +857,23 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
                         // has no trustworthy path: listed as missing, never written (review H1).
                         let name = format!("projects/{folder}/{}", file.path);
                         if file.conflict.is_some() || !entry_path(&file.path) || !names.insert(name.to_lowercase()) {
-                            missing.push(file.path.clone());
+                            missing.push(file.path);
                             continue;
                         }
-                        let bytes = match &file.content {
+                        let bytes = match file.content {
                             server_projects::Content::Folder => continue,
-                            server_projects::Content::Text(text) => text.as_bytes().to_vec(),
-                            server_projects::Content::Asset { bytes: Some(bytes), .. } => bytes.clone(),
-                            server_projects::Content::Asset { bytes: None, .. } => {
-                                missing.push(file.path.clone());
-                                continue;
-                            }
+                            server_projects::Content::Text(text) => text.into_bytes(),
+                            server_projects::Content::Asset { bytes: Some(bytes), .. } => bytes,
+                            server_projects::Content::Asset { hash, .. } => match projects.object(id, &hash).await {
+                                Ok(Some(bytes)) => bytes,
+                                Ok(None) => {
+                                    missing.push(file.path);
+                                    continue;
+                                }
+                                Err(_) => return zip.out.fail().await,
+                            },
                         };
-                        if !zip.file(&name, &bytes).await {
+                        if !zip.file(&name, bytes).await {
                             return;
                         }
                     }
@@ -881,7 +887,13 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
             manifest.push(entry);
         }
         let members = members_json(&store, true).await.unwrap_or_default();
-        let mut log = Vec::new();
+        if !(zip.file("projects.json", serde_json::to_vec_pretty(&manifest).unwrap_or_default()).await && zip.file("members.json", serde_json::to_vec_pretty(&members).unwrap_or_default()).await) {
+            return;
+        }
+        // The audit log is streamed in pages, never held whole.
+        if !zip.begin("audit.jsonl").await {
+            return;
+        }
         let mut after = 0i64;
         loop {
             let rows = match sqlx::query(&format!("SELECT {} FROM audit_events e LEFT JOIN accounts a ON a.account = e.actor WHERE e.seq > $1 ORDER BY e.seq LIMIT 5000", audit::EVENT_COLUMNS)).bind(after).fetch_all(&store.pool).await {
@@ -891,20 +903,23 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
             if rows.is_empty() {
                 break;
             }
+            let mut page = Vec::new();
             for row in &rows {
                 let event = audit::event_json(row);
                 after = event["seq"].as_i64().unwrap_or(after);
-                log.extend(event.to_string().as_bytes());
-                log.push(b'\n');
+                page.extend(event.to_string().as_bytes());
+                page.push(b'\n');
+            }
+            if !zip.chunk(page).await {
+                return;
             }
         }
-        if let Ok(head) = audit::head(&store.pool).await {
-            log.extend(format!("{}\n", json!({"head": {"seq": head.0, "hash": head.1}})).as_bytes());
+        if let Ok(head) = audit::head(&store.pool).await
+            && !zip.chunk(format!("{}\n", json!({"head": {"seq": head.0, "hash": head.1}})).into_bytes()).await
+        {
+            return;
         }
-        let _ = zip.file("projects.json", serde_json::to_string_pretty(&manifest).unwrap_or_default().as_bytes()).await
-            && zip.file("members.json", serde_json::to_string_pretty(&members).unwrap_or_default().as_bytes()).await
-            && zip.file("audit.jsonl", &log).await
-            && zip.finish().await;
+        let _ = zip.end().await && zip.finish().await;
     });
     let mut response = (StatusCode::OK, Body::from_stream(body)).into_response();
     let h = response.headers_mut();
@@ -949,64 +964,140 @@ fn channel() -> (tokio::sync::mpsc::Sender<Result<bytes::Bytes, std::io::Error>>
     (tx, futures_util::stream::unfold(rx, |mut rx| async move { rx.recv().await.map(|item| (item, rx)) }))
 }
 
-/// A zip archive written front to back (stored, not compressed; UTF-8 names; ZIP64 once offsets
-/// or the entry count pass the classic limits). Each file's bytes are in memory, so its CRC and
-/// size are known before its header.
+/// A zip archive written front to back (stored, not compressed; UTF-8 names). A file whose
+/// bytes are in memory gets its CRC and size in its header ([`Zip::file`]); a streamed one
+/// ([`Zip::begin`], [`Zip::chunk`], [`Zip::end`]) in a data descriptor after it. ZIP64 fields are
+/// used for sizes and offsets of 4 GiB and more and when the entry count passes 65 534 (review
+/// L3: sizes were cut to 32 bits).
 struct Zip {
     out: Writer,
-    entries: Vec<(String, u32, u64, u64)>,
+    entries: Vec<ZipEntry>,
     offset: u64,
+    streaming: Option<Streaming>,
 }
+struct ZipEntry {
+    name: String,
+    crc: u32,
+    size: u64,
+    at: u64,
+    streamed: bool,
+}
+/// The entry being streamed: its CRC so far and size.
+struct Streaming(crc32fast::Hasher, u64);
 const ZIP_TIME: u16 = 0;
 const ZIP_DATE: u16 = (1 << 5) | 1; // 1980-01-01
+/// Sizes and offsets from here on go in the ZIP64 extra field.
+const ZIP_BIG: u64 = u32::MAX as u64;
+/// The local header of an entry. A streamed one (CRC and size follow in a data descriptor) and
+/// one of 4 GiB or more carry a ZIP64 extra field with the sizes.
+fn local_header(name: &str, crc: u32, size: u64, streamed: bool) -> Vec<u8> {
+    let zip64 = streamed || size >= ZIP_BIG;
+    let mut h = Vec::with_capacity(50 + name.len());
+    h.extend(0x04034b50u32.to_le_bytes());
+    h.extend(45u16.to_le_bytes());
+    h.extend((0x0800u16 | if streamed { 0x0008 } else { 0 }).to_le_bytes());
+    h.extend(0u16.to_le_bytes());
+    h.extend(ZIP_TIME.to_le_bytes());
+    h.extend(ZIP_DATE.to_le_bytes());
+    h.extend((if streamed { 0 } else { crc }).to_le_bytes());
+    let short = if zip64 { u32::MAX } else { size as u32 };
+    h.extend(short.to_le_bytes());
+    h.extend(short.to_le_bytes());
+    h.extend((name.len() as u16).to_le_bytes());
+    h.extend((if zip64 { 20u16 } else { 0 }).to_le_bytes());
+    h.extend(name.as_bytes());
+    if zip64 {
+        let known = if streamed { 0 } else { size };
+        h.extend(1u16.to_le_bytes());
+        h.extend(16u16.to_le_bytes());
+        h.extend(known.to_le_bytes());
+        h.extend(known.to_le_bytes());
+    }
+    h
+}
+/// The central directory record of an entry.
+fn central_record(e: &ZipEntry) -> Vec<u8> {
+    let (big, far) = (e.size >= ZIP_BIG, e.at >= ZIP_BIG);
+    let mut extra = Vec::new();
+    if big {
+        extra.extend(e.size.to_le_bytes());
+        extra.extend(e.size.to_le_bytes());
+    }
+    if far {
+        extra.extend(e.at.to_le_bytes());
+    }
+    if !extra.is_empty() {
+        extra = [1u16.to_le_bytes().to_vec(), (extra.len() as u16).to_le_bytes().to_vec(), extra].concat();
+    }
+    let mut cd = Vec::with_capacity(46 + e.name.len() + extra.len());
+    cd.extend(0x02014b50u32.to_le_bytes());
+    cd.extend(0x032du16.to_le_bytes());
+    cd.extend(45u16.to_le_bytes());
+    cd.extend((0x0800u16 | if e.streamed { 0x0008 } else { 0 }).to_le_bytes());
+    cd.extend(0u16.to_le_bytes());
+    cd.extend(ZIP_TIME.to_le_bytes());
+    cd.extend(ZIP_DATE.to_le_bytes());
+    cd.extend(e.crc.to_le_bytes());
+    let size = if big { u32::MAX } else { e.size as u32 };
+    cd.extend(size.to_le_bytes());
+    cd.extend(size.to_le_bytes());
+    cd.extend((e.name.len() as u16).to_le_bytes());
+    cd.extend((extra.len() as u16).to_le_bytes());
+    // Comment length, disk number, internal attributes.
+    cd.extend([0u8; 6]);
+    cd.extend((0o100644u32 << 16).to_le_bytes());
+    cd.extend((if far { u32::MAX } else { e.at as u32 }).to_le_bytes());
+    cd.extend(e.name.as_bytes());
+    cd.extend(extra);
+    cd
+}
 impl Zip {
-    async fn file(&mut self, name: &str, bytes: &[u8]) -> bool {
-        let crc = crc32fast::hash(bytes);
-        let mut header = Vec::with_capacity(30 + name.len());
-        header.extend(0x04034b50u32.to_le_bytes());
-        header.extend(45u16.to_le_bytes());
-        header.extend(0x0800u16.to_le_bytes());
-        header.extend(0u16.to_le_bytes());
-        header.extend(ZIP_TIME.to_le_bytes());
-        header.extend(ZIP_DATE.to_le_bytes());
-        header.extend(crc.to_le_bytes());
-        header.extend((bytes.len() as u32).to_le_bytes());
-        header.extend((bytes.len() as u32).to_le_bytes());
-        header.extend((name.len() as u16).to_le_bytes());
-        header.extend(0u16.to_le_bytes());
-        header.extend(name.as_bytes());
+    /// One entry whose bytes are in memory (they are moved, not copied, into the response).
+    async fn file(&mut self, name: &str, bytes: Vec<u8>) -> bool {
+        let (crc, size) = (crc32fast::hash(&bytes), bytes.len() as u64);
+        let header = local_header(name, crc, size, false);
         let at = self.offset;
-        self.offset += header.len() as u64 + bytes.len() as u64;
-        self.entries.push((name.to_owned(), crc, bytes.len() as u64, at));
-        self.out.send(header).await && self.out.send(bytes.to_vec()).await
+        self.offset += header.len() as u64 + size;
+        self.entries.push(ZipEntry { name: name.to_owned(), crc, size, at, streamed: false });
+        self.out.send(header).await && self.out.send(bytes).await
+    }
+    /// Starts a streamed entry: [`Zip::chunk`] its bytes, then [`Zip::end`].
+    async fn begin(&mut self, name: &str) -> bool {
+        let header = local_header(name, 0, 0, true);
+        let at = self.offset;
+        self.offset += header.len() as u64;
+        self.entries.push(ZipEntry { name: name.to_owned(), crc: 0, size: 0, at, streamed: true });
+        self.streaming = Some(Streaming(crc32fast::Hasher::new(), 0));
+        self.out.send(header).await
+    }
+    async fn chunk(&mut self, bytes: Vec<u8>) -> bool {
+        let Some(Streaming(crc, size)) = self.streaming.as_mut() else { return false };
+        crc.update(&bytes);
+        *size += bytes.len() as u64;
+        self.offset += bytes.len() as u64;
+        self.out.send(bytes).await
+    }
+    /// Ends the streamed entry with its data descriptor (ZIP64 sizes, as its header announced).
+    async fn end(&mut self) -> bool {
+        let (Some(Streaming(crc, size)), Some(entry)) = (self.streaming.take(), self.entries.last_mut()) else { return false };
+        entry.crc = crc.finalize();
+        entry.size = size;
+        let mut d = Vec::with_capacity(24);
+        d.extend(0x08074b50u32.to_le_bytes());
+        d.extend(entry.crc.to_le_bytes());
+        d.extend(size.to_le_bytes());
+        d.extend(size.to_le_bytes());
+        self.offset += d.len() as u64;
+        self.out.send(d).await
     }
     async fn finish(&mut self) -> bool {
         let start = self.offset;
         let mut cd = Vec::new();
-        for (name, crc, size, at) in &self.entries {
-            let far = *at >= u32::MAX as u64;
-            let extra: Vec<u8> = if far { [1u16.to_le_bytes().to_vec(), 8u16.to_le_bytes().to_vec(), at.to_le_bytes().to_vec()].concat() } else { Vec::new() };
-            cd.extend(0x02014b50u32.to_le_bytes());
-            cd.extend(0x032du16.to_le_bytes());
-            cd.extend(45u16.to_le_bytes());
-            cd.extend(0x0800u16.to_le_bytes());
-            cd.extend(0u16.to_le_bytes());
-            cd.extend(ZIP_TIME.to_le_bytes());
-            cd.extend(ZIP_DATE.to_le_bytes());
-            cd.extend(crc.to_le_bytes());
-            cd.extend((*size as u32).to_le_bytes());
-            cd.extend((*size as u32).to_le_bytes());
-            cd.extend((name.len() as u16).to_le_bytes());
-            cd.extend((extra.len() as u16).to_le_bytes());
-            // Comment length, disk number, internal attributes.
-            cd.extend([0u8; 6]);
-            cd.extend((0o100644u32 << 16).to_le_bytes());
-            cd.extend((if far { u32::MAX } else { *at as u32 }).to_le_bytes());
-            cd.extend(name.as_bytes());
-            cd.extend(extra);
+        for e in &self.entries {
+            cd.extend(central_record(e));
         }
         let (count, size) = (self.entries.len() as u64, cd.len() as u64);
-        let zip64 = count >= 0xffff || start >= u32::MAX as u64 || size >= u32::MAX as u64;
+        let zip64 = count >= 0xffff || start >= ZIP_BIG || size >= ZIP_BIG;
         if zip64 {
             let end64 = start + size;
             cd.extend(0x06064b50u32.to_le_bytes());
@@ -1094,6 +1185,24 @@ mod tests {
     fn times_are_rfc3339() {
         assert_eq!(chrono_like(1_795_000_000_123).unwrap(), "2026-11-18T11:06:40.123Z");
         assert_eq!(chrono_like(951_782_400_000).unwrap(), "2000-02-29T00:00:00.000Z");
+    }
+    #[test]
+    fn zip_entries_of_4_gib_and_more_carry_zip64_sizes() {
+        // Review L3: sizes were written as 32 bits, so a 5 GiB entry claimed 1 GiB.
+        let u32_at = |b: &[u8], i: usize| u32::from_le_bytes(b[i..i + 4].try_into().unwrap());
+        let u64_at = |b: &[u8], i: usize| u64::from_le_bytes(b[i..i + 8].try_into().unwrap());
+        let big = 5u64 << 30;
+        let h = local_header("a.bin", 7, big, false);
+        assert_eq!((u32_at(&h, 18), u32_at(&h, 22), u16::from_le_bytes([h[28], h[29]])), (u32::MAX, u32::MAX, 20));
+        assert_eq!((u16::from_le_bytes([h[35], h[36]]), u64_at(&h, 39), u64_at(&h, 47)), (1, big, big));
+        let c = central_record(&ZipEntry { name: "a.bin".into(), crc: 7, size: big, at: 6 << 30, streamed: false });
+        assert_eq!((u32_at(&c, 20), u32_at(&c, 24), u32_at(&c, 42)), (u32::MAX, u32::MAX, u32::MAX));
+        assert_eq!((u64_at(&c, 46 + 5 + 4), u64_at(&c, 46 + 5 + 12), u64_at(&c, 46 + 5 + 20)), (big, big, 6 << 30));
+        // Small entries stay classic.
+        let h = local_header("a", 7, 10, false);
+        assert_eq!((u32_at(&h, 18), h.len()), (10, 31));
+        let c = central_record(&ZipEntry { name: "a".into(), crc: 7, size: 10, at: 0, streamed: false });
+        assert_eq!((u32_at(&c, 20), c.len()), (10, 47));
     }
     #[test]
     fn folder_names_are_safe_and_unique() {
