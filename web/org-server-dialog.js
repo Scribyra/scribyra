@@ -39,7 +39,8 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
  const x=element('button','×','icon-button');x.type='button';x.setAttribute('aria-label','Close remote backup');x.onclick=close;heading.append(x);
  const body=element('div',null,'org-body'),status=element('p',null,'org-status');status.setAttribute('role','status');
  dialog.append(heading,body,status);
- const invite={email:field('Email','','email'),role:select('Role',ROLES,'editor')};
+ // What is typed in the invitation form survives redraws (the long poll redraws the dialog).
+ const typed={email:'',role:'editor'};
 
  async function shareBox(project){
   const details=await engine.details(project.project),box=element('div',null,'org-share'),manage=['owner','editor'].includes(details.role);
@@ -78,10 +79,12 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    box.append(pending);
   }
   if(manage){
-   box.append(invite.email.row,invite.role.row,actions(button('Invite',async()=>{
-    const email=invite.email.input.value.trim(),result=await engine.invite(project.project,email,invite.role.input.value);
-    invite.email.input.value='';
-    feedback=result.status==='pending'?`Invited ${email}. Ask them to sign in to ${engine.info.name}’s Scribyra; the project then appears in their list.`:`Shared with ${email}.`;
+   const email=field('Email',typed.email,'email'),role=select('Role',ROLES,typed.role);
+   email.input.oninput=()=>{typed.email=email.input.value;};role.input.onchange=()=>{typed.role=role.input.value;};
+   box.append(email.row,role.row,actions(button('Invite',async()=>{
+    const address=typed.email.trim(),result=await engine.invite(project.project,address,typed.role);
+    typed.email='';
+    feedback=result.status==='pending'?`Invited ${address}. Ask them to sign in to ${engine.info.name}’s Scribyra; the project then appears in their list.`:`Shared with ${address}.`;
    },'primary')));
   }
   return box;
@@ -141,9 +144,8 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
   if(!engine.connected){body.replaceChildren(element('p',busy?'Signing in…':'Not signed in to a deployment.','org-help'));}
   else if(drawing)redraw=true;
   else drawing=connected().then(parts=>{if(dialog&&engine.connected){
-   // Keep what the person is typing in the invitation form across redraws.
-   const active=document.activeElement===invite.email.input;
-   body.replaceChildren(...parts);dialog.scrollTop=scroll;if(active&&invite.email.input.isConnected)invite.email.input.focus();keepFocus();
+   const active=document.activeElement?.getAttribute('aria-label')==='Email';
+   body.replaceChildren(...parts);dialog.scrollTop=scroll;if(active)body.querySelector('input[aria-label="Email"]')?.focus();keepFocus();
   }}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;if(redraw){redraw=false;render();}});
   status.textContent=busy?'Working…':feedback;
   keepFocus();
