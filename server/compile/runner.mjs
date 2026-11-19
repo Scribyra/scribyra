@@ -59,7 +59,7 @@ function fillChannel(request,reply){
 
 export function cacheHost({cache,fill,operations}){
  const archive=hash=>{if(!/^[a-f0-9]{128}$/.test(hash))throw new Error('Invalid package checksum.');return join(cache,`${hash}.tar.xz`);};
- const read=hash=>{try{return new Uint8Array(readFileSync(archive(hash)));}catch{return undefined;}};
+ const read=hash=>{const path=archive(hash);try{return new Uint8Array(readFileSync(path));}catch{return undefined;}};
  return {
   // One in-process "worker" per texPackages(); replies are delivered asynchronously.
   worker(){
@@ -82,8 +82,11 @@ export function cacheHost({cache,fill,operations}){
 }
 
 // Engine memory: this BusyTeX build caps its WebAssembly heap (Emscripten's getHeapMax); a
-// document that needs more fails with these messages in the engine's output.
-const OOM=[/Cannot enlarge memory/,/Failed to grow the heap/,/Aborted\(OOM\)/,/out of memory/i];
+// document that needs more makes the Emscripten runtime report one of these on the engine's
+// stderr channel ("<program> stderr: …"), or throw them. TeX's own terminal output, which a
+// document controls (\typeout), never counts.
+const OOM=/Cannot enlarge memory|Failed to grow the heap|Aborted\(OOM\)|Cannot allocate Wasm memory/;
+const engineOom=raw=>/^\/bin\/\S+ stderr: /.test(raw)&&OOM.test(raw);
 
 export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},budgetMs=600_000}){
  const info=JSON.parse(readFileSync(join(runtime,'runtime.json'),'utf8'));
@@ -118,11 +121,11 @@ export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},budge
  try{
   step('Preparing LuaLaTeX and bundled packages…');
   await runner.initialize(true);
-  const original=output.print.bind(output);output.print=raw=>{if(OOM.some(pattern=>pattern.test(String(raw))))memory=true;return original(raw);};
+  const original=output.print.bind(output);output.print=raw=>{if(engineOom(String(raw)))memory=true;return original(raw);};
   const result=await runPasses({files,mainFile:main,runner,packages:getPackages,record,installed:()=>[...installed.keys()],output,progress,execute:fn=>budget.run(fn),signal,telemetryParent:undefined,where:'Compiling on server'});
-  return {...result,passes,memory:memory||OOM.some(pattern=>pattern.test(result.log||'')),durationMs:performance.now()-started};
+  return {...result,passes,memory,durationMs:performance.now()-started};
  }catch(error){
-  error.passes=passes;error.memory=memory||OOM.some(pattern=>pattern.test(String(error?.message)));throw error;
+  error.passes=passes;error.memory=memory||OOM.test(String(error?.message).split('\nStack:')[0]);throw error;
  }finally{budget.clear();packages?.close();runner.terminate();}
 }
 
@@ -157,7 +160,7 @@ async function main(){
  };
  const failed=error=>{
   const timeout=error?.name==='CompileTimeoutError',message=String(error?.message||error).slice(0,2000);
-  const memory=!!error?.memory||OOM.some(pattern=>pattern.test(message));
+  const memory=!!error?.memory||OOM.test(message.split('\nStack:')[0]);
   const texLog=error?.texLog?`\n\n${String(error.texLog).slice(-logBytes)}`:'';
   finish({event:'result',status:timeout?'timeout':memory?'memory':error?.name==='TexPackageError'||/TeX package|package cache|checksum/i.test(message)?'package_error':'failure',passes:error?.passes||0,diagnostic:message},`${memory?memoryMessage(limit):message}${texLog}`);
  };

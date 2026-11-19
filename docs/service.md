@@ -168,7 +168,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `name` | required | 1–64 characters, shown in the app before and after sign-in |
 | `encryption` | `"server"` | `"server"` (server-readable; needs `service_key_file`) or `"e2ee"` (end to end). Recorded in the database at first start: a later start with the other mode refuses (`{"event":"deployment_encryption_changed"}`). `"e2ee"` serves the [organisation routes](#organisation-routes-end-to-end-deployments) and answers `404` on `/v1/sr/`; `"server"` serves the [server-readable routes](#server-readable-projects) and answers `404` on the end-to-end ones |
 | `offline` | `true` | `false` makes the deployment online-only (used by server-readable mode) |
-| `compile` | `"browser"` | `"browser"`, `"server"` or `"both"`; the last two need `encryption: "server"` and `texlive` |
+| `compile` | `"browser"` | `"browser"`, `"server"` or `"both"`; the last two need `encryption: "server"` (and `texlive` with the native engine) |
 | `link_sharing` | `false` | Whether editors may create share links (later slice) |
 | `guests` | `"off"` | `"off"` refuses provider guest accounts at sign-in; `"shared"` admits them as guests |
 | `admins` | `[]` | Administrators whatever groups say, each one of: `provider:email` (a verified email at that configured provider, for example `acme:it-admin@acme.org`); a plain lowercase email, which matches only through a provider whose `email_domains` include its domain (an entry no provider vouches for refuses start); or `issuer#subject`. In an end-to-end deployment, only an administrator's sign-in may create the organisation (once) |
@@ -176,7 +176,9 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
 | `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour`, `per_project_per_minute`, `active_per_member`, `active_per_owner`, `retention_days` ([Server compile](#server-compile)) |
-| `texlive` | none | A TeX Live tree, for server compile |
+| `texlive` | none | A TeX Live tree, for server compile with `compile_engine: "native"` |
+| `compile_engine` | `"wasm"` | `"wasm"`: the browser's WebAssembly LuaLaTeX (same output as the app); `"native"`: TeX Live from `texlive` ([Server compile](#server-compile)) |
+| `tex_mirror` | `"https://tlnet.yihui.org"` | TeX Live archive mirror the WebAssembly engine's package cache fills from (packages not bundled); `""` for bundled packages only; https (http only on loopback) |
 
 The organisation's ID is random, made at first start and recorded with the mode (a database that
 already held exactly one organisation from before keeps it). `GET /v1/deployment` is public and
@@ -731,8 +733,14 @@ at the top of `crates/sync/examples/test-idp.rs`. It is not for production use.
 
 ## Server compile
 
-With `deployment.encryption: "server"` and `deployment.compile` `"server"` or `"both"` (which
-need `texlive`), members compile server-readable projects on the server (design section 6).
+With `deployment.encryption: "server"` and `deployment.compile` `"server"` or `"both"`, members
+compile server-readable projects on the server (design section 6). **Engine**
+(`deployment.compile_engine`): `"wasm"` (the default) runs the browser's own WebAssembly
+LuaLaTeX, so a document compiles on the server exactly as on a member's device; `"native"` runs
+the TeX Live tree in `deployment.texlive` (then required), kept for comparison and as an optional
+faster engine ([compile engines](compile-engines.md)). With `"wasm"` every project compiles with
+LuaLaTeX, as in the browser, whatever `meta.engine` says, and `job.engine` and `pdf.engine` say
+`lualatex`; the `texlive` field of the compile status is `wasm-<digest>` of the compile runtime.
 The routes below need the same sign-in as the other `/v1/sr/` routes and answer `404` to anyone
 the project is not shared with; with `compile: "browser"` the compile routes answer `404 {"error":
 "this deployment compiles in the browser"}`.
@@ -798,7 +806,13 @@ database and blob store (S3: a filesystem blob directory belongs to the `serve` 
 jobs until SIGTERM, then lets running jobs finish for up to `shutdown_grace_seconds` and puts the
 rest back in the queue (without using up their retry) before exiting 0. It answers `/healthz`
 (live) and `/readyz` (database, schema, blob store; `503` once stopping) on
-`compile_worker_bind`. It needs what the [sandbox](#server-compile-sandbox) needs: `bwrap`
+`compile_worker_bind`. With the WebAssembly engine it needs `compile_runtime` (the compile
+runtime, read-only), `compile_cache` (the TeX package cache, a directory only workers write;
+`SCRIBYRA_TEX_CACHE` also works), Node and its store closure (`SCRIBYRA_NODE`,
+`SCRIBYRA_WASM_CLOSURE`, see the [sandbox](#webassembly-engine)), `bwrap`, user namespaces and a
+delegated cgroup; it fills the cache from the runtime's bundled archives and from
+`deployment.tex_mirror` (egress to that one HTTPS host; empty: bundled packages only). With the
+native engine it needs what the [sandbox](#server-compile-sandbox) needs: `bwrap`
 (`SCRIBYRA_BWRAP` or `PATH`), the TeX Live tree of `deployment.texlive` and its closure
 (`SCRIBYRA_TEXLIVE_CLOSURE` when it belongs to that tree, else `nix-store -qR` at start), unprivileged
 user namespaces, and a delegated cgroup v2 subtree (`SCRIBYRA_COMPILE_CGROUP`, else a systemd
@@ -830,7 +844,10 @@ status}` (route templates such as `/v1/sr/projects/{project}/compile`), `scribyr
 (`queued`, `replaced`, `existing`, `cached`, `rate_limited`, `busy`, `queue_full`, `refused`),
 `scribyra_compile_jobs_total{outcome}` (this process's finished jobs, plus `requeued` and
 `lost`), `scribyra_compile_seconds_total`, `scribyra_compile_cpu_seconds_total` and
-`scribyra_compile_running`. No label holds a project, account, name, path or content.
+`scribyra_compile_running`, and in a worker with the WebAssembly engine
+`scribyra_compile_package_requests_total{result}` (packages jobs asked the cache for: `hit`,
+`bundled`, `mirror`, `rejected` (a cached archive failed its checksum and was removed),
+`failed`). No label holds a project, account, name, path, package or content.
 
 ## Server compile sandbox
 
@@ -898,6 +915,70 @@ code cannot reopen the driver's descriptors. Paths are refused before anything i
 absolute, empty, `.` or `..` components, dot files, control characters, backslashes,
 duplicates and file/folder clashes. Test with `nix develop -c cargo test -p scribyra-compile`.
 
+### WebAssembly engine
+
+With `compile_engine: "wasm"` the same runner (same namespaces, cgroup, seccomp filter, limits
+and classification) runs Node instead of TeX Live: `server/compile/runner.mjs` of the **compile
+runtime**, a read-only directory `node scripts/wasm-compile-runtime.mjs <dir>` assembles from a
+built checkout (`npm run wasm` and the compiler assets): the browser's BusyTeX engine
+(`busytex.wasm`, its worker script and pipeline, LuaLaTeX data, Biber), the browser modules of the
+compile driver (`web/compile-driver.js` and what it imports), the Rust/WASM core, the pinned
+package catalog, the bundled package archives (`components/`) and `runtime.json` (the runtime's
+identity, the PDF cache key). The runner loads the browser's worker script unchanged in a V8
+context shaped like a worker and drives it with the browser's compile driver: the same passes,
+Biber/BibTeX choice, missing-package resolution and diagnostics.
+
+Layers, outermost first: the job's cgroup; bwrap with an empty root holding Node's store closure
+(and a bash that sets the in-namespace rlimits, then `exec`s Node), the runtime at `/runtime` and
+the package cache at `/cache` (both read-only), the job's files in the tmpfs `/work`, no network,
+no `/proc`; the seccomp filter (unchanged: Node needs nothing more; IPv4/IPv6 sockets fail with
+`EPERM`); rlimits, with `RLIMIT_DATA` = `memory_mib` instead of `RLIMIT_AS` (V8 reserves about
+10 GiB of address space per WebAssembly memory for guard regions; `RLIMIT_DATA` counts only
+memory written to), besides the job's `memory.max`, Node's `--max-old-space-size` (a quarter of
+`memory_mib`, 192–1024 MiB) and the engine's own heap cap;
+Node's permission model (`--permission`, reads of `/runtime`, `/cache` and `/work` only; no
+writes, child processes, workers, addons or WASI; it follows symlinks, so the runtime holds
+none); the engine's in-memory file system with Scribyra's write guard (TeX never opens a real
+file). The engine's fetches and script imports are answered from the runtime only. The V8 context
+the worker script runs in is not itself a boundary (host objects lead back to the host realm);
+TeX and Lua code cannot run JavaScript, and the Node process is what the layers above confine. The output leaves as before, on pipes: a one-line JSON result, the PDF and the log
+(diagnostics naming files and lines first, then TeX's log, bounded to `log_kib`).
+
+**Package cache.** Content-addressed (`<sha512>.tar.xz`), shared by every job of the worker and
+by every worker that mounts it. A job reads it read-only; for a package it lacks, it writes
+`{"fill": "<name>"}` on a pipe (at most 128 requests, short lines) and waits. The worker looks the
+name up in the runtime's pinned catalog (shard checksums verified), takes the archive from the
+runtime's bundled set or from `<tex_mirror>/archive/<name>.tar.xz` (at most the catalog's size,
+60 s, no redirects; members see only "could not fetch", the worker logs
+`{"event":"compile_package_mirror_failed"}`), checks size and SHA-512 against the catalog, and
+writes it atomically (an exclusively created, randomly named temporary file, then rename;
+leftovers older than an hour are removed at start). One fetch per entry at a time, at most four
+at once per worker, at most 256 MiB fetched for one job. An entry already present is verified again whenever a job asks; one that fails is
+removed (`{"event":"compile_package_rejected"}`, metric `rejected`) and fetched again, or the job
+fails naming the package. Inside the sandbox the catalog checks every archive a third time before
+it is unpacked. The cache needs no clean-up: entries never change, it can at most grow to the
+catalog's archives (a few GB), and deleting the directory only makes the next jobs cold. It is
+shared: whether a package is already cached (and so how fast a job gets it) tells a job which
+packages earlier jobs used; give each tenant its own cache volume where that matters. A shared volume (ReadWriteMany) lets workers share it; a per-pod
+`emptyDir` works too, cold after each restart.
+
+**Memory.** This BusyTeX build caps its WebAssembly heap at 576 MiB (Emscripten's
+`MAXIMUM_MEMORY`; wasm32 itself stops at 4 GB). A document that needs more fails with
+`limit_memory` and a log that says so ("The document needs more memory than the WebAssembly TeX
+engine can use …"; only the engine's own report counts, not text a document prints); a job limit
+below what Node and the engine reach (about 0.6–0.9 GiB for ordinary documents) ends in
+`RLIMIT_DATA` or the cgroup's OOM kill, also `limit_memory`. Keep `memory_mib` at 1536
+or more.
+
+**CPU.** The WebAssembly engine is several times slower than native TeX Live and, like a fresh
+browser tab, finds a document's packages anew in every job (one extra failing pass), so
+`cpu_seconds` and `wall_seconds` need to be larger than for native TeX Live: see
+[compile engines](compile-engines.md) for measured times; 600 s covers the 305-page thesis.
+
+Tests: `nix develop -c cargo test -p scribyra-compile --test wasm` (assembles the runtime under
+`target/`; packages not bundled come from a fixture mirror on loopback) and
+`node --test tests/wasm-compile.test.mjs`.
+
 ## Configuration reference for operators
 
 One JSON file (`SCRIBYRA_SERVICE_CONFIG`, mounted read-only) holds every setting; each top-level
@@ -906,7 +987,7 @@ upper-cased: `shutdown_grace_seconds` → `SCRIBYRA_SERVICE_SHUTDOWN_GRACE_SECON
 optional fields take plain text; numbers, booleans, arrays and objects take JSON. The `deployment`
 object comes whole from `SCRIBYRA_SERVICE_DEPLOYMENT` (JSON), and each of its fields from
 `SCRIBYRA_SERVICE_DEPLOYMENT_<FIELD>` (applied after it, so they refine it; `name`, `encryption`,
-`compile`, `guests` and `texlive` are plain text, the rest JSON). The environment wins over the
+`compile`, `guests`, `texlive`, `compile_engine` and `tex_mirror` are plain text, the rest JSON). The environment wins over the
 file. **Secrets are only ever files**: `database_url_file`, `s3_secret_access_key_file`,
 `service_key_file`, each provider's `client_secret_file` (`database_url` exists for local use;
 prefer the file). The whole configuration is validated at start; a refusal prints
@@ -933,6 +1014,7 @@ prefer the file). The whole configuration is validated at start; a refusal print
 | `sr_maintenance_seconds` | 30 | 1–3600: background erasure, floor and blob clean-up pass |
 | `entry_inline_bytes` | 65536 | Entries (sealed) up to this size stay in PostgreSQL |
 | `metrics_bind` | none (off) | Listener for Prometheus `/metrics` ([Server compile](#server-compile)); pods use `0.0.0.0:9090` |
+| `compile_runtime`, `compile_cache` | none (`SCRIBYRA_WASM_RUNTIME`, `SCRIBYRA_TEX_CACHE`) | The WebAssembly engine's compile runtime (read-only) and TeX package cache (written by workers only) ([WebAssembly engine](#webassembly-engine)) |
 | `sso_recheck_tick_seconds`, `sso_jwks_refetch_seconds`, `sso_starts_per_minute` | 60, 60, 60 | [Single sign-on](#single-sign-on-oidc) |
 | `audit_purge_seconds` | 86400 | How often the audit log's retention task runs (1 s to 7 days) |
 | `audit_retention_seconds` | none | Development and tests only: keep audit events this many seconds instead of `deployment.audit_retention_days`. Below 30 days it takes effect only after the tables' owner or a superuser lowered `audit_settings.floor_seconds` |

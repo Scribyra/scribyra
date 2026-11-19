@@ -9,15 +9,24 @@
 import vm from 'node:vm';
 import {readFileSync} from 'node:fs';
 
+// A runtime file's name from the part of a URL after the base: decoded, then refused unless every
+// segment is a plain name (no empty, `.`, `..` or dot-file segment), so `%2e%2e%2f` cannot climb.
+function runtimeName(rest){
+ let name;try{name=decodeURIComponent(rest.split(/[?#]/)[0]);}catch{return null;}
+ return name&&!name.split('/').some(part=>!part||part==='.'||part==='..'||part.startsWith('.'))?name:null;
+}
+
 // Answers requests for `${base}/<file>` from `root/<file>`; anything else is refused, so the
-// engine reaches no network and no file outside the runtime.
+// engine reaches no network and no file outside the runtime. (The context is not a security
+// boundary: host objects handed to it lead back to the host realm. The boundary is the Node
+// process: its permission model and the sandbox around it.)
 export function assetFetch(root,base){
  const prefix=base.replace(/\/$/,'')+'/';
  return async function fetch(input){
   const url=typeof input==='string'?input:input instanceof URL?input.href:input?.url;
   if(typeof url!=='string'||!url.startsWith(prefix))throw new TypeError(`The compile runtime has no network (refused ${String(url).slice(0,200)})`);
-  const name=decodeURIComponent(url.slice(prefix.length).split(/[?#]/)[0]);
-  if(!name||name.split('/').some(part=>!part||part==='.'||part==='..'||part.startsWith('.')))return new Response('',{status:404});
+  const name=runtimeName(url.slice(prefix.length));
+  if(!name)return new Response('',{status:404});
   let bytes;try{bytes=readFileSync(`${root}/${name}`);}catch{return new Response('',{status:404});}
   const type=name.endsWith('.wasm')?'application/wasm':name.endsWith('.js')?'text/javascript':name.endsWith('.json')?'application/json':'application/octet-stream';
   return new Response(bytes,{status:200,headers:{'content-type':type,'content-length':String(bytes.length)}});
@@ -40,7 +49,7 @@ export class ScriptWorker {
    postMessage:toParent,onmessage:null,
   };
   scope.self=scope;
-  scope.importScripts=(...urls)=>{for(const each of urls){const target=new URL(each,href).href;if(!target.startsWith(prefix))throw new TypeError('importScripts outside the compile runtime.');vm.runInContext(readFileSync(`${root}/${decodeURIComponent(target.slice(prefix.length))}`,'utf8'),this.#scope,{filename:target});}};
+  scope.importScripts=(...urls)=>{for(const each of urls){const target=new URL(each,href).href,name=target.startsWith(prefix)&&runtimeName(target.slice(prefix.length));if(!name)throw new TypeError('importScripts outside the compile runtime.');vm.runInContext(readFileSync(`${root}/${name}`,'utf8'),this.#scope,{filename:target});}};
   this.#scope=vm.createContext(scope,{name:'busytex-worker'});
   // Realm-local helpers: a deep copy of message data into this context (plain objects, arrays,
   // typed arrays and ArrayBuffers, which is all the engine's messages hold), and a TextEncoder

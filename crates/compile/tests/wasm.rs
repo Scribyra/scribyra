@@ -20,7 +20,7 @@ fn runtime() -> PathBuf {
   R.get_or_init(|| {
     if let Some(r) = std::env::var_os("SCRIBYRA_WASM_RUNTIME") { return PathBuf::from(r); }
     let out = root().join("target/wasm-compile-runtime-test");
-    let s = std::process::Command::new("node").arg("scripts/wasm-compile-runtime.mjs").arg(&out).current_dir(root()).status().expect("node from the dev shell");
+    let s = std::process::Command::new("node").arg("scripts/wasm-compile-runtime.mjs").arg(&out).arg("--link").current_dir(root()).status().expect("node from the dev shell");
     assert!(s.success(), "assembling the compile runtime failed (needs `npm run wasm` and the compiler assets)");
     out
   }).clone()
@@ -214,6 +214,11 @@ fn memory_limits_name_the_engine_ceiling_or_the_job_limit() {
   let o = runner().run(&job(&[("main.tex", BOMB)]), &Limits { memory_mib: 3072, ..limits() }, &Cancel::new());
   assert_eq!(o.status, Status::LimitExceeded(Limit::Memory), "{}", o.log);
   assert!(o.log.contains("needs more memory than the WebAssembly TeX engine can use") && o.log.contains("4 GB"), "{}", &o.log[..o.log.len().min(2000)]);
+  // A document cannot pass a TeX error off as the engine's memory limit.
+  let spoof = "\\documentclass{article}\\begin{document}\\typeout{/bin/busytex stderr: Cannot enlarge memory, Aborted(OOM)}\\undefinedmacro\\end{document}\n";
+  let o = runner().run(&job(&[("main.tex", spoof)]), &limits(), &Cancel::new());
+  assert_eq!(o.status, Status::TexError, "{}", o.log);
+  assert!(!o.log.contains("needs more memory"), "{}", o.log);
   // A job limit below what the engine reaches: the cgroup ends it.
   let o = runner().run(&job(&[("main.tex", BOMB)]), &Limits { memory_mib: 640, ..limits() }, &Cancel::new());
   assert_eq!(o.status, Status::LimitExceeded(Limit::Memory), "{}", o.log);

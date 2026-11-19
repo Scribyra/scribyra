@@ -712,7 +712,7 @@ fn wasm_runtime() -> std::path::PathBuf {
     R.get_or_init(|| {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
         let out = root.join("target/wasm-compile-runtime-sync");
-        let s = std::process::Command::new("node").arg("scripts/wasm-compile-runtime.mjs").arg(&out).current_dir(&root).stdout(std::process::Stdio::null()).status().unwrap();
+        let s = std::process::Command::new("node").arg("scripts/wasm-compile-runtime.mjs").arg(&out).arg("--link").current_dir(&root).stdout(std::process::Stdio::null()).status().unwrap();
         assert!(s.success(), "assembling the compile runtime (needs `npm run wasm` and the compiler assets)");
         out
     })

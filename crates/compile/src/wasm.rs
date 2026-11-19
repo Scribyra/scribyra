@@ -104,6 +104,12 @@ impl Wasm {
         log.push_str(&format!("\n[stopped: CPU budget of {} s]\n", limits.cpu_seconds));
         Status::LimitExceeded(Limit::Cpu)
       }
+      // Node itself out of memory (RLIMIT_DATA, or its heap flag): V8 aborts, saying so on the
+      // process's stderr, which job code cannot write to (the engine's output goes to the runner).
+      _ if result.is_none() && ran.code == Some(134) && lossy(&ran.stderr.0).contains("out of memory") => {
+        log.push_str(&format!("\n[stopped: memory limit of {} MiB]\n", limits.memory_mib));
+        Status::LimitExceeded(Limit::Memory)
+      }
       _ if usage.oom_kills > 0 => { log.push_str(&format!("\n[stopped: memory limit of {} MiB]\n", limits.memory_mib)); Status::LimitExceeded(Limit::Memory) }
       (_, "success") if *pdf_seen > limits.output_mib << 20 => Status::LimitExceeded(Limit::Output),
       (_, "success") if pdf.starts_with(b"%PDF-") => Status::Success,

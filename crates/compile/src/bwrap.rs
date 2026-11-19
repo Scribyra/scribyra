@@ -254,13 +254,17 @@ impl Bubblewrap {
     let rl = [
       (libc::RLIMIT_CPU, limits.cpu_seconds, limits.cpu_seconds + 1),
       // V8 reserves about 10 GiB of address space per WebAssembly memory (guard regions), so
-      // the WebAssembly engine is bounded by its cgroup's memory.max instead (Node's heap flag
-      // and the engine's own heap cap bound it too).
+      // the WebAssembly engine gets RLIMIT_DATA instead (written private memory: heaps and the
+      // engine's grown memory, not the PROT_NONE reservations), besides its cgroup's
+      // memory.max, Node's heap flag and the engine's own heap cap.
       (libc::RLIMIT_AS, if address_space { mib(limits.memory_mib) } else { libc::RLIM_INFINITY }, if address_space { mib(limits.memory_mib) } else { libc::RLIM_INFINITY }),
       (libc::RLIMIT_FSIZE, mib(limits.output_mib).max(largest + 1), mib(limits.output_mib).max(largest + 1)),
       (libc::RLIMIT_NOFILE, limits.open_files.max(pass.len() as u64 + 64), limits.open_files.max(pass.len() as u64 + 64)),
       (libc::RLIMIT_CORE, 0, 0),
-    ];
+    ]
+    .into_iter()
+    .chain((!address_space).then(|| (libc::RLIMIT_DATA, mib(limits.memory_mib), mib(limits.memory_mib))))
+    .collect::<Vec<_>>();
     let mut cmd = Command::new(&self.bwrap);
     cmd.args(&a).env_clear().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let pass_c = pass.clone();
@@ -325,6 +329,9 @@ fn pipe_caps(l: &Limits, n: usize) -> Vec<usize> {
 /// reads to the end regardless.
 pub(crate) type Captured = (Vec<u8>, u64);
 
+/// Package bytes one job may have the worker fetch (the browser's limit is 96 MiB).
+const FILL_BYTES: u64 = 256 << 20;
+
 pub(crate) struct Ran { pub code: Option<i32>, pub cpu_ms: u64, pub usage: Option<Usage>, pub killed: Option<Status>, pub stdout: Captured, pub stderr: Captured, pub pipes: Vec<Captured> }
 
 /// One sandbox run: inputs, extra read-only binds (store paths at their own place, and
@@ -344,14 +351,17 @@ pub(crate) struct Spec<'a> {
 }
 
 /// Answers a job's package requests (`{"fill": name}` lines) until it closes its end. At most
-/// 128 requests and short lines: a job cannot make the worker do unbounded work.
+/// 128 requests, short lines and [`FILL_BYTES`] newly fetched: a job cannot make the worker do
+/// unbounded work (the cache itself limits fills running at once and fetches each entry once).
 fn serve_packages(req: File, mut reply: File, packages: Arc<dyn Packages>) {
   use std::io::BufRead;
   let mut lines = io::BufReader::new(req.take(128 * 1024)).lines();
+  let mut fetched = 0u64;
   for _ in 0..128 {
     let Some(Ok(line)) = lines.next() else { return };
     let answer = match serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v.get("fill")?.as_str().map(str::to_owned)) {
-      Some(name) => match packages.fill(&name) { Ok(()) => serde_json::json!({"ok": true}), Err(e) => serde_json::json!({"ok": false, "error": e}) },
+      Some(_) if fetched > FILL_BYTES => serde_json::json!({"ok": false, "error": "this compile fetched too many packages"}),
+      Some(name) => match packages.fill(&name) { Ok(n) => { fetched += n; serde_json::json!({"ok": true}) } Err(e) => serde_json::json!({"ok": false, "error": e}) },
       None => serde_json::json!({"ok": false, "error": "invalid package request"}),
     };
     if writeln!(reply, "{answer}").is_err() { return; }

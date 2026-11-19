@@ -93,7 +93,7 @@ export async function signIn(engine,s,user,provider='acme'){
 // The WebAssembly engine's compile runtime, assembled once per test process (hard links).
 let wasmRuntime;
 function compileRuntime(){
- wasmRuntime??=(()=>{const out=resolve('target/wasm-compile-runtime-e2e');const r=spawnSync(process.execPath,['scripts/wasm-compile-runtime.mjs',out],{stdio:['ignore','ignore','inherit']});if(r.status!==0)throw Error('assembling the compile runtime failed (needs npm run wasm and the compiler assets)');return out;})();
+ wasmRuntime??=(()=>{const out=resolve('target/wasm-compile-runtime-e2e');const r=spawnSync(process.execPath,['scripts/wasm-compile-runtime.mjs',out,'--link'],{stdio:['ignore','ignore','inherit']});if(r.status!==0)throw Error('assembling the compile runtime failed (needs npm run wasm and the compiler assets)');return out;})();
  return wasmRuntime;
 }
 // A server-readable deployment with server compile and a worker inside the service. `engine`:
