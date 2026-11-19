@@ -31,9 +31,9 @@ For a resource named `acme` in namespace `acme`:
 | Component | Objects | Notes |
 | --- | --- | --- |
 | Configuration | Secret `acme-config` (`service.json`) | Generated from the spec; checked with the service's own validation before anything is deployed. Each referenced secret is mounted as its own read-only file. |
-| API and sync | Deployment, Service, PodDisruptionBudget `acme-api`; HorizontalPodAutoscaler when `autoscaling` is set | `scribyra-sync serve` on 8787; liveness `/health`, readiness `/ready`. |
+| API and sync | Deployment, Service, PodDisruptionBudget `acme-api`; HorizontalPodAutoscaler when `autoscaling` is set | `scribyra-sync serve` on 8787 (metrics on 9090); liveness `/health`, readiness `/ready`. `replicas` of them when server-readable; one when end-to-end ([Upgrades](#upgrades)). |
 | Web app | Deployment, Service, PodDisruptionBudget `acme-web` | Static files on 8080, same origin as the API (below). |
-| Compile workers | Deployment `acme-worker` (`compile: server` or `both`); KEDA `ScaledObject` optionally | `scribyra-sync compile-worker`, `hostUsers: false`, optional `runtimeClassName`, memory-backed scratch. |
+| Compile workers | Deployment `acme-worker` and PersistentVolumeClaim `acme-compile-cache` (`compile: server` or `both`); KEDA `ScaledObject` optionally | `scribyra-sync compile-worker` from the worker image (the browser's WebAssembly engine under Node 22, no TeX Live), probes on 8788, metrics on 9090, the shared TeX package cache mounted writable, `hostUsers: false`, optional `runtimeClassName`. |
 | Migrations | Job `acme-migrate-<version>` | `scribyra-sync migrate`, run to completion before any Deployment uses a new release. |
 | Routing | Ingress `acme` (or Gateway API `HTTPRoute`, plus a cert-manager `Certificate`) | `/v1` to the API, everything else to the web app, on `https://<domain>`. |
 | Network | NetworkPolicies `acme-default-deny`, `-api`, `-web`, `-migrate`, `-worker`, `-garage`, `-db` | See [Security model](#security-model). |
@@ -90,7 +90,7 @@ from `crds/` on first install only; apply the CRD from `operator.yaml` when upgr
 | `scribyra-operator` | `nix build .#operator-image` | workspace version |
 | `scribyra-sync` (API, migrations) | `nix build .#service-image` | the release (`spec.version`) |
 | `scribyra-web` | `lib.<system>.webImage ./dist` | the release |
-| `scribyra-worker` | not built yet (slice 15) | `<release>-texlive-<small\|medium\|full>` |
+| `scribyra-worker` | `lib.<system>.workerImage <compile runtime>` (from `node scripts/wasm-compile-runtime.mjs <dir>` in a built checkout) | the release |
 | `scribyra-garage` | `nix build .#garage-image` | Garage 1.x version |
 
 Each system builds natively (`x86_64-linux`, `aarch64-linux`); a multi-arch image is the two
@@ -142,7 +142,10 @@ kubectl -n lab wait scribyra/lab --for=condition=Ready --timeout=15m
 kubectl -n lab get scribyra lab
 ```
 
-Register `https://scribyra.lab.example.org/v1/sso/callback` at the identity provider (see
+Register `https://scribyra.lab.example.org/v1/sso/callback/lab` (`/v1/sso/callback/<provider
+name>`) at the identity provider, and give people the provider roles the sample maps
+(`scribyra-admin`, `scribyra-member` as Keycloak realm or client roles): roles, organisations
+and guests come only from the provider's tokens, and the resource names no administrators (see
 [service.md, Single sign-on](service.md#single-sign-on-oidc)). Then **back up the master key**
 (`kubectl -n lab get secret lab-master-key -o yaml`) somewhere other than the cluster.
 
@@ -163,20 +166,23 @@ without deploying anything. Samples: [`deploy/operator/samples/`](../deploy/oper
 | `domain` | required | DNS name; the app, API and OIDC callback are at `https://<domain>`. |
 | `displayName` | resource name | Shown in sign-in and project lists (`deployment.name`). |
 | `encryption` | `serverReadable` | `serverReadable` or `endToEnd`. **Immutable** (CEL transition rule). |
-| `oidc.providers[]` | required, 1–16 | `name` (lowercase ID, unique), `label`, `issuer` (https), `clientId`, `clientSecretRef {name, key}`, `emailDomains`, `roleMapping {groupsClaim, adminGroups, memberGroups}` (groups need `groupsClaim`), `guest {claim, equals}`, `offlineAccess`, `sessionHours`, `recheckMinutes`, `scopes`. |
-| `policy` | | `offlineAllowed` (true), `linkSharing` (false), `guests` (`off`/`shared`), `admins` (bootstrap administrators: emails or `issuer#subject`). |
-| `compile.mode` | `browser` | `browser`, `server` or `both`; `server`/`both` need `serverReadable` (CEL). |
-| `compile.texlive` | `small` | Worker image variant: `small`, `medium`, `full`. |
+| `oidc.providers[]` | required, 1–16 | `deployment.providers[]` of the service ([service.md, Single sign-on](service.md#single-sign-on-oidc)): `name` (its `id`, lowercase, unique; the redirect URI is `https://<domain>/v1/sso/callback/<name>`), `label`, `issuer` (https), `clientId`, `clientSecretRef {name, key}`, `emailDomains`; exactly one of `preset` (`zitadel`, `keycloak`, `entra`, `google`) and `claims {roles, organisation, organisationName, guest {path, equals}}` (JSON paths); `roles {admin, member, guest}` (provider role names; at least one admin or member name except for `google`); per preset `zitadelProjectId`, `zitadelProjectOwnerOrg` (required for `zitadel`), `zitadelForeignOrganisations` (`guests`/`organisations`), `keycloakOrganizations`, `rolesApplyToAllOrganisations`, `entraRequireAcct`, `hostedDomains` (required for `google`, or `emailDomains`), `adminSubjects` (`google` only); `offlineAccess` (the service's default when absent: on, except Keycloak and Google), `sessionHours`, `noRefreshSessionMinutes`, `recheckMinutes`, `scopes`. |
+| `oidc.primaryOrganisation` | none | `{provider, organisation}`: the organisation that takes the deployment's ID (`deployment.primary_organisation`); `organisation` is the claim value, left out for a provider with one fixed organisation. |
+| `policy` | | `offlineAllowed` (true), `linkSharing` (false), `guests` (`off`/`shared`; `off` with `endToEnd`), `notifyOnAdminAccess` (true: members see when an administrator opened their project; audited either way). There is no administrator list: administrators are whoever the providers give an admin role. |
+| `compile.mode` | `browser` | `browser`, `server` or `both`; `server`/`both` need `serverReadable` (CEL). Server compiles use the browser's WebAssembly engine (`compile_engine: wasm`); the operator deploys no native TeX Live ([below](#compile-workers)). |
+| `compile.texMirror` | the service's (`https://tlnet.yihui.org`) | TeX Live archive mirror for packages outside the bundled set; `""`: bundled packages only, and workers get no internet egress. |
+| `compile.mirrorCidrs` | none | CIDRs of the mirror for the workers' egress policy; empty allows its port to any address. |
+| `compile.cache` | `5Gi`, `ReadWriteMany` | The shared package cache claim: `size`, `storageClassName`, `accessMode` (`ReadWriteMany`, or `ReadWriteOnce` on a single node, such as k3s's local-path). |
 | `compile.runtimeClassName` | none | For example `gvisor`. |
 | `compile.workers` | min 0, max 8, concurrency 2, scaler `operator` | Replicas bounds, jobs per worker, `scaler: operator` or `keda` (+ `prometheusAddress`). |
-| `compile.limits` | as the service | `cpuSeconds`, `wallSeconds`, `memoryMiB`, `scratchMiB`, `outputMiB`, `passes`, `queue`, `perMemberPerHour`. |
-| `compile.resources` | derived from limits | Worker pod resources. |
+| `compile.limits` | the service's | `cpuSeconds` (300), `wallSeconds` (600), `memoryMiB` (2048; keep ≥ 1536), `scratchMiB`, `outputMiB`, `passes`, `queue`, `perMemberPerHour`, `perProjectPerMinute`, `activePerMember`, `activePerOwner`, `retentionDays`. |
+| `compile.resources` | about 1 GiB per job | Worker pod resources; by default requests of 1 GiB per concurrent job plus 256 MiB and 500m CPU per job, a memory limit of `memoryMiB` per job plus 256 MiB. |
 | `postgres.external` | | `secretRef {name, key}` with the URL; `cidrs` and `port` (5432) for the egress policy. |
 | `postgres.provisioned` | | `storageSize` (20Gi), `instances` (1), `storageClassName`, `imageName`; needs CloudNativePG. |
 | `storage.s3` | | `endpoint` (https), `bucket`, `region` (`auto`), `pathStyle`, `secretRef {name, accessKeyIdKey: access-key-id, secretAccessKeyKey: secret-access-key}`, `cidrs`. |
 | `storage.provisioned` | | `size` (50Gi), `storageClassName`: single-node Garage. |
 | `masterKeyRef` | generated | `{name, key}` of an existing 32-byte key; otherwise `<name>-master-key` is generated once. |
-| `replicas` | 2 | API replicas without autoscaling (one for single-writer releases). |
+| `replicas` | 2 | API replicas without autoscaling. Server-readable deployments run them all (they share the database; blobs are always in S3 here); an end-to-end deployment runs one. |
 | `autoscaling` | none | `minReplicas`, `maxReplicas`, `targetCPUUtilizationPercentage` (70): an HPA. |
 | `resources` | 100m/128Mi, 1Gi limit | API pod resources. |
 | `ingress` | required | `className` (Ingress) **or** `gateway {name, namespace, sectionName}` (HTTPRoute); `issuerRef {name, kind: ClusterIssuer\|Issuer}` (cert-manager); `tlsSecretName` (`<name>-tls`); `annotations`. |
@@ -191,7 +197,12 @@ without deploying anything. Samples: [`deploy/operator/samples/`](../deploy/oper
 Further CEL rules: exactly one of `postgres.external`/`provisioned` and of
 `storage.s3`/`provisioned`, and neither may switch after creation (that would start from an
 empty database or bucket); `ingress` uses `className` or `gateway`, not both; provider names are
-unique; `maxReplicas ≥ minReplicas`; the resource name is at most 40 characters.
+unique; each provider has exactly one of `preset` and `claims`, `zitadel` needs
+`zitadelProjectOwnerOrg`, `google` needs `hostedDomains` (or `emailDomains`), and `roles` maps an
+admin or member role (except `google`); `primaryOrganisation.provider` names a provider;
+`policy.guests` is `off` with `endToEnd`; `maxReplicas ≥ minReplicas`; the resource name is at
+most 40 characters. The service's own validation catches the rest (for example a `claims` path
+that is not a JSON path, or a Zitadel field on another preset) as `Degraded`/`InvalidSpec`.
 
 ## Status and troubleshooting
 
@@ -203,7 +214,7 @@ unique; `maxReplicas ≥ minReplicas`; the resource name is at most 40 character
 | Condition | Reasons | What to do |
 | --- | --- | --- |
 | `Ready` | `Ready`, `NotReady`, `InvalidSpec`, … | True when the API and web Deployments have available pods and the database and storage are ready. |
-| `Progressing` | `WaitingForDependencies`, `Migrating`, `StoppingSingleWriter`, `RollingOut`, `Complete` | Normal during install and upgrades. |
+| `Progressing` | `WaitingForDependencies`, `Migrating`, `StoppingSingleWriter` (only for a release marked single-writer), `RollingOut`, `Complete` | Normal during install and upgrades. |
 | `Degraded` | `InvalidSpec`, `MigrationFailed`, `UnknownVersion` | `InvalidSpec` quotes the service's refusal (field named, never a value). `MigrationFailed`: read the Job's logs, fix, `kubectl delete job <name>-migrate-<version>` to retry. |
 | `UpgradeBlocked` | `Downgrade`, `UnknownVersion`, `UnsupportedUpgradePath`, `MigrationFailed`, `None` | The running release keeps serving. Set `version` back, upgrade the operator, or go through the named intermediate release. |
 | `DatabaseReady` | `SecretMissing`, `CloudNativePGMissing`, `Provisioning`, `Ready` | `CloudNativePGMissing`: install CloudNativePG or use `postgres.external`. |
@@ -233,13 +244,26 @@ Changing `spec.version`:
 3. Only then are the API, web and worker Deployments rolled to the new image (`maxUnavailable:
    0`). A failed Job leaves the old release serving and reports `MigrationFailed`.
 
-**Single-writer releases.** Until slice 19 the API holds a PostgreSQL advisory lock as the
-database's only writer (`docs/service.md`), so a second API process, or the migration Job, cannot
-start while one runs. For releases marked `single_writer` (all current ones) the operator runs one
-API replica with a `Recreate` strategy (autoscaling is ignored, with an event), and on upgrade
+Serving pods never migrate (`migrate_on_start: false` in the generated configuration), and
+`scribyra-sync migrate` takes no ownership lock, so the Job runs while the previous release
+keeps serving: migrations are additive within a minor series, and a running release serves a
+schema a newer release extended (service.md, Upgrade).
+
+**Replicas and downtime.** A server-readable deployment keeps nothing a replica needs in memory
+and takes the database's ownership lock in shared mode; its blobs are always in S3 here (external
+S3 or the provisioned Garage; a filesystem blob directory, which only one process may own, is not
+something the operator deploys). So it runs `replicas` API pods (or the HPA's), rolls them one
+at a time, and an upgrade has no downtime. An **end-to-end** deployment's API still takes the
+lock exclusively: the operator runs one API replica with a `Recreate` strategy whatever
+`replicas` says (autoscaling is ignored, with an event `AutoscalingIgnored`); its migration Job
+still runs while that replica serves, and the only outage is the replacement of the one pod.
+
+**Single-writer releases.** A release can be marked `single_writer` in the operator's release
+table (`versions.rs`): its API owns the database exclusively in every mode and its migration needs
+it stopped. For such a release the operator runs one API replica with `Recreate`, and on upgrade
 scales the API and workers to zero, waits until their pods are gone, runs the migration, then
-starts the new release: a short outage per upgrade. If the migration fails, the old release is
-scaled back up.
+starts the new release (a short outage); if the migration fails, the old release is scaled back
+up. No current release is one (0.2.0 is not); the mechanism stays for releases that need it.
 
 The operator itself upgrades like any Deployment (apply the new `operator.yaml`); it holds no
 state besides the resources' status.
@@ -289,7 +313,8 @@ first, deliberately.
 - **Operator RBAC** (`manifests::cluster_rules`, identical in the manifest and the chart): only
   the kinds it manages, with `get list watch create patch delete` (no `update` except on its own
   resource, no `escalate`, `bind`, `impersonate` or wildcards); `pods` list only (to wait for a
-  single writer to stop); `persistentvolumeclaims` list and delete (for `Delete`); events; the
+  single writer to stop); `persistentvolumeclaims` managed (the compile cache claim; Garage's and
+  CloudNativePG's are only deleted, for `Delete`); events; the
   lease only in its namespace and only by name for `get`/`patch`. Its Secret permissions are
   cluster-wide because the generated Secrets live in tenants' namespaces; it reads referenced
   Secrets only to check that their keys exist and never copies their values into anything it
@@ -306,8 +331,9 @@ first, deliberately.
   from the ingress controller's namespace and has no egress; the API accepts 8787 from there and
   metrics from the operator's namespace, and reaches only DNS, PostgreSQL, storage and HTTPS for
   the OIDC issuers; the migration Job reaches DNS, PostgreSQL and storage; compile workers reach
-  DNS, PostgreSQL and storage only, never the internet (they take jobs from the PostgreSQL queue,
-  so "no egress at all" is not possible; nothing else is open); Garage accepts S3 from those
+  DNS, PostgreSQL, storage and the TeX mirror's HTTPS port (`compile.mirrorCidrs`, or any address
+  when empty), and with `texMirror: ""` nothing beyond DNS, PostgreSQL and storage (they take jobs
+  from the PostgreSQL queue, so "no egress at all" is not possible; nothing else is open); Garage accepts S3 from those
   components and its admin port from the operator only; CloudNativePG pods accept 5432 from them.
   NetworkPolicy cannot name hosts: external PostgreSQL, S3 and OIDC are reached by `cidrs`
   (`0.0.0.0/0` on the one port when empty); use a CNI with FQDN policies to narrow them further.
@@ -316,7 +342,11 @@ first, deliberately.
   pod serves the S3 and admin APIs with a certificate from a per-deployment CA the operator
   generates. The service trusts only that CA for its endpoint (`s3_ca_file`), the operator only
   that CA for the admin API.
-- **Compile workers**: `hostUsers: false`, memory-backed size-limited scratch, optional gVisor.
+- **Compile workers**: `hostUsers: false`, optional gVisor; each job's scratch is a tmpfs inside
+  its sandbox, counted in its own cgroup's memory (`memoryMiB`). The package cache claim is the
+  one writable volume (the root file system stays read-only); the worker only stores archives
+  whose checksums match the catalog (docs/compile-engines.md), and each `Scribyra` has its own
+  claim, so tenants never share a cache.
   bubblewrap inside the worker needs user namespaces, which `RuntimeDefault` seccomp may refuse on
   some runtimes, and the sandbox runner (design section 6) wants the pod's own cgroup writable
   to make one cgroup per job, which container runtimes mount read-only for unprivileged pods. A
@@ -345,9 +375,26 @@ The operator writes `service.json` with only the fields it sets, and serialises 
 `crates/sync/src/deploy.rs` (`scribyra_sync::deploy`), which was added for the operator. Added to
 the service with it: `scribyra-sync migrate` and the `s3_ca_file` field (service.md).
 
-Not yet in the service, used by the operator already (it tolerates their absence): the metrics
-port 9090 with `scribyra_compile_queue_length`, `scribyra-sync compile-worker` and the worker
-image with TeX Live at `/opt/texlive`, multi-writer releases (slice 19).
+The operator sets per pod, through `SCRIBYRA_SERVICE_<FIELD>` overrides: `metrics_bind`
+(`0.0.0.0:9090`, API and workers: `scribyra_compile_queue_length` scales the workers),
+`compile_worker_bind` (`0.0.0.0:8788`, the workers' `/healthz` and `/readyz`), `compile_runtime`
+(`/opt/scribyra/compile-runtime` in the worker image) and `compile_cache`
+(`/var/cache/scribyra/tex`, the claim), plus `SCRIBYRA_COMPILE_CGROUP=/sys/fs/cgroup` (the
+pod's own cgroup as the jobs' delegated parent). The deployment's identity is the service's
+current one: provider presets and role names, `primary_organisation`, `notify_on_admin_access`,
+no `admins` list (removed from the service and the resource).
+
+### Compile workers
+
+The worker image (`nix/operator.nix`, `workerImage`) holds `scribyra-sync`, bubblewrap, Node 22
+and its closure (`SCRIBYRA_NODE`, `SCRIBYRA_WASM_CLOSURE`) and the WebAssembly compile runtime
+(read-only, assembled by `scripts/wasm-compile-runtime.mjs`): about 0.55 GB, no TeX Live. The
+operator configures `compile_engine: "wasm"`, so the server compiles exactly what the browser
+compiles. Native TeX Live is not offered as an image variant: a TeX Live that compiles the
+benchmark documents is 2.6 GB (5 GB in full) per image, a second package set and CVE stream, for
+1.3–3.3× speed on small documents (docs/compile-engines.md recommends retiring it); a deployment
+that needs it runs the service outside the operator. Size worker nodes at about 1 GiB per
+concurrent job.
 
 The design text in section 10 sketches the resource with group `scribyra.org`, providers at the
 top level and `encryption: server|e2ee`; the operator follows the 18 November brief instead:
@@ -362,16 +409,21 @@ nix develop .#operator -c cargo test -p scribyra-operator
 - **Unit and snapshot tests** (`tests/manifests.rs`): every generated manifest for the three
   samples is pinned in `tests/snapshots/` (`UPDATE_SNAPSHOTS=1` rewrites them; review the diff);
   `operator.yaml`, the chart's CRD and RBAC rules match the generator; the generated
-  configuration passes the service's validation; every pod meets `restricted`; secrets are files;
-  policies, owner references, single-writer handling, HPA, workers and routing are checked.
+  configuration passes the service's validation (presets, role names, primary organisation, the
+  WebAssembly engine, no `admins`, `migrate_on_start: false`); every pod meets `restricted`;
+  secrets are files; policies (workers' egress with and without a mirror), owner references,
+  replicas by mode, single-writer handling, HPA, workers (image, overrides, probes, cache claim,
+  memory sizing) and routing are checked.
 - **Integration tests** (`tests/envtest.rs`): etcd, kube-apiserver (RBAC on) and
   kube-controller-manager (garbage collector, Deployment, ReplicaSet, StatefulSet controllers;
   no Job controller, kubelet or scheduler) as plain processes from nixpkgs. The controller runs as
   the operator's service account. Covered: CRD schema and CEL rules (including immutable
-  fields) enforced by the API server; install waiting for secrets; the migration Job before the
-  first API Deployment; upgrade ordering (no rollout until the Job completes); downgrade,
-  unknown and skipped releases blocked; single-writer upgrades stopping the old pods before the
-  Job; a failed migration scaling the old release back; finalizer behaviour for `Retain` and
+  fields, the identity rules) enforced by the API server; install waiting for secrets; the
+  migration Job before the first API Deployment; upgrade ordering (no rollout until the Job
+  completes, both server-readable replicas serving meanwhile); an end-to-end deployment held to
+  one `Recreate` replica that keeps serving during its migration; downgrade, unknown and skipped
+  releases blocked; single-writer upgrades stopping the old pods before the Job; the workers'
+  cache claim created and pruned with server compile; a failed migration scaling the old release back; finalizer behaviour for `Retain` and
   `Delete` with real garbage collection; pruning when components are turned off; invalid specs
   reported without deploying; CloudNativePG missing, then the `Cluster`, `ScheduledBackup` and
   readiness with its CRDs; leader election and its RBAC.
@@ -387,6 +439,9 @@ nix develop .#operator -c cargo test -p scribyra-operator
 **Untested until a real cluster exists**: pods actually starting (images, probes, read-only root
 with the service, mounted files' ownership), scheduling and volumes, NetworkPolicy enforcement,
 CloudNativePG provisioning and backups, Garage in a pod and its sidecar, Ingress, HTTPRoute and
-cert-manager TLS, HPA and KEDA scaling, gVisor and user namespaces for workers, the operator's
+cert-manager TLS, HPA and KEDA scaling, gVisor and user namespaces for workers, the worker
+image (its derivation evaluates; it was not built or run here) and WebAssembly jobs in a pod under
+its own delegated cgroup, a ReadWriteMany cache claim across nodes, rolling several API replicas
+against a real database, the operator's
 own Deployment, probes and lease across pods, restore, and multi-arch images (only the build
 host's architecture was built here).

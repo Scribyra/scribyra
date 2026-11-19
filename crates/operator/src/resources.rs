@@ -5,7 +5,7 @@
 //! with server-side apply as `DynamicObject`s); the API server validates them in the
 //! integration tests.
 
-use crate::crd::{DeletionPolicy, Encryption, IssuerKind, Scaler, Scribyra, TexLive};
+use crate::crd::{CacheAccessMode, DeletionPolicy, Encryption, IssuerKind, Scaler, Scribyra};
 use crate::service_config::{self, GARAGE_ADMIN_PORT, GARAGE_S3_PORT};
 use scribyra_sync::deploy;
 use serde_json::{Value, json};
@@ -56,8 +56,10 @@ impl Object {
     }
 }
 
-/// What to run now: the release (image tag), whether it is single-writer, and whether the API
-/// and workers should be stopped (single-writer upgrade while the migration Job runs).
+/// What to run now: the release (image tag), whether the API is a single writer (one replica,
+/// `Recreate`: an end-to-end deployment, or a release that predates shared ownership), and
+/// whether the API and workers should be stopped (an upgrade from a release whose migration
+/// needs the database to itself, while the migration Job runs).
 #[derive(Clone, Debug)]
 pub struct Plan {
     pub version: String,
@@ -154,14 +156,7 @@ fn image(cr: &Scribyra, env: &Env, which: &str, version: &str) -> String {
     custom.unwrap_or_else(|| match which {
         "api" => format!("{}/scribyra-sync:{version}", env.registry),
         "web" => format!("{}/scribyra-web:{version}", env.registry),
-        "worker" => {
-            let variant = match cr.spec.compile.texlive {
-                TexLive::Small => "small",
-                TexLive::Medium => "medium",
-                TexLive::Full => "full",
-            };
-            format!("{}/scribyra-worker:{version}-texlive-{variant}", env.registry)
-        }
+        "worker" => format!("{}/scribyra-worker:{version}", env.registry),
         _ => format!("{}/scribyra-garage:{GARAGE_VERSION}", env.registry),
     })
 }
@@ -246,6 +241,10 @@ fn service_env(cr: &Scribyra) -> Value {
         {"name": deploy::S3_ACCESS_KEY_ID_ENV, "valueFrom": {"secretKeyRef": {"name": secret, "key": key}}},
     ])
 }
+/// A per-pod configuration override (`SCRIBYRA_SERVICE_<FIELD>`): listeners only some pods have.
+fn override_env(field: &str, value: &str) -> Value {
+    json!({"name": format!("{}{}", deploy::OVERRIDE_PREFIX, field.to_uppercase()), "value": value})
+}
 /// A pod template running `scribyra-sync <command>`.
 fn service_pod(cr: &Scribyra, env: &Env, plan: &Plan, component: &str, image_kind: &str, command: &str, extra: Value) -> Value {
     let mut container = json!({
@@ -308,10 +307,14 @@ pub fn config(cr: &Scribyra) -> Object {
 fn api(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
     let spec = &cr.spec;
     let n = name(cr, "api");
-    let autoscaled = spec.autoscaling.is_some() && !plan.single_writer;
+    // Several replicas share the database (shared ownership lock) when the deployment is
+    // server-readable and its blobs are in S3, which they always are here: external S3 or the
+    // provisioned Garage. End-to-end deployments take the lock exclusively: one replica.
+    let single_writer = plan.single_writer || spec.encryption == Encryption::EndToEnd;
+    let autoscaled = spec.autoscaling.is_some() && !single_writer;
     let replicas = if plan.stopped {
         0
-    } else if plan.single_writer {
+    } else if single_writer {
         1
     } else {
         spec.autoscaling.as_ref().map(|a| a.min_replicas).unwrap_or(spec.replicas)
@@ -337,10 +340,11 @@ fn api(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
         }),
     );
     let mut pod = pod;
+    pod["spec"]["containers"][0]["env"].as_array_mut().unwrap().push(override_env("metrics_bind", deploy::METRICS_BIND));
     // Long polls last at most 25 s; give them time to finish.
     pod["spec"]["terminationGracePeriodSeconds"] = json!(40);
-    let strategy = if plan.single_writer {
-        // A second process cannot take the database lock; the old pod must stop first.
+    let strategy = if single_writer {
+        // A second process cannot take the exclusive database lock; the old pod must stop first.
         json!({"type": "Recreate"})
     } else {
         json!({"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}})
@@ -406,7 +410,7 @@ fn web(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
             "Deployment",
             meta(cr, &n, "web", true),
             json!({"spec": {
-                "replicas": if cr.spec.replicas > 1 { 2 } else { 1 },
+                "replicas": if cr.spec.replicas > 1 || cr.spec.autoscaling.is_some() { 2 } else { 1 },
                 "selector": {"matchLabels": selector(cr, "web")},
                 "strategy": {"type": "RollingUpdate", "rollingUpdate": {"maxUnavailable": 0, "maxSurge": 1}},
                 "revisionHistoryLimit": 5,
@@ -436,15 +440,45 @@ fn web(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
     ]
 }
 
+/// Pod memory the WebAssembly engine typically uses per concurrent job (Node, the engine's heap
+/// and the job's in-memory scratch: 0.5–0.9 GiB measured, docs/compile-engines.md).
+const WORKER_REQUEST_MIB_PER_JOB: u64 = 1024;
+/// The worker process itself and Node's start-up, besides the jobs.
+const WORKER_OVERHEAD_MIB: u64 = 256;
+
+/// The workers' shared, writable TeX package cache.
+pub fn compile_cache_claim(cr: &Scribyra) -> String {
+    name(cr, "compile-cache")
+}
+fn compile_cache(cr: &Scribyra) -> Object {
+    let c = &cr.spec.compile.cache;
+    let mut spec = json!({
+        "accessModes": [match c.access_mode { CacheAccessMode::ReadWriteMany => "ReadWriteMany", CacheAccessMode::ReadWriteOnce => "ReadWriteOnce" }],
+        "resources": {"requests": {"storage": c.size}},
+    });
+    if let Some(class) = &c.storage_class_name {
+        spec["storageClassName"] = class.clone().into();
+    }
+    // Owned: a cache, rebuilt from the bundled archives and the mirror when lost.
+    object("v1", "PersistentVolumeClaim", meta(cr, &compile_cache_claim(cr), "worker", true), json!({"spec": spec}))
+}
+
+/// Compile workers: `scribyra-sync compile-worker` from the worker image (Node 22 and the
+/// WebAssembly compile runtime at [`deploy::COMPILE_RUNTIME_DIR`], no TeX Live), the shared
+/// package cache at [`deploy::COMPILE_CACHE_DIR`], jobs confined in cgroups under the pod's own.
 fn workers(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
     let c = &cr.spec.compile;
     let n = name(cr, "worker");
-    let scratch_mib = c.limits.scratch_mi_b as u64 * c.workers.concurrency as u64;
-    let memory_mib = c.limits.memory_mi_b as u64 * c.workers.concurrency as u64 + 256 + scratch_mib;
+    let jobs = c.workers.concurrency as u64;
+    // A job is held to `memoryMiB` by its own cgroup; the pod's limit leaves room for every
+    // running job to reach it, while the request is what jobs typically use.
+    let request_mib = WORKER_REQUEST_MIB_PER_JOB * jobs + WORKER_OVERHEAD_MIB;
+    let limit_mib = (c.limits.memory_mi_b as u64).max(WORKER_REQUEST_MIB_PER_JOB) * jobs + WORKER_OVERHEAD_MIB;
     let resources = c.resources.as_ref().map(|r| serde_json::to_value(r).unwrap()).unwrap_or(json!({
-        "requests": {"cpu": format!("{}m", 500 * c.workers.concurrency), "memory": format!("{}Mi", memory_mib)},
-        "limits": {"memory": format!("{}Mi", memory_mib)},
+        "requests": {"cpu": format!("{}m", 500 * c.workers.concurrency), "memory": format!("{request_mib}Mi")},
+        "limits": {"memory": format!("{limit_mib}Mi")},
     }));
+    let probe = |path: &str, period: i32| json!({"httpGet": {"path": path, "port": "probes"}, "periodSeconds": period, "timeoutSeconds": 3, "failureThreshold": 3});
     let mut pod = service_pod(
         cr,
         env,
@@ -452,11 +486,25 @@ fn workers(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
         "worker",
         "worker",
         deploy::COMMAND_COMPILE_WORKER,
-        json!({"resources": resources, "ports": [{"name": "metrics", "containerPort": deploy::METRICS_PORT}]}),
+        json!({
+            "resources": resources,
+            "ports": [{"name": "probes", "containerPort": deploy::WORKER_PORT}, {"name": "metrics", "containerPort": deploy::METRICS_PORT}],
+            "readinessProbe": probe(deploy::READYZ_PATH, 5),
+            "livenessProbe": probe(deploy::HEALTHZ_PATH, 10),
+        }),
     );
-    // Memory-backed, size-limited scratch for the sandboxed jobs.
-    pod["spec"]["volumes"].as_array_mut().unwrap().push(json!({"name": "scratch", "emptyDir": {"medium": "Memory", "sizeLimit": format!("{scratch_mib}Mi")}}));
-    pod["spec"]["containers"][0]["volumeMounts"].as_array_mut().unwrap().push(json!({"name": "scratch", "mountPath": "/scratch"}));
+    let container = &mut pod["spec"]["containers"][0];
+    for (field, value) in [
+        ("compile_worker_bind", deploy::WORKER_BIND),
+        ("metrics_bind", deploy::METRICS_BIND),
+        ("compile_runtime", deploy::COMPILE_RUNTIME_DIR),
+        ("compile_cache", deploy::COMPILE_CACHE_DIR),
+    ] {
+        container["env"].as_array_mut().unwrap().push(override_env(field, value));
+    }
+    container["env"].as_array_mut().unwrap().push(json!({"name": "SCRIBYRA_COMPILE_CGROUP", "value": deploy::COMPILE_CGROUP_DIR}));
+    container["volumeMounts"].as_array_mut().unwrap().push(json!({"name": "compile-cache", "mountPath": deploy::COMPILE_CACHE_DIR}));
+    pod["spec"]["volumes"].as_array_mut().unwrap().push(json!({"name": "compile-cache", "persistentVolumeClaim": {"claimName": compile_cache_claim(cr)}}));
     // User namespaces: bubblewrap creates its own namespaces without host privileges.
     pod["spec"]["hostUsers"] = json!(false);
     pod["spec"]["terminationGracePeriodSeconds"] = json!(c.limits.wall_seconds + 30);
@@ -475,7 +523,7 @@ fn workers(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
     } else if !keda {
         spec["replicas"] = plan.worker_replicas.into();
     }
-    let mut out = vec![object("apps/v1", "Deployment", meta(cr, &n, "worker", true), json!({"spec": spec}))];
+    let mut out = vec![compile_cache(cr), object("apps/v1", "Deployment", meta(cr, &n, "worker", true), json!({"spec": spec}))];
     if keda && !plan.stopped {
         out.push(object(
             "keda.sh/v1alpha1",
@@ -624,8 +672,9 @@ fn netpol(cr: &Scribyra, suffix: &str, pod_selector: Value, types: &[&str], ingr
 /// Default deny for every pod of the instance, then one allow policy per component:
 /// web: ingress from the ingress controller only, no egress at all; API: ingress from the
 /// ingress controller (and metrics from the operator), egress to DNS, PostgreSQL, storage and
-/// the OIDC issuers (HTTPS); compile workers and the migration Job: egress to DNS, PostgreSQL
-/// and storage only, nothing else; Garage: ingress from those components only, no egress.
+/// the OIDC issuers (HTTPS); compile workers: egress to DNS, PostgreSQL, storage and the TeX
+/// mirror (HTTPS; none without a mirror); the migration Job: egress to DNS, PostgreSQL and storage
+/// only; Garage: ingress from those components only, no egress.
 fn network_policies(cr: &Scribyra, env: &Env) -> Vec<Object> {
     let np = &cr.spec.network_policy;
     let from_ingress = match &np.ingress_namespace_selector {
@@ -663,7 +712,14 @@ fn network_policies(cr: &Scribyra, env: &Env) -> Vec<Object> {
             json!({"matchLabels": selector(cr, "worker")}),
             &["Ingress", "Egress"],
             vec![json!({"from": [ns_peer(&env.operator_namespace)], "ports": [{"protocol": "TCP", "port": deploy::METRICS_PORT}]})],
-            vec![dns(), postgres_egress(cr), storage_egress(cr)],
+            {
+                let mut egress = vec![dns(), postgres_egress(cr), storage_egress(cr)];
+                if let Some(mirror) = service_config::tex_mirror(cr) {
+                    let port = mirror.trim_start_matches("https://").split('/').next().and_then(|h| h.rsplit_once(':')).and_then(|(_, p)| p.parse().ok()).unwrap_or(443);
+                    egress.push(to_cidrs(&cr.spec.compile.mirror_cidrs, port));
+                }
+                egress
+            },
         ));
     }
     if cr.spec.storage.provisioned.is_some() {
@@ -869,6 +925,7 @@ pub const PRUNED: &[(&str, &str, &str)] = &[
     ("networking.k8s.io", "v1", "NetworkPolicy"),
     ("networking.k8s.io", "v1", "Ingress"),
     ("batch", "v1", "Job"),
+    ("", "v1", "PersistentVolumeClaim"),
 ];
 /// Optional kinds pruned only when their API exists.
 pub const PRUNED_OPTIONAL: &[(&str, &str, &str)] = &[

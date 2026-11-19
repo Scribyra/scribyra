@@ -38,7 +38,9 @@ pub fn cluster_rules() -> Value {
         // into the operator's configuration output.
         rule(&[""], &["secrets", "services", "configmaps"], MANAGE),
         rule(&[""], &["pods"], &["list"]),
-        rule(&[""], &["persistentvolumeclaims"], &["list", "delete"]),
+        // The compile workers' package cache claim; Garage's and CloudNativePG's are only listed
+        // and deleted (`deletionPolicy: Delete`).
+        rule(&[""], &["persistentvolumeclaims"], MANAGE),
         rule(&["events.k8s.io"], &["events"], &["create", "patch"]),
         rule(&["apps"], &["deployments", "statefulsets"], MANAGE),
         rule(&["batch"], &["jobs"], MANAGE),

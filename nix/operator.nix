@@ -22,6 +22,10 @@ let
     meta.mainProgram = "scribyra-operator";
   };
   user = "10001:10001";
+  inherit (import ./service.nix { inherit pkgs; }) service;
+  # What the WebAssembly engine binds read-only into each job's sandbox: Node 22 and the shell
+  # its wrapper needs, as a list of store paths (`SCRIBYRA_WASM_CLOSURE`).
+  wasmClosure = pkgs.closureInfo { rootPaths = [ pkgs.nodejs_22 pkgs.bash pkgs.coreutils ]; };
 in {
   inherit operator;
   # The operator; also the Garage TLS proxy (`scribyra-operator tls-proxy`).
@@ -47,6 +51,37 @@ in {
       Entrypoint = [ "${pkgs.garage_1}/bin/garage" ];
       Cmd = [ "server" ];
       User = user;
+    };
+  };
+  # The compile worker: `workerImage ./path/to/compile-runtime` (the output of
+  # `node scripts/wasm-compile-runtime.mjs <dir>` from a built checkout: the browser's BusyTeX
+  # WebAssembly engine, the compile driver and the bundled package archives). The service binary,
+  # bubblewrap, Node 22 and its closure; no TeX Live (docs/compile-engines.md). The package cache
+  # is a volume the operator mounts at /var/cache/scribyra/tex.
+  workerImage = runtime: pkgs.dockerTools.buildLayeredImage {
+    name = "scribyra-worker";
+    tag = version;
+    created = "1970-01-01T00:00:01Z";
+    contents = [ service pkgs.bubblewrap pkgs.cacert ];
+    extraCommands = ''
+      mkdir -p opt/scribyra var/cache/scribyra/tex tmp
+      cp -r --no-preserve=mode ${runtime} opt/scribyra/compile-runtime
+      chmod -R a-w opt/scribyra/compile-runtime
+    '';
+    config = {
+      Entrypoint = [ "${service}/bin/scribyra-sync" ];
+      Cmd = [ "compile-worker" ];
+      User = user;
+      Env = [
+        "SCRIBYRA_BWRAP=${pkgs.bubblewrap}/bin/bwrap"
+        "SCRIBYRA_NODE=${pkgs.nodejs_22}/bin/node"
+        "SCRIBYRA_WASM_CLOSURE=${wasmClosure}/store-paths"
+        "SCRIBYRA_SERVICE_COMPILE_RUNTIME=/opt/scribyra/compile-runtime"
+        "SCRIBYRA_SERVICE_COMPILE_CACHE=/var/cache/scribyra/tex"
+        "SCRIBYRA_COMPILE_CGROUP=/sys/fs/cgroup"
+      ];
+      ExposedPorts."8788/tcp" = { };
+      ExposedPorts."9090/tcp" = { };
     };
   };
   # The static web app: `webImage ./path/to/built/app` (the output of `npm run build`).

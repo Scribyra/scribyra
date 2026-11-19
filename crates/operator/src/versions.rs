@@ -12,15 +12,17 @@ pub struct Release {
     /// The running releases this one may be upgraded from (a semver requirement); `None` for a
     /// release that only installs fresh.
     pub upgrades_from: Option<String>,
-    /// The API still holds a single-writer advisory lock on the database (design section 10,
-    /// until slice 19): one replica, `Recreate` rollouts, and the old pods stop before the
-    /// migration Job takes the lock.
+    /// The API takes the database exclusively in every mode and its migrations need it to
+    /// themselves: one replica, `Recreate` rollouts, and the old pods stop before the migration
+    /// Job runs. No current release is one: server-readable replicas share the database (a
+    /// shared ownership lock), `scribyra-sync migrate` takes no ownership lock, and only
+    /// end-to-end deployments still run one API replica (decided per resource, not per release).
     pub single_writer: bool,
 }
 
 /// The releases compiled into this operator.
 pub fn known() -> Vec<Release> {
-    vec![Release { version: "0.2.0".into(), upgrades_from: None, single_writer: true }]
+    vec![Release { version: "0.2.0".into(), upgrades_from: None, single_writer: false }]
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

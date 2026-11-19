@@ -13,9 +13,10 @@
     in import ./nix/service.nix { inherit pkgs; } // {
       inherit (operator) operator operator-image garage-image;
     });
-    # `lib.<system>.webImage <path>` builds the static web app image from a built app.
+    # `lib.<system>.webImage <path>` builds the static web app image from a built app, and
+    # `lib.<system>.workerImage <path>` the compile worker image from an assembled compile runtime.
     lib = nixpkgs.lib.genAttrs systems (system:
-      { inherit (import ./nix/operator.nix { pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; }; }) webImage; });
+      { inherit (import ./nix/operator.nix { pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; }; }) webImage workerImage; });
     checks = nixpkgs.lib.genAttrs [ "x86_64-linux" "aarch64-linux" ] (system: let
       pkgs = import nixpkgs { inherit system; overlays = [ rust-overlay.overlays.default ]; };
     in {

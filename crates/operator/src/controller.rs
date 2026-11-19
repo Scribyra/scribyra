@@ -293,7 +293,11 @@ async fn apply_instance(cr: &Scribyra, ctx: &Context) -> Result<Action> {
     };
     let migrated = status.migrated_version.as_deref() == Some(target.version.as_str());
     let fresh = running.is_none();
+    // Only a release whose API owns the database exclusively in every mode needs its pods stopped
+    // before the migration Job runs; current releases migrate while the old release serves.
     let single_writer_now = running_release.as_ref().map(|r| r.single_writer).unwrap_or(false) || target.single_writer;
+    // An end-to-end deployment's API takes the database exclusively: one replica, `Recreate`.
+    let exclusive = cr.spec.encryption == Encryption::EndToEnd;
 
     // Compile worker replicas.
     let workers = if cr.compiles_on_server() { Some(scale_workers(cr, ctx, status.compile_workers.clone()).await) } else { None };
@@ -301,7 +305,7 @@ async fn apply_instance(cr: &Scribyra, ctx: &Context) -> Result<Action> {
 
     let mut plan = Plan {
         version: if migrated { target.version.clone() } else { running.clone().unwrap_or_else(|| target.version.clone()) },
-        single_writer: if migrated { target.single_writer } else { running_release.as_ref().map(|r| r.single_writer).unwrap_or(target.single_writer) },
+        single_writer: exclusive || if migrated { target.single_writer } else { running_release.as_ref().map(|r| r.single_writer).unwrap_or(target.single_writer) },
         stopped: !migrated && !fresh && single_writer_now,
         worker_replicas: workers.as_ref().map(|w| w.desired_replicas).unwrap_or(0),
     };
@@ -388,7 +392,7 @@ async fn apply_instance(cr: &Scribyra, ctx: &Context) -> Result<Action> {
         c.set("Degraded", false, "None", "");
     }
     if cr.spec.autoscaling.is_some() && plan.single_writer {
-        publish_once(ctx, cr, &status, "AutoscalingIgnored", format!("release {} runs a single writer; autoscaling and replicas above 1 are ignored", plan.version)).await;
+        publish_once(ctx, cr, &status, "AutoscalingIgnored", if exclusive { "an end-to-end deployment runs a single API writer; autoscaling and replicas above 1 are ignored".to_string() } else { format!("release {} runs a single writer; autoscaling and replicas above 1 are ignored", plan.version) }).await;
     }
 
     prune(cr, ctx, &env, &keep).await?;

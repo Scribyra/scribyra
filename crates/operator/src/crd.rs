@@ -34,7 +34,8 @@ pub const KIND: &str = "Scribyra";
 #[x_kube(
     validation = Rule::new("self.compile.mode == 'browser' || self.encryption == 'serverReadable'").message("server compile needs encryption: serverReadable (the server cannot compile what it cannot read)"),
     validation = Rule::new("!has(self.backup) || has(self.postgres.provisioned)").message("backup is for provisioned PostgreSQL (CloudNativePG); back up an external database with its own tooling"),
-    validation = Rule::new("!has(self.autoscaling) || self.autoscaling.maxReplicas >= self.autoscaling.minReplicas").message("autoscaling.maxReplicas must be at least minReplicas")
+    validation = Rule::new("!has(self.autoscaling) || self.autoscaling.maxReplicas >= self.autoscaling.minReplicas").message("autoscaling.maxReplicas must be at least minReplicas"),
+    validation = Rule::new("self.encryption == 'serverReadable' || !has(self.policy) || !has(self.policy.guests) || self.policy.guests == 'off'").message("policy.guests must be off with encryption: endToEnd")
 )]
 #[serde(rename_all = "camelCase")]
 pub struct ScribyraSpec {
@@ -70,8 +71,9 @@ pub struct ScribyraSpec {
     /// decrypted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_key_ref: Option<SecretKeyRef>,
-    /// API replicas when `autoscaling` is not set. Releases that still run a single writer
-    /// (see `docs/operator.md`) always run one.
+    /// API replicas when `autoscaling` is not set. Server-readable deployments (whose blobs are
+    /// always in S3 here) run several; an end-to-end deployment, whose API takes the database
+    /// exclusively, always runs one (see `docs/operator.md`).
     #[serde(default = "two")]
     #[schemars(range(min = 1, max = 100))]
     pub replicas: i32,
@@ -130,19 +132,48 @@ pub enum DeletionPolicy {
 }
 
 #[derive(KubeSchema, Deserialize, Serialize, Clone, Debug, PartialEq)]
-#[x_kube(validation = Rule::new("self.providers.all(p, self.providers.filter(q, q.name == p.name).size() == 1)").message("provider names must be unique"))]
+#[x_kube(
+    validation = Rule::new("self.providers.all(p, self.providers.filter(q, q.name == p.name).size() == 1)").message("provider names must be unique"),
+    validation = Rule::new("!has(self.primaryOrganisation) || self.providers.exists(p, p.name == self.primaryOrganisation.provider)").message("primaryOrganisation.provider must name one of the providers")
+)]
 #[serde(rename_all = "camelCase")]
 pub struct OidcSpec {
-    /// Every way to sign in. People are identified only by these providers.
+    /// Every way to sign in. People, their organisations and their roles come only from these
+    /// providers' tokens; the resource names no administrators.
     #[schemars(length(min = 1, max = 16))]
     pub providers: Vec<OidcProvider>,
+    /// The organisation that takes the deployment's ID (`deployment.primary_organisation`): a
+    /// provider and, when its tokens name organisations, the organisation claim value. Without
+    /// it, only a single provider with one fixed organisation has a primary organisation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub primary_organisation: Option<PrimaryOrganisation>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
+pub struct PrimaryOrganisation {
+    #[schemars(length(min = 1, max = 32))]
+    pub provider: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 255))]
+    pub organisation: Option<String>,
+}
+
+/// One OpenID Connect provider (`deployment.providers[]`, docs/service.md "Single sign-on"). The
+/// API server checks the shape; the service's own validation (run by the operator before
+/// anything is deployed) checks the rest, such as which fields belong to which preset.
+#[derive(KubeSchema, Deserialize, Serialize, Clone, Debug, PartialEq)]
+#[x_kube(
+    validation = Rule::new("has(self.preset) != has(self.claims)").message("each provider needs exactly one of preset (zitadel, keycloak, entra, google) and claims"),
+    validation = Rule::new("!has(self.preset) || self.preset != 'zitadel' || has(self.zitadelProjectOwnerOrg)").message("preset zitadel needs zitadelProjectOwnerOrg (the ID of the organisation that owns the project)"),
+    validation = Rule::new("!has(self.preset) || self.preset != 'google' || (has(self.hostedDomains) && size(self.hostedDomains) > 0) || (has(self.emailDomains) && size(self.emailDomains) > 0)").message("preset google needs hostedDomains (or emailDomains)"),
+    validation = Rule::new("(has(self.preset) && self.preset == 'google') || (has(self.roles) && ((has(self.roles.admin) && size(self.roles.admin) > 0) || (has(self.roles.member) && size(self.roles.member) > 0)))").message("roles must map at least one provider role to admin or member (except for preset google)")
+)]
+#[serde(rename_all = "camelCase")]
 pub struct OidcProvider {
-    /// Short lowercase ID (`deployment.providers[].id`).
-    #[schemars(length(min = 1, max = 32), regex(pattern = r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"))]
+    /// Short lowercase ID (`deployment.providers[].id`); the redirect URI is
+    /// `https://<domain>/v1/sso/callback/<name>`.
+    #[schemars(length(min = 1, max = 32), regex(pattern = r"^[a-z][-a-z0-9]*$"))]
     pub name: String,
     /// Button label; defaults to the name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -156,21 +187,60 @@ pub struct OidcProvider {
     /// Secret holding the confidential client's secret; mounted as a file, never read by the
     /// operator.
     pub client_secret_ref: SecretKeyRef,
-    /// Accept only verified emails in these domains.
+    /// Accept only verified emails in these domains (a filter, never a role).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    #[schemars(length(max = 32), inner(length(max = 253)))]
+    #[schemars(length(max = 64), inner(length(max = 253)))]
     pub email_domains: Vec<String>,
-    /// Map provider groups to deployment roles.
+    /// `zitadel`, `keycloak`, `entra` or `google`: how the provider's claims name
+    /// organisations, roles and guests. Exactly one of `preset` and `claims`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub role_mapping: Option<RoleMapping>,
-    /// How this provider marks guest accounts.
+    pub preset: Option<Preset>,
+    /// A generic claims mapping (JSON paths into the ID token).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub guest: Option<GuestRule>,
-    #[serde(default)]
-    pub offline_access: bool,
+    pub claims: Option<ClaimRules>,
+    /// Provider role names for each deployment role; the highest a person holds wins.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub roles: Option<RoleNames>,
+    /// Zitadel: the project whose roles count.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(regex(pattern = r"^[0-9]{1,32}$"))]
+    pub zitadel_project_id: Option<String>,
+    /// Zitadel (required): the ID of the organisation that owns the project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(regex(pattern = r"^[0-9]{1,32}$"))]
+    pub zitadel_project_owner_org: Option<String>,
+    /// Zitadel: `guests` (default; roles keyed by another organisation make guests of the
+    /// owner) or `organisations` (each Zitadel organisation is its own Scribyra organisation).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zitadel_foreign_organisations: Option<ZitadelForeign>,
+    /// Keycloak 26 organisations: read the `organization` claim.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub keycloak_organizations: bool,
+    /// Keycloak organisations: unprefixed roles count in every organisation of someone in several.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub roles_apply_to_all_organisations: bool,
+    /// Entra: refuse tokens without the optional `acct` claim.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub entra_require_acct: bool,
+    /// Google: the Workspace domains (`hd`) admitted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 64), inner(length(max = 253)))]
+    pub hosted_domains: Vec<String>,
+    /// Google: the `sub` values of administrators (Google's tokens carry no roles).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 256), inner(length(min = 1, max = 255)))]
+    pub admin_subjects: Vec<String>,
+    /// Ask for `offline_access` (refresh tokens, so logins are rechecked); the service's
+    /// default is on except for Keycloak and Google.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offline_access: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 720))]
     pub session_hours: Option<u32>,
+    /// How long a login without a refresh token lasts at most.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(range(min = 5, max = 43200))]
+    pub no_refresh_session_minutes: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(range(min = 1, max = 1440))]
     pub recheck_minutes: Option<u32>,
@@ -179,30 +249,57 @@ pub struct OidcProvider {
     pub scopes: Vec<String>,
 }
 
-#[derive(KubeSchema, Deserialize, Serialize, Clone, Debug, PartialEq)]
-#[x_kube(validation = Rule::new("(size(self.adminGroups) == 0 && size(self.memberGroups) == 0) || size(self.groupsClaim) > 0").message("adminGroups and memberGroups need groupsClaim"))]
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
-pub struct RoleMapping {
-    /// The ID-token claim listing groups, for example `groups`.
-    #[serde(default)]
-    #[schemars(length(max = 128))]
-    pub groups_claim: String,
-    /// Members of these groups are deployment administrators.
-    #[serde(default)]
-    #[schemars(length(max = 64), inner(length(max = 256)))]
-    pub admin_groups: Vec<String>,
-    /// When non-empty, only members of these groups (or `adminGroups`) may sign in.
-    #[serde(default)]
-    #[schemars(length(max = 64), inner(length(max = 256)))]
-    pub member_groups: Vec<String>,
+pub enum Preset {
+    Zitadel,
+    Keycloak,
+    Entra,
+    Google,
+}
+#[derive(Deserialize, Serialize, Clone, Copy, Debug, PartialEq, Eq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub enum ZitadelForeign {
+    Guests,
+    Organisations,
+}
+
+/// A generic claims mapping: `$` followed by `.key` or `["key"]` segments.
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase")]
+pub struct ClaimRules {
+    /// A string or a list of strings: the provider's role names, for example `$.groups`.
+    #[schemars(length(min = 1, max = 512))]
+    pub roles: String,
+    /// The organisation's identifier; without it the provider has one organisation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 512))]
+    pub organisation: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(min = 1, max = 512))]
+    pub organisation_name: Option<String>,
+    /// A claim and the value that marks a guest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub guest: Option<GuestRule>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
 pub struct GuestRule {
-    #[schemars(length(min = 1, max = 128))]
-    pub claim: String,
+    #[schemars(length(min = 1, max = 512))]
+    pub path: String,
     #[schemars(length(min = 1, max = 256))]
     pub equals: String,
+}
+
+#[derive(Deserialize, Serialize, Clone, Debug, Default, PartialEq, JsonSchema)]
+#[serde(default)]
+pub struct RoleNames {
+    #[schemars(length(max = 256), inner(length(min = 1, max = 256)))]
+    pub admin: Vec<String>,
+    #[schemars(length(max = 256), inner(length(min = 1, max = 256)))]
+    pub member: Vec<String>,
+    #[schemars(length(max = 256), inner(length(min = 1, max = 256)))]
+    pub guest: Vec<String>,
 }
 
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, Eq, JsonSchema)]
@@ -219,11 +316,24 @@ pub struct SecretKeyRef {
 #[serde(rename_all = "camelCase")]
 pub struct CompileSpec {
     /// `browser` (BusyTeX in each browser only), `server` or `both` (each project chooses).
+    /// Server compiles run the browser's own WebAssembly engine (`compile_engine: wasm`) in the
+    /// workers, so a document compiles the same everywhere.
     #[serde(default)]
     pub mode: CompileMode,
-    /// TeX Live variant baked into the worker image.
+    /// The TeX Live archive mirror the workers' package cache fills from, for packages outside
+    /// the bundled set (`deployment.tex_mirror`); the service's default when absent. An empty
+    /// text: bundled packages only, and the workers get no internet egress at all.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 512), regex(pattern = r"^(https://[^?#@\s]+)?$"))]
+    pub tex_mirror: Option<String>,
+    /// CIDRs the mirror is reached at, for the workers' egress NetworkPolicy. Empty allows 443
+    /// to any address (when a mirror is set).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[schemars(length(max = 32), inner(length(max = 64)))]
+    pub mirror_cidrs: Vec<String>,
+    /// The package cache the workers share (`compile_cache`).
     #[serde(default)]
-    pub texlive: TexLive,
+    pub cache: CompileCacheSpec,
     /// For example `gvisor`: the workers' system calls then reach gVisor, not the host kernel.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(length(min = 1, max = 253))]
@@ -233,14 +343,15 @@ pub struct CompileSpec {
     /// Per-job limits enforced inside the worker's sandbox (`deployment.compile_limits`).
     #[serde(default)]
     pub limits: CompileLimits,
-    /// Resources of each worker pod; defaults derive from `limits` and `workers.concurrency`.
+    /// Resources of each worker pod; by default about 1 GiB requested per concurrent job, and
+    /// a limit of `limits.memoryMiB` per concurrent job.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "preserve_object")]
     pub resources: Option<ResourceRequirements>,
 }
 impl Default for CompileSpec {
     fn default() -> Self {
-        Self { mode: CompileMode::Browser, texlive: TexLive::Small, runtime_class_name: None, workers: WorkersSpec::default(), limits: CompileLimits::default(), resources: None }
+        Self { mode: CompileMode::Browser, tex_mirror: None, mirror_cidrs: vec![], cache: CompileCacheSpec::default(), runtime_class_name: None, workers: WorkersSpec::default(), limits: CompileLimits::default(), resources: None }
     }
 }
 
@@ -252,13 +363,31 @@ pub enum CompileMode {
     Server,
     Both,
 }
+
+/// The workers' TeX package cache: one PersistentVolumeClaim `<name>-compile-cache` that every
+/// worker pod mounts writable (it holds verified package archives, tens of MB in practice).
+#[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
+#[serde(rename_all = "camelCase", default)]
+pub struct CompileCacheSpec {
+    #[schemars(length(min = 1, max = 32))]
+    pub size: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(length(max = 253))]
+    pub storage_class_name: Option<String>,
+    /// `ReadWriteMany` (default): shared by workers on every node. `ReadWriteOnce`: shared by
+    /// workers on one node (single-node clusters; k3s's local-path offers only this).
+    pub access_mode: CacheAccessMode,
+}
+impl Default for CompileCacheSpec {
+    fn default() -> Self {
+        Self { size: "5Gi".into(), storage_class_name: None, access_mode: CacheAccessMode::ReadWriteMany }
+    }
+}
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-pub enum TexLive {
+pub enum CacheAccessMode {
     #[default]
-    Small,
-    Medium,
-    Full,
+    ReadWriteMany,
+    ReadWriteOnce,
 }
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
 #[serde(rename_all = "camelCase")]
@@ -303,13 +432,15 @@ fn two_u32() -> u32 {
     2
 }
 
+/// `deployment.compile_limits`; the defaults are the service's.
 #[derive(Deserialize, Serialize, Clone, Debug, PartialEq, JsonSchema)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CompileLimits {
     #[schemars(range(min = 1, max = 3600))]
     pub cpu_seconds: u32,
-    #[schemars(range(min = 1, max = 3600))]
+    #[schemars(range(min = 1, max = 7200))]
     pub wall_seconds: u32,
+    /// Keep at 1536 or more for the WebAssembly engine (docs/compile-engines.md).
     #[schemars(range(min = 64, max = 65536))]
     pub memory_mi_b: u32,
     #[schemars(range(min = 16, max = 65536))]
@@ -318,14 +449,36 @@ pub struct CompileLimits {
     pub output_mi_b: u32,
     #[schemars(range(min = 1, max = 16))]
     pub passes: u32,
-    #[schemars(range(min = 1, max = 10000))]
+    #[schemars(range(min = 1, max = 100000))]
     pub queue: u32,
     #[schemars(range(min = 1, max = 100000))]
     pub per_member_per_hour: u32,
+    #[schemars(range(min = 1, max = 100000))]
+    pub per_project_per_minute: u32,
+    #[schemars(range(min = 1, max = 1000))]
+    pub active_per_member: u32,
+    #[schemars(range(min = 1, max = 1000))]
+    pub active_per_owner: u32,
+    #[schemars(range(min = 1, max = 3650))]
+    pub retention_days: u32,
 }
 impl Default for CompileLimits {
     fn default() -> Self {
-        Self { cpu_seconds: 60, wall_seconds: 120, memory_mi_b: 2048, scratch_mi_b: 512, output_mi_b: 64, passes: 4, queue: 32, per_member_per_hour: 120 }
+        let d = scribyra_sync::config::CompileLimits::default();
+        Self {
+            cpu_seconds: d.cpu_seconds,
+            wall_seconds: d.wall_seconds,
+            memory_mi_b: d.memory_mib,
+            scratch_mi_b: d.scratch_mib,
+            output_mi_b: d.output_mib,
+            passes: d.passes,
+            queue: d.queue,
+            per_member_per_hour: d.per_member_per_hour,
+            per_project_per_minute: d.per_project_per_minute,
+            active_per_member: d.active_per_member,
+            active_per_owner: d.active_per_owner,
+            retention_days: d.retention_days,
+        }
     }
 }
 
@@ -336,15 +489,15 @@ pub struct PolicySpec {
     pub offline_allowed: bool,
     /// Whether editors may create share links (never anonymous).
     pub link_sharing: bool,
+    /// `off` refuses provider guest accounts; `shared` lets them open what is shared with them
+    /// (server-readable only).
     pub guests: Guests,
-    /// Verified emails (or `issuer#subject`) that are administrators whatever groups say; the
-    /// bootstrap for a new deployment.
-    #[schemars(length(max = 64), inner(length(max = 512)))]
-    pub admins: Vec<String>,
+    /// Members see when an administrator opened their project (audited either way).
+    pub notify_on_admin_access: bool,
 }
 impl Default for PolicySpec {
     fn default() -> Self {
-        Self { offline_allowed: true, link_sharing: false, guests: Guests::Off, admins: vec![] }
+        Self { offline_allowed: true, link_sharing: false, guests: Guests::Off, notify_on_admin_access: true }
     }
 }
 #[derive(Deserialize, Serialize, Clone, Copy, Debug, Default, PartialEq, Eq, JsonSchema)]
@@ -613,7 +766,8 @@ pub struct ImagesSpec {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = 512))]
     pub web: Option<String>,
-    /// Overrides `<registry>/scribyra-worker:<version>-<texlive>`.
+    /// Overrides `<registry>/scribyra-worker:<version>` (Node 22 and the WebAssembly compile
+    /// runtime; no TeX Live).
     #[serde(skip_serializing_if = "Option::is_none")]
     #[schemars(length(max = 512))]
     pub worker: Option<String>,

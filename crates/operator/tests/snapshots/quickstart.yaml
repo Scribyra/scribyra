@@ -25,47 +25,65 @@ stringData:
       "blob_store": "s3",
       "database_url_file": "/etc/scribyra/secrets/database-url",
       "deployment": {
-        "admins": [
-          "it-admin@lab.example.org"
-        ],
         "audit_retention_days": 400,
         "compile": "browser",
+        "compile_engine": "wasm",
         "compile_limits": {
+          "active_per_member": 2,
+          "active_per_owner": 2,
           "concurrency": 2,
-          "cpu_seconds": 60,
+          "cpu_seconds": 300,
           "memory_mib": 2048,
           "output_mib": 64,
           "passes": 4,
           "per_member_per_hour": 120,
+          "per_project_per_minute": 30,
           "queue": 32,
+          "retention_days": 90,
           "scratch_mib": 512,
-          "wall_seconds": 120
+          "wall_seconds": 600
         },
         "encryption": "server",
         "guests": "off",
         "link_sharing": false,
         "name": "Example Lab",
+        "notify_on_admin_access": true,
         "offline": true,
+        "primary_organisation": null,
         "providers": [
           {
-            "admin_groups": [
-              "scribyra-admins"
-            ],
+            "admin_subjects": [],
+            "claims": null,
             "client_id": "scribyra",
             "client_secret_file": "/etc/scribyra/secrets/oidc-lab",
             "email_domains": [
               "lab.example.org"
             ],
-            "groups_claim": "groups",
-            "guest": null,
+            "entra_require_acct": false,
+            "hosted_domains": [],
             "id": "lab",
             "issuer": "https://login.lab.example.org/realms/lab",
+            "keycloak_organizations": false,
             "label": "Lab account",
-            "member_groups": [],
-            "offline_access": false,
+            "no_refresh_session_minutes": 60,
+            "offline_access": null,
+            "preset": "keycloak",
             "recheck_minutes": 10,
+            "roles": {
+              "admin": [
+                "scribyra-admin"
+              ],
+              "guest": [],
+              "member": [
+                "scribyra-member"
+              ]
+            },
+            "roles_apply_to_all_organisations": false,
             "scopes": [],
-            "session_hours": 12
+            "session_hours": 12,
+            "zitadel_foreign_organisations": "guests",
+            "zitadel_project_id": null,
+            "zitadel_project_owner_org": null
           }
         ],
         "quotas": {
@@ -73,8 +91,10 @@ stringData:
           "member_bytes": 10737418240,
           "project_bytes": 1073741824
         },
+        "tex_mirror": "https://tlnet.yihui.org",
         "texlive": null
       },
+      "migrate_on_start": false,
       "origins": [
         "https://scribyra.lab.example.org"
       ],
@@ -657,7 +677,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: 7dd360ad30a45523
+        scribyra.com/config-hash: 08131568d169c400
       labels:
         app.kubernetes.io/component: api
         app.kubernetes.io/instance: lab
@@ -678,6 +698,8 @@ spec:
             secretKeyRef:
               key: access-key-id
               name: lab-garage-s3
+        - name: SCRIBYRA_SERVICE_METRICS_BIND
+          value: 0.0.0.0:9090
         image: registry.example/scribyra/scribyra-sync:0.2.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
@@ -1039,7 +1061,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: 7dd360ad30a45523
+        scribyra.com/config-hash: 08131568d169c400
       labels:
         app.kubernetes.io/component: migrate
         app.kubernetes.io/instance: lab

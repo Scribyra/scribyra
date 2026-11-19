@@ -86,11 +86,16 @@ fn controller(plane_client: Client, ns: &str, releases: Vec<Release>) -> tokio::
     tokio::spawn(scribyra_operator::run_controller(plane_client, settings, Arc::new(Metrics::default())))
 }
 
+/// A provider with a generic claims mapping (one organisation, roles from `groups`).
+fn provider(name: &str) -> Value {
+    json!({"name": name, "issuer": "https://idp.example.org", "clientId": "scribyra", "clientSecretRef": {"name": "oidc", "key": "secret"}, "claims": {"roles": "$.groups"}, "roles": {"admin": ["admins"], "member": ["staff"]}})
+}
+
 fn base_spec(version: &str) -> Value {
     json!({
         "version": version,
         "domain": "scribyra.test.example.org",
-        "oidc": {"providers": [{"name": "idp", "issuer": "https://idp.example.org", "clientId": "scribyra", "clientSecretRef": {"name": "oidc", "key": "secret"}}]},
+        "oidc": {"providers": [provider("idp")]},
         "postgres": {"external": {"secretRef": {"name": "db", "key": "url"}}},
         "storage": {"s3": {"endpoint": "https://s3.example.org", "bucket": "scribyra", "secretRef": {"name": "s3"}}},
         "ingress": {"className": "traefik"},
@@ -158,6 +163,7 @@ async fn controller_against_a_real_api_server() {
         tokio::spawn(schema_validation(admin.clone())),
         tokio::spawn(install_upgrade_and_blocking(admin.clone(), operator.clone())),
         tokio::spawn(single_writer_stops_before_migrating(admin.clone(), operator.clone())),
+        tokio::spawn(end_to_end_runs_one_writer_and_migrates_while_it_serves(admin.clone(), operator.clone())),
         tokio::spawn(failed_migration_keeps_the_old_release(admin.clone(), operator.clone())),
         tokio::spawn(deletion_policies(admin.clone(), operator.clone())),
         tokio::spawn(pruning_and_invalid_spec(admin.clone(), operator.clone())),
@@ -209,14 +215,33 @@ async fn schema_validation(admin: Client) {
     refused(with(json!({"compile": {"mode": "server"}, "encryption": "endToEnd"})), "server compile needs encryption").await;
     refused(with(json!({"domain": "Not A Domain"})), "spec.domain").await;
     refused(with(json!({"version": "latest"})), "spec.version").await;
-    refused(with(json!({"oidc": {"providers": [{"name": "a", "issuer": "http://idp", "clientId": "x", "clientSecretRef": {"name": "s", "key": "k"}}]}})), "spec.oidc.providers[0].issuer").await;
+    let mut plain_http = provider("a");
+    plain_http["issuer"] = "http://idp".into();
+    refused(with(json!({"oidc": {"providers": [plain_http]}})), "spec.oidc.providers[0].issuer").await;
     refused(with(json!({"oidc": {"providers": []}})), "spec.oidc.providers").await;
-    let dup = json!({"name": "a", "issuer": "https://idp.example.org", "clientId": "x", "clientSecretRef": {"name": "s", "key": "k"}});
-    refused(with(json!({"oidc": {"providers": [dup.clone(), dup]}})), "provider names must be unique").await;
+    refused(with(json!({"oidc": {"providers": [provider("a"), provider("a")]}})), "provider names must be unique").await;
+    // Identity: a preset or a claims mapping, and what each preset needs; the configuration
+    // names no administrators, only provider roles.
+    let bare = json!({"name": "a", "issuer": "https://idp.example.org", "clientId": "x", "clientSecretRef": {"name": "s", "key": "k"}, "roles": {"member": ["m"]}});
+    refused(with(json!({"oidc": {"providers": [bare.clone()]}})), "exactly one of preset (zitadel, keycloak, entra, google) and claims").await;
+    let mut both = provider("a");
+    both["preset"] = "keycloak".into();
+    refused(with(json!({"oidc": {"providers": [both]}})), "exactly one of preset").await;
+    let mut zitadel = bare.clone();
+    zitadel["preset"] = "zitadel".into();
+    refused(with(json!({"oidc": {"providers": [zitadel.clone()]}})), "preset zitadel needs zitadelProjectOwnerOrg").await;
+    zitadel["zitadelProjectOwnerOrg"] = "not digits".into();
+    refused(with(json!({"oidc": {"providers": [zitadel]}})), "zitadelProjectOwnerOrg").await;
+    let google = json!({"name": "g", "issuer": "https://accounts.google.com", "clientId": "x", "clientSecretRef": {"name": "s", "key": "k"}, "preset": "google"});
+    refused(with(json!({"oidc": {"providers": [google]}})), "preset google needs hostedDomains").await;
+    let mut no_roles = provider("a");
+    no_roles["roles"] = json!({"guest": ["visitor"]});
+    refused(with(json!({"oidc": {"providers": [no_roles]}})), "roles must map at least one provider role to admin or member").await;
+    refused(with(json!({"oidc": {"providers": [provider("a")], "primaryOrganisation": {"provider": "b"}}})), "primaryOrganisation.provider must name one of the providers").await;
+    refused(with(json!({"encryption": "endToEnd", "policy": {"guests": "shared"}})), "policy.guests must be off with encryption: endToEnd").await;
     refused(with(json!({"autoscaling": {"minReplicas": 5, "maxReplicas": 2}})), "maxReplicas must be at least minReplicas").await;
     refused(with(json!({"backup": {"destination": {"destinationPath": "s3://b", "secretRef": {"name": "x"}}}})), "backup is for provisioned PostgreSQL").await;
     refused(with(json!({"ingress": {"className": "nginx", "gateway": {"name": "g"}}})), "either className").await;
-    refused(with(json!({"oidc": {"providers": [{"name": "a", "issuer": "https://idp.example.org", "clientId": "x", "clientSecretRef": {"name": "s", "key": "k"}, "roleMapping": {"adminGroups": ["x"]}}]}})), "need groupsClaim").await;
     let long = create_cr(&admin, ns, &"x".repeat(41), base_spec("1.0.0")).await.unwrap_err().to_string();
     assert!(long.contains("at most 40 characters"), "{long}");
     // Transition rules: encryption and the database and storage sources are fixed.
@@ -234,6 +259,7 @@ async fn schema_validation(admin: Client) {
     let stored = api.get("fixed").await.unwrap();
     assert_eq!(stored.spec.encryption, scribyra_operator::crd::Encryption::ServerReadable);
     assert_eq!(stored.spec.deletion_policy, scribyra_operator::crd::DeletionPolicy::Retain);
+    assert!(stored.spec.policy.notify_on_admin_access);
     eprintln!("schema validation: ok");
 }
 
@@ -309,6 +335,13 @@ async fn install_upgrade_and_blocking(admin: Client, operator: Client) {
     wait_condition(&admin, ns, "acme", "Progressing", "True", "Migrating").await;
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
     assert_eq!(api_image(&admin, ns, "acme").await.unwrap(), "registry.test/scribyra/scribyra-sync:1.0.0", "no rollout before the migration completes");
+    // Server-readable replicas share the database: both keep serving while the Job migrates
+    // (no stop, no downtime), and they roll one at a time.
+    let deployments: Api<Deployment> = Api::namespaced(admin.clone(), ns);
+    let d = deployments.get("acme-api").await.unwrap().spec.unwrap();
+    assert_eq!(d.replicas, Some(2));
+    assert_eq!(d.strategy.unwrap().type_.as_deref(), Some("RollingUpdate"));
+    assert_eq!(pods.list(&ListParams::default().labels("app.kubernetes.io/component=api")).await.unwrap().items.len(), 2);
     complete_job(&admin, ns, "acme-migrate-1-1-0", true).await;
     eventually(60, "API at 1.1.0", || async { (api_image(&admin, ns, "acme").await? == "registry.test/scribyra/scribyra-sync:1.1.0").then_some(()) }).await;
     // The previous migration Job is pruned once the new release runs.
@@ -361,6 +394,41 @@ async fn single_writer_stops_before_migrating(admin: Client, operator: Client) {
     })
     .await;
     eprintln!("single writer: ok");
+}
+
+/// An end-to-end deployment's API takes the database exclusively: one replica whatever
+/// `replicas` says, `Recreate` rollouts, but (`scribyra-sync migrate` taking no ownership lock)
+/// the migration Job runs while that replica keeps serving.
+async fn end_to_end_runs_one_writer_and_migrates_while_it_serves(admin: Client, operator: Client) {
+    let ns = "e2e";
+    namespace(&admin, ns).await;
+    dependencies(&admin, ns).await;
+    let _controller = controller(operator.clone(), ns, releases(false));
+    let mut spec = base_spec("1.0.0");
+    spec["encryption"] = "endToEnd".into();
+    spec["replicas"] = 3.into();
+    create_cr(&admin, ns, "e", spec).await.unwrap();
+    let jobs: Api<Job> = Api::namespaced(admin.clone(), ns);
+    eventually(60, "first Job", || async { jobs.get_opt("e-migrate-1-0-0").await.ok()?.map(|_| ()) }).await;
+    complete_job(&admin, ns, "e-migrate-1-0-0", true).await;
+    let deployments: Api<Deployment> = Api::namespaced(admin.clone(), ns);
+    let d = eventually(60, "API Deployment", || async { deployments.get_opt("e-api").await.ok()? }).await;
+    assert_eq!(d.spec.as_ref().unwrap().replicas, Some(1), "spec.replicas 3 is capped to one writer");
+    assert_eq!(d.spec.as_ref().unwrap().strategy.as_ref().unwrap().type_.as_deref(), Some("Recreate"));
+    let pods: Api<Pod> = Api::namespaced(admin.clone(), ns);
+    eventually(60, "one API pod", || async { (pods.list(&ListParams::default().labels("app.kubernetes.io/component=api")).await.ok()?.items.len() == 1).then_some(()) }).await;
+    patch_spec(&admin, ns, "e", json!({"version": "1.1.0"})).await;
+    eventually(60, "Job for 1.1.0", || async { jobs.get_opt("e-migrate-1-1-0").await.ok()?.map(|_| ()) }).await;
+    assert_eq!(deployments.get("e-api").await.unwrap().spec.unwrap().replicas, Some(1), "the writer keeps serving during the migration");
+    assert_eq!(api_image(&admin, ns, "e").await.unwrap(), "registry.test/scribyra/scribyra-sync:1.0.0");
+    complete_job(&admin, ns, "e-migrate-1-1-0", true).await;
+    eventually(60, "1.1.0 rolled out with one replica", || async {
+        let d = deployments.get("e-api").await.ok()?;
+        let image = d.spec.as_ref()?.template.spec.as_ref()?.containers[0].image.clone()?;
+        (image.ends_with(":1.1.0") && d.spec?.replicas? == 1).then_some(())
+    })
+    .await;
+    eprintln!("end-to-end single writer: ok");
 }
 
 /// A failed migration leaves the running release serving and reports why.
@@ -467,12 +535,22 @@ async fn pruning_and_invalid_spec(admin: Client, operator: Client) {
     let pod = worker.spec.unwrap().template.spec.unwrap();
     assert_eq!(pod.runtime_class_name.as_deref(), Some("gvisor"));
     assert_eq!(pod.host_users, Some(false));
+    // The WebAssembly engine's shared package cache, a claim the workers mount writable.
+    let pvcs: Api<PersistentVolumeClaim> = Api::namespaced(admin.clone(), ns);
+    let cache = pvcs.get("p-compile-cache").await.unwrap();
+    assert_eq!(cache.spec.unwrap().access_modes.unwrap(), ["ReadWriteMany"]);
+    assert!(pod.volumes.unwrap().iter().any(|v| v.persistent_volume_claim.as_ref().is_some_and(|c| c.claim_name == "p-compile-cache")));
     let api: Api<Scribyra> = Api::namespaced(admin.clone(), ns);
     eventually(30, "worker status", || async { (api.get("p").await.ok()?.status?.compile_workers?.desired_replicas == 1).then_some(()) }).await;
     patch_spec(&admin, ns, "p", json!({"compile": {"mode": "browser"}})).await;
     eventually(60, "worker pruned", || async { deployments.get_opt("p-worker").await.ok()?.is_none().then_some(()) }).await;
     let netpols: Api<DynamicObject> = Api::namespaced_with(admin.clone(), ns, &ApiResource::from_gvk(&GroupVersionKind::gvk("networking.k8s.io", "v1", "NetworkPolicy")));
     eventually(60, "worker policy pruned", || async { netpols.get_opt("p-worker").await.ok()?.is_none().then_some(()) }).await;
+    eventually(60, "package cache claim pruned", || async {
+        let claim = pvcs.get_opt("p-compile-cache").await.ok()?;
+        claim.is_none_or(|c| c.metadata.deletion_timestamp.is_some()).then_some(())
+    })
+    .await;
     // Autoscaling replaces the fixed replica count with an HPA.
     patch_spec(&admin, ns, "p", json!({"autoscaling": {"minReplicas": 2, "maxReplicas": 4}})).await;
     let hpas: Api<DynamicObject> = Api::namespaced_with(admin.clone(), ns, &ApiResource::from_gvk(&GroupVersionKind::gvk("autoscaling", "v2", "HorizontalPodAutoscaler")));
@@ -482,10 +560,10 @@ async fn pruning_and_invalid_spec(admin: Client, operator: Client) {
 
     // The schema admits it, the service would refuse it: reported, nothing deployed.
     let mut bad = base_spec("1.0.0");
-    bad["policy"] = json!({"admins": ["Not An Email"]});
+    bad["oidc"]["providers"][0]["claims"]["roles"] = "groups".into();
     create_cr(&admin, ns, "bad", bad).await.unwrap();
     let message = wait_condition(&admin, ns, "bad", "Degraded", "True", "InvalidSpec").await;
-    assert!(message.contains("admins"), "{message}");
+    assert!(message.contains("claims must be JSON paths"), "{message}");
     let secrets: Api<Secret> = Api::namespaced(admin.clone(), ns);
     assert!(secrets.get_opt("bad-config").await.unwrap().is_none());
     eprintln!("pruning and invalid spec: ok");

@@ -25,66 +25,108 @@ stringData:
       "blob_store": "s3",
       "database_url_file": "/etc/scribyra/secrets/database-url",
       "deployment": {
-        "admins": [],
         "audit_retention_days": 400,
         "compile": "both",
+        "compile_engine": "wasm",
         "compile_limits": {
+          "active_per_member": 2,
+          "active_per_owner": 2,
           "concurrency": 2,
-          "cpu_seconds": 90,
+          "cpu_seconds": 300,
           "memory_mib": 2048,
           "output_mib": 64,
           "passes": 4,
           "per_member_per_hour": 120,
+          "per_project_per_minute": 30,
           "queue": 32,
+          "retention_days": 90,
           "scratch_mib": 512,
-          "wall_seconds": 180
+          "wall_seconds": 600
         },
         "encryption": "server",
         "guests": "shared",
         "link_sharing": true,
         "name": "Tenant 42",
+        "notify_on_admin_access": true,
         "offline": false,
+        "primary_organisation": {
+          "organisation": null,
+          "provider": "corp"
+        },
         "providers": [
           {
-            "admin_groups": [],
+            "admin_subjects": [
+              "104857600000000000001"
+            ],
+            "claims": null,
             "client_id": "tenant-42.apps.googleusercontent.com",
             "client_secret_file": "/etc/scribyra/secrets/oidc-google",
-            "email_domains": [
+            "email_domains": [],
+            "entra_require_acct": false,
+            "hosted_domains": [
               "tenant42.example.com"
             ],
-            "groups_claim": null,
-            "guest": null,
             "id": "google",
             "issuer": "https://accounts.google.com",
+            "keycloak_organizations": false,
             "label": "Google",
-            "member_groups": [],
-            "offline_access": false,
+            "no_refresh_session_minutes": 60,
+            "offline_access": null,
+            "preset": "google",
             "recheck_minutes": 10,
+            "roles": {
+              "admin": [],
+              "guest": [],
+              "member": []
+            },
+            "roles_apply_to_all_organisations": false,
             "scopes": [],
-            "session_hours": 12
+            "session_hours": 12,
+            "zitadel_foreign_organisations": "guests",
+            "zitadel_project_id": null,
+            "zitadel_project_owner_org": null
           },
           {
-            "admin_groups": [
-              "admins"
-            ],
+            "admin_subjects": [],
+            "claims": {
+              "guest": {
+                "equals": "1",
+                "path": "$.acct"
+              },
+              "organisation": null,
+              "organisation_name": null,
+              "roles": "$.groups"
+            },
             "client_id": "scribyra",
             "client_secret_file": "/etc/scribyra/secrets/oidc-corp",
             "email_domains": [],
-            "groups_claim": "groups",
-            "guest": {
-              "claim": "acct",
-              "equals": "1"
-            },
+            "entra_require_acct": false,
+            "hosted_domains": [],
             "id": "corp",
             "issuer": "https://idp.tenant42.example.com",
+            "keycloak_organizations": false,
             "label": "corp",
-            "member_groups": [
-              "staff"
-            ],
-            "offline_access": false,
+            "no_refresh_session_minutes": 60,
+            "offline_access": null,
+            "preset": null,
             "recheck_minutes": 10,
+            "roles": {
+              "admin": [
+                "admins"
+              ],
+              "guest": [
+                "partners"
+              ],
+              "member": [
+                "staff"
+              ]
+            },
+            "roles_apply_to_all_organisations": false,
             "scopes": [],
-            "session_hours": 12
+            "session_hours": 12,
+            "zitadel_foreign_organisations": "guests",
+            "zitadel_project_id": null,
+            "zitadel_project_owner_org": null
           }
         ],
         "quotas": {
@@ -92,8 +134,10 @@ stringData:
           "member_bytes": 10737418240,
           "project_bytes": 1073741824
         },
-        "texlive": "/opt/texlive"
+        "tex_mirror": "https://tlnet.yihui.org",
+        "texlive": null
       },
+      "migrate_on_start": false,
       "origins": [
         "https://tenant-42.scribyra.example.net"
       ],
@@ -342,6 +386,14 @@ spec:
         cidr: 0.0.0.0/0
     - ipBlock:
         cidr: ::/0
+  - ports:
+    - port: 443
+      protocol: TCP
+    to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    - ipBlock:
+        cidr: ::/0
   ingress:
   - from:
     - namespaceSelector:
@@ -505,7 +557,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: e1a4d3f1ecab5612
+        scribyra.com/config-hash: cd1a825e13abc0fe
       labels:
         app.kubernetes.io/component: api
         app.kubernetes.io/instance: tenant-42
@@ -526,6 +578,8 @@ spec:
             secretKeyRef:
               key: access-key-id
               name: tenant-42-s3
+        - name: SCRIBYRA_SERVICE_METRICS_BIND
+          value: 0.0.0.0:9090
         image: registry.example/scribyra/scribyra-sync:0.2.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
@@ -851,6 +905,32 @@ spec:
       scribyra.com/instance: tenant-42
   unhealthyPodEvictionPolicy: AlwaysAllow
 ---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  labels:
+    app.kubernetes.io/component: worker
+    app.kubernetes.io/instance: tenant-42
+    app.kubernetes.io/managed-by: scribyra-operator
+    app.kubernetes.io/name: scribyra
+    scribyra.com/instance: tenant-42
+  name: tenant-42-compile-cache
+  namespace: tenant-42
+  ownerReferences:
+  - apiVersion: scribyra.com/v1alpha1
+    blockOwnerDeletion: true
+    controller: true
+    kind: Scribyra
+    name: tenant-42
+    uid: 00000000-0000-0000-0000-000000000001
+spec:
+  accessModes:
+  - ReadWriteMany
+  resources:
+    requests:
+      storage: 10Gi
+  storageClassName: shared-files
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -884,7 +964,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: e1a4d3f1ecab5612
+        scribyra.com/config-hash: cd1a825e13abc0fe
       labels:
         app.kubernetes.io/component: worker
         app.kubernetes.io/instance: tenant-42
@@ -905,18 +985,44 @@ spec:
             secretKeyRef:
               key: access-key-id
               name: tenant-42-s3
-        image: registry.example/scribyra/scribyra-worker:0.2.0-texlive-medium
+        - name: SCRIBYRA_SERVICE_COMPILE_WORKER_BIND
+          value: 0.0.0.0:8788
+        - name: SCRIBYRA_SERVICE_METRICS_BIND
+          value: 0.0.0.0:9090
+        - name: SCRIBYRA_SERVICE_COMPILE_RUNTIME
+          value: /opt/scribyra/compile-runtime
+        - name: SCRIBYRA_SERVICE_COMPILE_CACHE
+          value: /var/cache/scribyra/tex
+        - name: SCRIBYRA_COMPILE_CGROUP
+          value: /sys/fs/cgroup
+        image: registry.example/scribyra/scribyra-worker:0.2.0
         imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /healthz
+            port: probes
+          periodSeconds: 10
+          timeoutSeconds: 3
         name: worker
         ports:
+        - containerPort: 8788
+          name: probes
         - containerPort: 9090
           name: metrics
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /readyz
+            port: probes
+          periodSeconds: 5
+          timeoutSeconds: 3
         resources:
           limits:
-            memory: 5376Mi
+            memory: 4352Mi
           requests:
             cpu: 1000m
-            memory: 5376Mi
+            memory: 2304Mi
         securityContext:
           allowPrivilegeEscalation: false
           capabilities:
@@ -935,8 +1041,8 @@ spec:
           readOnly: true
         - mountPath: /tmp
           name: tmp
-        - mountPath: /scratch
-          name: scratch
+        - mountPath: /var/cache/scribyra/tex
+          name: compile-cache
       enableServiceLinks: false
       hostUsers: false
       imagePullSecrets: []
@@ -948,7 +1054,7 @@ spec:
         runAsUser: 10001
         seccompProfile:
           type: RuntimeDefault
-      terminationGracePeriodSeconds: 210
+      terminationGracePeriodSeconds: 630
       volumes:
       - name: config
         secret:
@@ -986,10 +1092,9 @@ spec:
       - emptyDir:
           sizeLimit: 64Mi
         name: tmp
-      - emptyDir:
-          medium: Memory
-          sizeLimit: 1024Mi
-        name: scratch
+      - name: compile-cache
+        persistentVolumeClaim:
+          claimName: tenant-42-compile-cache
 ---
 apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
@@ -1058,7 +1163,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: e1a4d3f1ecab5612
+        scribyra.com/config-hash: cd1a825e13abc0fe
       labels:
         app.kubernetes.io/component: migrate
         app.kubernetes.io/instance: tenant-42

@@ -128,43 +128,91 @@ spec:
                 type: object
               compile:
                 default:
+                  cache:
+                    accessMode: ReadWriteMany
+                    size: 5Gi
                   limits:
-                    cpuSeconds: 60
+                    activePerMember: 2
+                    activePerOwner: 2
+                    cpuSeconds: 300
                     memoryMiB: 2048
                     outputMiB: 64
                     passes: 4
                     perMemberPerHour: 120
+                    perProjectPerMinute: 30
                     queue: 32
+                    retentionDays: 90
                     scratchMiB: 512
-                    wallSeconds: 120
+                    wallSeconds: 600
                   mode: browser
-                  texlive: small
                   workers:
                     concurrency: 2
                     maxReplicas: 8
                     minReplicas: 0
                     scaler: operator
                 properties:
+                  cache:
+                    default:
+                      accessMode: ReadWriteMany
+                      size: 5Gi
+                    description: The package cache the workers share (`compile_cache`).
+                    properties:
+                      accessMode:
+                        default: ReadWriteMany
+                        description: |-
+                          `ReadWriteMany` (default): shared by workers on every node. `ReadWriteOnce`: shared by
+                          workers on one node (single-node clusters; k3s's local-path offers only this).
+                        enum:
+                        - ReadWriteMany
+                        - ReadWriteOnce
+                        type: string
+                      size:
+                        default: 5Gi
+                        maxLength: 32
+                        minLength: 1
+                        type: string
+                      storageClassName:
+                        maxLength: 253
+                        nullable: true
+                        type: string
+                    type: object
                   limits:
                     default:
-                      cpuSeconds: 60
+                      activePerMember: 2
+                      activePerOwner: 2
+                      cpuSeconds: 300
                       memoryMiB: 2048
                       outputMiB: 64
                       passes: 4
                       perMemberPerHour: 120
+                      perProjectPerMinute: 30
                       queue: 32
+                      retentionDays: 90
                       scratchMiB: 512
-                      wallSeconds: 120
+                      wallSeconds: 600
                     description: Per-job limits enforced inside the worker's sandbox (`deployment.compile_limits`).
                     properties:
+                      activePerMember:
+                        default: 2
+                        format: uint32
+                        maximum: 1000.0
+                        minimum: 1.0
+                        type: integer
+                      activePerOwner:
+                        default: 2
+                        format: uint32
+                        maximum: 1000.0
+                        minimum: 1.0
+                        type: integer
                       cpuSeconds:
-                        default: 60
+                        default: 300
                         format: uint32
                         maximum: 3600.0
                         minimum: 1.0
                         type: integer
                       memoryMiB:
                         default: 2048
+                        description: Keep at 1536 or more for the WebAssembly engine (docs/compile-engines.md).
                         format: uint32
                         maximum: 65536.0
                         minimum: 64.0
@@ -187,10 +235,22 @@ spec:
                         maximum: 100000.0
                         minimum: 1.0
                         type: integer
+                      perProjectPerMinute:
+                        default: 30
+                        format: uint32
+                        maximum: 100000.0
+                        minimum: 1.0
+                        type: integer
                       queue:
                         default: 32
                         format: uint32
-                        maximum: 10000.0
+                        maximum: 100000.0
+                        minimum: 1.0
+                        type: integer
+                      retentionDays:
+                        default: 90
+                        format: uint32
+                        maximum: 3650.0
                         minimum: 1.0
                         type: integer
                       scratchMiB:
@@ -200,22 +260,36 @@ spec:
                         minimum: 16.0
                         type: integer
                       wallSeconds:
-                        default: 120
+                        default: 600
                         format: uint32
-                        maximum: 3600.0
+                        maximum: 7200.0
                         minimum: 1.0
                         type: integer
                     type: object
+                  mirrorCidrs:
+                    description: |-
+                      CIDRs the mirror is reached at, for the workers' egress NetworkPolicy. Empty allows 443
+                      to any address (when a mirror is set).
+                    items:
+                      maxLength: 64
+                      type: string
+                    maxItems: 32
+                    type: array
                   mode:
                     default: browser
-                    description: '`browser` (BusyTeX in each browser only), `server` or `both` (each project chooses).'
+                    description: |-
+                      `browser` (BusyTeX in each browser only), `server` or `both` (each project chooses).
+                      Server compiles run the browser's own WebAssembly engine (`compile_engine: wasm`) in the
+                      workers, so a document compiles the same everywhere.
                     enum:
                     - browser
                     - server
                     - both
                     type: string
                   resources:
-                    description: Resources of each worker pod; defaults derive from `limits` and `workers.concurrency`.
+                    description: |-
+                      Resources of each worker pod; by default about 1 GiB requested per concurrent job, and
+                      a limit of `limits.memoryMiB` per concurrent job.
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   runtimeClassName:
@@ -224,13 +298,14 @@ spec:
                     minLength: 1
                     nullable: true
                     type: string
-                  texlive:
-                    default: small
-                    description: TeX Live variant baked into the worker image.
-                    enum:
-                    - small
-                    - medium
-                    - full
+                  texMirror:
+                    description: |-
+                      The TeX Live archive mirror the workers' package cache fills from, for packages outside
+                      the bundled set (`deployment.tex_mirror`); the service's default when absent. An empty
+                      text: bundled packages only, and the workers get no internet egress at all.
+                    maxLength: 512
+                    nullable: true
+                    pattern: ^(https://[^?#@\s]+)?$
                     type: string
                   workers:
                     default:
@@ -349,7 +424,9 @@ spec:
                     nullable: true
                     type: string
                   worker:
-                    description: Overrides `<registry>/scribyra-worker:<version>-<texlive>`.
+                    description: |-
+                      Overrides `<registry>/scribyra-worker:<version>` (Node 22 and the WebAssembly compile
+                      runtime; no TeX Live).
                     maxLength: 512
                     nullable: true
                     type: string
@@ -459,10 +536,82 @@ spec:
                 type: object
               oidc:
                 properties:
+                  primaryOrganisation:
+                    description: |-
+                      The organisation that takes the deployment's ID (`deployment.primary_organisation`): a
+                      provider and, when its tokens name organisations, the organisation claim value. Without
+                      it, only a single provider with one fixed organisation has a primary organisation.
+                    nullable: true
+                    properties:
+                      organisation:
+                        maxLength: 255
+                        minLength: 1
+                        nullable: true
+                        type: string
+                      provider:
+                        maxLength: 32
+                        minLength: 1
+                        type: string
+                    required:
+                    - provider
+                    type: object
                   providers:
-                    description: Every way to sign in. People are identified only by these providers.
+                    description: |-
+                      Every way to sign in. People, their organisations and their roles come only from these
+                      providers' tokens; the resource names no administrators.
                     items:
+                      description: |-
+                        One OpenID Connect provider (`deployment.providers[]`, docs/service.md "Single sign-on"). The
+                        API server checks the shape; the service's own validation (run by the operator before
+                        anything is deployed) checks the rest, such as which fields belong to which preset.
                       properties:
+                        adminSubjects:
+                          description: 'Google: the `sub` values of administrators (Google''s tokens carry no roles).'
+                          items:
+                            maxLength: 255
+                            minLength: 1
+                            type: string
+                          maxItems: 256
+                          type: array
+                        claims:
+                          description: A generic claims mapping (JSON paths into the ID token).
+                          nullable: true
+                          properties:
+                            guest:
+                              description: A claim and the value that marks a guest.
+                              nullable: true
+                              properties:
+                                equals:
+                                  maxLength: 256
+                                  minLength: 1
+                                  type: string
+                                path:
+                                  maxLength: 512
+                                  minLength: 1
+                                  type: string
+                              required:
+                              - equals
+                              - path
+                              type: object
+                            organisation:
+                              description: The organisation's identifier; without it the provider has one organisation.
+                              maxLength: 512
+                              minLength: 1
+                              nullable: true
+                              type: string
+                            organisationName:
+                              maxLength: 512
+                              minLength: 1
+                              nullable: true
+                              type: string
+                            roles:
+                              description: 'A string or a list of strings: the provider''s role names, for example `$.groups`.'
+                              maxLength: 512
+                              minLength: 1
+                              type: string
+                          required:
+                          - roles
+                          type: object
                         clientId:
                           maxLength: 255
                           minLength: 1
@@ -486,34 +635,31 @@ spec:
                           - name
                           type: object
                         emailDomains:
-                          description: Accept only verified emails in these domains.
+                          description: Accept only verified emails in these domains (a filter, never a role).
                           items:
                             maxLength: 253
                             type: string
-                          maxItems: 32
+                          maxItems: 64
                           type: array
-                        guest:
-                          description: How this provider marks guest accounts.
-                          nullable: true
-                          properties:
-                            claim:
-                              maxLength: 128
-                              minLength: 1
-                              type: string
-                            equals:
-                              maxLength: 256
-                              minLength: 1
-                              type: string
-                          required:
-                          - claim
-                          - equals
-                          type: object
+                        entraRequireAcct:
+                          description: 'Entra: refuse tokens without the optional `acct` claim.'
+                          type: boolean
+                        hostedDomains:
+                          description: 'Google: the Workspace domains (`hd`) admitted.'
+                          items:
+                            maxLength: 253
+                            type: string
+                          maxItems: 64
+                          type: array
                         issuer:
                           description: Issuer URL, exactly as in its discovery document.
                           maxLength: 512
                           minLength: 9
                           pattern: ^https://[^?#@\s]+$
                           type: string
+                        keycloakOrganizations:
+                          description: 'Keycloak 26 organisations: read the `organization` claim.'
+                          type: boolean
                         label:
                           description: Button label; defaults to the name.
                           maxLength: 64
@@ -521,49 +667,76 @@ spec:
                           nullable: true
                           type: string
                         name:
-                          description: Short lowercase ID (`deployment.providers[].id`).
+                          description: |-
+                            Short lowercase ID (`deployment.providers[].id`); the redirect URI is
+                            `https://<domain>/v1/sso/callback/<name>`.
                           maxLength: 32
                           minLength: 1
-                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          pattern: ^[a-z][-a-z0-9]*$
                           type: string
+                        noRefreshSessionMinutes:
+                          description: How long a login without a refresh token lasts at most.
+                          format: uint32
+                          maximum: 43200.0
+                          minimum: 5.0
+                          nullable: true
+                          type: integer
                         offlineAccess:
-                          default: false
+                          description: |-
+                            Ask for `offline_access` (refresh tokens, so logins are rechecked); the service's
+                            default is on except for Keycloak and Google.
+                          nullable: true
                           type: boolean
+                        preset:
+                          description: |-
+                            `zitadel`, `keycloak`, `entra` or `google`: how the provider's claims name
+                            organisations, roles and guests. Exactly one of `preset` and `claims`.
+                          enum:
+                          - zitadel
+                          - keycloak
+                          - entra
+                          - google
+                          - null
+                          nullable: true
+                          type: string
                         recheckMinutes:
                           format: uint32
                           maximum: 1440.0
                           minimum: 1.0
                           nullable: true
                           type: integer
-                        roleMapping:
-                          description: Map provider groups to deployment roles.
+                        roles:
+                          description: Provider role names for each deployment role; the highest a person holds wins.
                           nullable: true
                           properties:
-                            adminGroups:
+                            admin:
                               default: []
-                              description: Members of these groups are deployment administrators.
                               items:
                                 maxLength: 256
+                                minLength: 1
                                 type: string
-                              maxItems: 64
+                              maxItems: 256
                               type: array
-                            groupsClaim:
-                              default: ''
-                              description: The ID-token claim listing groups, for example `groups`.
-                              maxLength: 128
-                              type: string
-                            memberGroups:
+                            guest:
                               default: []
-                              description: When non-empty, only members of these groups (or `adminGroups`) may sign in.
                               items:
                                 maxLength: 256
+                                minLength: 1
                                 type: string
-                              maxItems: 64
+                              maxItems: 256
+                              type: array
+                            member:
+                              default: []
+                              items:
+                                maxLength: 256
+                                minLength: 1
+                                type: string
+                              maxItems: 256
                               type: array
                           type: object
-                          x-kubernetes-validations:
-                          - message: adminGroups and memberGroups need groupsClaim
-                            rule: (size(self.adminGroups) == 0 && size(self.memberGroups) == 0) || size(self.groupsClaim) > 0
+                        rolesApplyToAllOrganisations:
+                          description: 'Keycloak organisations: unprefixed roles count in every organisation of someone in several.'
+                          type: boolean
                         scopes:
                           items:
                             maxLength: 128
@@ -576,12 +749,41 @@ spec:
                           minimum: 1.0
                           nullable: true
                           type: integer
+                        zitadelForeignOrganisations:
+                          description: |-
+                            Zitadel: `guests` (default; roles keyed by another organisation make guests of the
+                            owner) or `organisations` (each Zitadel organisation is its own Scribyra organisation).
+                          enum:
+                          - guests
+                          - organisations
+                          - null
+                          nullable: true
+                          type: string
+                        zitadelProjectId:
+                          description: 'Zitadel: the project whose roles count.'
+                          nullable: true
+                          pattern: ^[0-9]{1,32}$
+                          type: string
+                        zitadelProjectOwnerOrg:
+                          description: 'Zitadel (required): the ID of the organisation that owns the project.'
+                          nullable: true
+                          pattern: ^[0-9]{1,32}$
+                          type: string
                       required:
                       - clientId
                       - clientSecretRef
                       - issuer
                       - name
                       type: object
+                      x-kubernetes-validations:
+                      - message: each provider needs exactly one of preset (zitadel, keycloak, entra, google) and claims
+                        rule: has(self.preset) != has(self.claims)
+                      - message: preset zitadel needs zitadelProjectOwnerOrg (the ID of the organisation that owns the project)
+                        rule: '!has(self.preset) || self.preset != ''zitadel'' || has(self.zitadelProjectOwnerOrg)'
+                      - message: preset google needs hostedDomains (or emailDomains)
+                        rule: '!has(self.preset) || self.preset != ''google'' || (has(self.hostedDomains) && size(self.hostedDomains) > 0) || (has(self.emailDomains) && size(self.emailDomains) > 0)'
+                      - message: roles must map at least one provider role to admin or member (except for preset google)
+                        rule: (has(self.preset) && self.preset == 'google') || (has(self.roles) && ((has(self.roles.admin) && size(self.roles.admin) > 0) || (has(self.roles.member) && size(self.roles.member) > 0)))
                     maxItems: 16
                     minItems: 1
                     type: array
@@ -591,25 +793,20 @@ spec:
                 x-kubernetes-validations:
                 - message: provider names must be unique
                   rule: self.providers.all(p, self.providers.filter(q, q.name == p.name).size() == 1)
+                - message: primaryOrganisation.provider must name one of the providers
+                  rule: '!has(self.primaryOrganisation) || self.providers.exists(p, p.name == self.primaryOrganisation.provider)'
               policy:
                 default:
-                  admins: []
                   guests: off
                   linkSharing: false
+                  notifyOnAdminAccess: true
                   offlineAllowed: true
                 properties:
-                  admins:
-                    default: []
-                    description: |-
-                      Verified emails (or `issuer#subject`) that are administrators whatever groups say; the
-                      bootstrap for a new deployment.
-                    items:
-                      maxLength: 512
-                      type: string
-                    maxItems: 64
-                    type: array
                   guests:
                     default: off
+                    description: |-
+                      `off` refuses provider guest accounts; `shared` lets them open what is shared with them
+                      (server-readable only).
                     enum:
                     - off
                     - shared
@@ -617,6 +814,10 @@ spec:
                   linkSharing:
                     default: false
                     description: Whether editors may create share links (never anonymous).
+                    type: boolean
+                  notifyOnAdminAccess:
+                    default: true
+                    description: Members see when an administrator opened their project (audited either way).
                     type: boolean
                   offlineAllowed:
                     default: true
@@ -715,8 +916,9 @@ spec:
               replicas:
                 default: 2
                 description: |-
-                  API replicas when `autoscaling` is not set. Releases that still run a single writer
-                  (see `docs/operator.md`) always run one.
+                  API replicas when `autoscaling` is not set. Server-readable deployments (whose blobs are
+                  always in S3 here) run several; an end-to-end deployment, whose API takes the database
+                  exclusively, always runs one (see `docs/operator.md`).
                 format: int32
                 maximum: 100.0
                 minimum: 1.0
@@ -828,6 +1030,8 @@ spec:
               rule: '!has(self.backup) || has(self.postgres.provisioned)'
             - message: autoscaling.maxReplicas must be at least minReplicas
               rule: '!has(self.autoscaling) || self.autoscaling.maxReplicas >= self.autoscaling.minReplicas'
+            - message: 'policy.guests must be off with encryption: endToEnd'
+              rule: self.encryption == 'serverReadable' || !has(self.policy) || !has(self.policy.guests) || self.policy.guests == 'off'
           status:
             description: Status written by the operator.
             nullable: true
@@ -986,7 +1190,11 @@ rules:
   resources:
   - persistentvolumeclaims
   verbs:
+  - get
   - list
+  - watch
+  - create
+  - patch
   - delete
 - apiGroups:
   - events.k8s.io

@@ -67,5 +67,15 @@ pub const WORKER_BIND: &str = "0.0.0.0:8788";
 pub const HEALTHZ_PATH: &str = "/healthz";
 pub const READYZ_PATH: &str = "/readyz";
 
+/// Where the compile worker image keeps the WebAssembly compile runtime
+/// (`scripts/wasm-compile-runtime.mjs`; `compile_runtime`, read-only).
+pub const COMPILE_RUNTIME_DIR: &str = "/opt/scribyra/compile-runtime";
+/// Where a worker pod mounts its writable TeX package cache (`compile_cache`), a volume the
+/// workers share.
+pub const COMPILE_CACHE_DIR: &str = "/var/cache/scribyra/tex";
+/// The delegated cgroup v2 directory compile jobs get their own cgroups under: the worker pod's
+/// own cgroup, seen through its cgroup namespace (`SCRIBYRA_COMPILE_CGROUP`).
+pub const COMPILE_CGROUP_DIR: &str = "/sys/fs/cgroup";
+
 /// The user and group the images run as.
 pub const RUN_AS: i64 = 10001;

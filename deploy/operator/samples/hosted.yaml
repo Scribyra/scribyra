@@ -16,20 +16,25 @@ spec:
         issuer: https://accounts.google.com
         clientId: tenant-42.apps.googleusercontent.com
         clientSecretRef: {name: tenant-42-google, key: client-secret}
-        emailDomains: [tenant42.example.com]
+        preset: google
+        hostedDomains: [tenant42.example.com]
+        adminSubjects: ["104857600000000000001"]
       - name: corp
         issuer: https://idp.tenant42.example.com
         clientId: scribyra
         clientSecretRef: {name: tenant-42-corp, key: client-secret}
-        roleMapping: {groupsClaim: groups, adminGroups: [admins], memberGroups: [staff]}
-        guest: {claim: acct, equals: "1"}
+        claims:
+          roles: $.groups
+          guest: {path: $.acct, equals: "1"}
+        roles: {admin: [admins], member: [staff], guest: [partners]}
+    primaryOrganisation: {provider: corp}
   compile:
     mode: both
-    texlive: medium
     runtimeClassName: gvisor
+    cache: {size: 10Gi, storageClassName: shared-files, accessMode: ReadWriteMany}
     workers: {minReplicas: 0, maxReplicas: 6, concurrency: 2}
-    limits: {cpuSeconds: 90, wallSeconds: 180, memoryMiB: 2048, scratchMiB: 512}
-  policy: {offlineAllowed: false, linkSharing: true, guests: shared}
+    limits: {cpuSeconds: 300, wallSeconds: 600, memoryMiB: 2048, scratchMiB: 512}
+  policy: {offlineAllowed: false, linkSharing: true, guests: shared, notifyOnAdminAccess: true}
   postgres:
     provisioned: {storageSize: 50Gi, instances: 2, storageClassName: fast}
   storage:

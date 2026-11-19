@@ -25,41 +25,63 @@ stringData:
       "blob_store": "s3",
       "database_url_file": "/etc/scribyra/secrets/database-url",
       "deployment": {
-        "admins": [],
         "audit_retention_days": 400,
         "compile": "browser",
+        "compile_engine": "wasm",
         "compile_limits": {
+          "active_per_member": 2,
+          "active_per_owner": 2,
           "concurrency": 2,
-          "cpu_seconds": 60,
+          "cpu_seconds": 300,
           "memory_mib": 2048,
           "output_mib": 64,
           "passes": 4,
           "per_member_per_hour": 120,
+          "per_project_per_minute": 30,
           "queue": 32,
+          "retention_days": 90,
           "scratch_mib": 512,
-          "wall_seconds": 120
+          "wall_seconds": 600
         },
         "encryption": "e2ee",
         "guests": "off",
         "link_sharing": false,
         "name": "acme",
+        "notify_on_admin_access": true,
         "offline": true,
+        "primary_organisation": null,
         "providers": [
           {
-            "admin_groups": [],
+            "admin_subjects": [],
+            "claims": null,
             "client_id": "11111111-2222-3333-4444-555555555555",
             "client_secret_file": "/etc/scribyra/secrets/oidc-acme",
             "email_domains": [],
-            "groups_claim": null,
-            "guest": null,
+            "entra_require_acct": false,
+            "hosted_domains": [],
             "id": "acme",
             "issuer": "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",
+            "keycloak_organizations": false,
             "label": "acme",
-            "member_groups": [],
-            "offline_access": true,
+            "no_refresh_session_minutes": 60,
+            "offline_access": null,
+            "preset": "entra",
             "recheck_minutes": 10,
+            "roles": {
+              "admin": [
+                "Scribyra.Admin"
+              ],
+              "guest": [],
+              "member": [
+                "Scribyra.Member"
+              ]
+            },
+            "roles_apply_to_all_organisations": false,
             "scopes": [],
-            "session_hours": 12
+            "session_hours": 12,
+            "zitadel_foreign_organisations": "guests",
+            "zitadel_project_id": null,
+            "zitadel_project_owner_org": null
           }
         ],
         "quotas": {
@@ -67,8 +89,10 @@ stringData:
           "member_bytes": 10737418240,
           "project_bytes": 1073741824
         },
+        "tex_mirror": "https://tlnet.yihui.org",
         "texlive": null
       },
+      "migrate_on_start": false,
       "origins": [
         "https://scribyra.acme.example.com"
       ],
@@ -284,21 +308,18 @@ metadata:
     name: acme
     uid: 00000000-0000-0000-0000-000000000001
 spec:
-  replicas: 2
+  replicas: 1
   revisionHistoryLimit: 5
   selector:
     matchLabels:
       app.kubernetes.io/component: api
       scribyra.com/instance: acme
   strategy:
-    rollingUpdate:
-      maxSurge: 1
-      maxUnavailable: 0
-    type: RollingUpdate
+    type: Recreate
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: 74a9e80a1a4a9045
+        scribyra.com/config-hash: 6bfd5abda6418d81
       labels:
         app.kubernetes.io/component: api
         app.kubernetes.io/instance: acme
@@ -319,6 +340,8 @@ spec:
             secretKeyRef:
               key: access-key-id
               name: acme-s3
+        - name: SCRIBYRA_SERVICE_METRICS_BIND
+          value: 0.0.0.0:9090
         image: registry.example/scribyra/scribyra-sync:0.2.0
         imagePullPolicy: IfNotPresent
         livenessProbe:
@@ -668,7 +691,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: 74a9e80a1a4a9045
+        scribyra.com/config-hash: 6bfd5abda6418d81
       labels:
         app.kubernetes.io/component: migrate
         app.kubernetes.io/instance: acme

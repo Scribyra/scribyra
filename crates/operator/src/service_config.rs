@@ -5,7 +5,7 @@
 //! operator sets are written; everything else keeps the service's defaults. The result is
 //! checked with the service's own validation ([`check`]) before anything is deployed.
 
-use crate::crd::{CompileMode, Encryption, Guests, Scribyra};
+use crate::crd::{CompileMode, Encryption, Guests, OidcProvider, Preset, Scribyra, ZitadelForeign};
 use scribyra_sync::config as svc;
 use scribyra_sync::deploy;
 use serde_json::{Value, json};
@@ -49,31 +49,9 @@ pub fn deployment(cr: &Scribyra) -> svc::Deployment {
             Guests::Off => svc::Guests::Off,
             Guests::Shared => svc::Guests::Shared,
         },
-        admins: spec.policy.admins.clone(),
-        providers: spec
-            .oidc
-            .providers
-            .iter()
-            .map(|p| {
-                let mapping = p.role_mapping.clone().unwrap_or(crate::crd::RoleMapping { groups_claim: String::new(), admin_groups: vec![], member_groups: vec![] });
-                svc::Provider {
-                    id: p.name.clone(),
-                    label: p.label.clone().unwrap_or_else(|| p.name.clone()),
-                    issuer: p.issuer.clone(),
-                    client_id: p.client_id.clone(),
-                    client_secret_file: deploy::provider_secret_file(&p.name).into(),
-                    email_domains: p.email_domains.clone(),
-                    groups_claim: Some(mapping.groups_claim).filter(|c| !c.is_empty()),
-                    admin_groups: mapping.admin_groups,
-                    member_groups: mapping.member_groups,
-                    guest: p.guest.as_ref().map(|g| svc::GuestRule { claim: g.claim.clone(), equals: g.equals.clone() }),
-                    offline_access: p.offline_access,
-                    session_hours: p.session_hours.unwrap_or(12),
-                    recheck_minutes: p.recheck_minutes.unwrap_or(10),
-                    scopes: p.scopes.clone(),
-                }
-            })
-            .collect(),
+        notify_on_admin_access: spec.policy.notify_on_admin_access,
+        providers: spec.oidc.providers.iter().map(provider).collect(),
+        primary_organisation: spec.oidc.primary_organisation.as_ref().map(|p| svc::PrimaryOrganisation { provider: p.provider.clone(), organisation: p.organisation.clone() }),
         quotas: svc::Quotas {
             deployment_bytes: quotas.deployment_bytes.unwrap_or(defaults.deployment_bytes),
             project_bytes: quotas.project_bytes.unwrap_or(defaults.project_bytes),
@@ -90,9 +68,63 @@ pub fn deployment(cr: &Scribyra) -> svc::Deployment {
             concurrency: spec.compile.workers.concurrency,
             queue: limits.queue,
             per_member_per_hour: limits.per_member_per_hour,
+            per_project_per_minute: limits.per_project_per_minute,
+            active_per_member: limits.active_per_member,
+            active_per_owner: limits.active_per_owner,
+            retention_days: limits.retention_days,
         },
-        // The worker image carries its TeX Live tree at a fixed path.
-        texlive: (spec.compile.mode != CompileMode::Browser).then(|| deploy::TEXLIVE_DIR.into()),
+        // The workers run the browser's WebAssembly engine from their image's compile runtime;
+        // the operator deploys no TeX Live (docs/compile-engines.md).
+        texlive: None,
+        compile_engine: svc::CompileEngine::Wasm,
+        tex_mirror: spec.compile.tex_mirror.clone().unwrap_or_else(|| svc::DEFAULT_TEX_MIRROR.into()),
+    }
+}
+
+/// The mirror the workers fetch packages from, if any (`deployment.tex_mirror`).
+pub fn tex_mirror(cr: &Scribyra) -> Option<String> {
+    Some(deployment(cr).tex_mirror).filter(|m| !m.is_empty())
+}
+
+/// One `deployment.providers[]` entry; the client secret is a mounted file.
+fn provider(p: &OidcProvider) -> svc::Provider {
+    let roles = p.roles.clone().unwrap_or_default();
+    svc::Provider {
+        id: p.name.clone(),
+        label: p.label.clone().unwrap_or_else(|| p.name.clone()),
+        issuer: p.issuer.clone(),
+        client_id: p.client_id.clone(),
+        client_secret_file: deploy::provider_secret_file(&p.name).into(),
+        email_domains: p.email_domains.clone(),
+        hosted_domains: p.hosted_domains.clone(),
+        preset: p.preset.map(|preset| match preset {
+            Preset::Zitadel => svc::Preset::Zitadel,
+            Preset::Keycloak => svc::Preset::Keycloak,
+            Preset::Entra => svc::Preset::Entra,
+            Preset::Google => svc::Preset::Google,
+        }),
+        claims: p.claims.as_ref().map(|c| svc::ClaimRules {
+            organisation: c.organisation.clone(),
+            organisation_name: c.organisation_name.clone(),
+            roles: c.roles.clone(),
+            guest: c.guest.as_ref().map(|g| svc::GuestRule { path: g.path.clone(), equals: g.equals.clone() }),
+        }),
+        roles: svc::RoleNames { admin: roles.admin, member: roles.member, guest: roles.guest },
+        zitadel_project_id: p.zitadel_project_id.clone(),
+        zitadel_project_owner_org: p.zitadel_project_owner_org.clone(),
+        zitadel_foreign_organisations: match p.zitadel_foreign_organisations {
+            Some(ZitadelForeign::Organisations) => svc::ZitadelForeign::Organisations,
+            Some(ZitadelForeign::Guests) | None => svc::ZitadelForeign::Guests,
+        },
+        keycloak_organizations: p.keycloak_organizations,
+        entra_require_acct: p.entra_require_acct,
+        roles_apply_to_all_organisations: p.roles_apply_to_all_organisations,
+        admin_subjects: p.admin_subjects.clone(),
+        offline_access: p.offline_access,
+        session_hours: p.session_hours.unwrap_or(12),
+        no_refresh_session_minutes: p.no_refresh_session_minutes.unwrap_or(60),
+        recheck_minutes: p.recheck_minutes.unwrap_or(10),
+        scopes: p.scopes.clone(),
     }
 }
 
@@ -110,6 +142,9 @@ pub fn service_json(cr: &Scribyra) -> Value {
         "public_url": origin(cr),
         "origins": origins,
         "deployment": deployment(cr),
+        // The migration Job migrates before any pod of a release starts (docs/operator.md,
+        // Upgrades), so serving pods never migrate (and a new pod waits for the Job's schema).
+        "migrate_on_start": false,
     });
     let map = config.as_object_mut().unwrap();
     if let Some(s3) = &spec.storage.s3 {

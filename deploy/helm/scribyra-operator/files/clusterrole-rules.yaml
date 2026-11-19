@@ -46,7 +46,11 @@
   resources:
   - persistentvolumeclaims
   verbs:
+  - get
   - list
+  - watch
+  - create
+  - patch
   - delete
 - apiGroups:
   - events.k8s.io

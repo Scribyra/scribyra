@@ -18,11 +18,11 @@ spec:
         clientId: scribyra
         clientSecretRef: {name: lab-oidc, key: client-secret}
         emailDomains: [lab.example.org]
-        roleMapping:
-          groupsClaim: groups
-          adminGroups: [scribyra-admins]
-  policy:
-    admins: [it-admin@lab.example.org]
+        # Realm or client roles in Keycloak; the resource names no administrators.
+        preset: keycloak
+        roles:
+          admin: [scribyra-admin]
+          member: [scribyra-member]
   postgres:
     provisioned:
       storageSize: 10Gi

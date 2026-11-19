@@ -78,7 +78,28 @@ fn generated_configuration_passes_the_services_validation() {
     let quick = service_config::service_json(&sample("quickstart"));
     assert_eq!(quick["s3_endpoint"], "https://lab-garage.lab.svc:3943");
     assert_eq!(quick["s3_ca_file"], service_config::S3_CA_FILE);
-    assert_eq!(quick["deployment"]["providers"][0]["admin_groups"][0], "scribyra-admins");
+    // Identity is the providers' (presets, role names); the configuration names no administrators.
+    let provider = &quick["deployment"]["providers"][0];
+    assert_eq!(provider["preset"], "keycloak");
+    assert_eq!(provider["roles"]["admin"][0], "scribyra-admin");
+    assert!(quick["deployment"].get("admins").is_none());
+    assert_eq!(quick["deployment"]["notify_on_admin_access"], true);
+    // The migration Job migrates; serving pods never do.
+    assert_eq!(quick["migrate_on_start"], false);
+    let hosted = service_config::service_json(&sample("hosted"));
+    let d = &hosted["deployment"];
+    assert_eq!(d["providers"][0]["preset"], "google");
+    assert_eq!(d["providers"][0]["hosted_domains"][0], "tenant42.example.com");
+    assert_eq!(d["providers"][1]["claims"]["guest"]["path"], "$.acct");
+    assert_eq!(d["providers"][1]["roles"]["guest"][0], "partners");
+    assert_eq!(d["primary_organisation"]["provider"], "corp");
+    // Server compile runs the browser's WebAssembly engine; no TeX Live anywhere.
+    assert_eq!(d["compile_engine"], "wasm");
+    assert!(d["texlive"].is_null());
+    assert_eq!(d["tex_mirror"], scribyra_sync::config::DEFAULT_TEX_MIRROR);
+    assert_eq!(d["compile_limits"]["cpu_seconds"], 300);
+    // Listeners only some pods have are per-pod overrides, not in the shared configuration.
+    assert!(hosted.get("metrics_bind").is_none() && hosted.get("compile_worker_bind").is_none());
     let external = service_config::service_json(&sample("external"));
     assert_eq!(external["deployment"]["encryption"], "e2ee");
     assert!(external.get("service_key_file").is_none(), "end-to-end deployments have no master key");
@@ -153,11 +174,27 @@ fn network_policies_isolate_each_component() {
     assert!(deny.get("ingress").unwrap().as_array().unwrap().is_empty() && deny["egress"].as_array().unwrap().is_empty());
     // The web app has no egress rule at all (only the default deny applies).
     assert_eq!(np("web")["policyTypes"], serde_json::json!(["Ingress"]));
-    // Workers: DNS, PostgreSQL, storage; no HTTPS to the internet.
+    // Workers: DNS, PostgreSQL, storage, and HTTPS for the TeX mirror (any address: no
+    // mirrorCidrs); nothing else.
     let worker = np("worker");
     let egress = worker["egress"].as_array().unwrap();
-    assert_eq!(egress.len(), 3);
+    assert_eq!(egress.len(), 4);
     assert!(egress[1]["to"][0]["podSelector"]["matchLabels"]["cnpg.io/cluster"] == "tenant-42-db");
+    assert_eq!(egress[3]["ports"][0]["port"], 443);
+    // Without a mirror (bundled packages only) the workers reach no internet address at all.
+    let mut offline = sample("hosted");
+    offline.spec.compile.tex_mirror = Some(String::new());
+    let objects = all_objects(&offline, &env(true), &plan(&offline));
+    let worker = objects.iter().find(|o| o.kind() == "NetworkPolicy" && o.name() == "tenant-42-worker").unwrap();
+    assert_eq!(worker.value["spec"]["egress"].as_array().unwrap().len(), 3);
+    let migrate = objects.iter().find(|o| o.kind() == "NetworkPolicy" && o.name() == "tenant-42-migrate").unwrap();
+    assert_eq!(worker.value["spec"]["egress"], migrate.value["spec"]["egress"], "only DNS, PostgreSQL and storage, as the migration Job");
+    let mut narrowed = sample("hosted");
+    narrowed.spec.compile.tex_mirror = Some("https://mirror.example.net:8443/tlnet".into());
+    narrowed.spec.compile.mirror_cidrs = vec!["198.51.100.7/32".into()];
+    let objects = all_objects(&narrowed, &env(true), &plan(&narrowed));
+    let worker = objects.iter().find(|o| o.kind() == "NetworkPolicy" && o.name() == "tenant-42-worker").unwrap();
+    assert_eq!(worker.value["spec"]["egress"][3], serde_json::json!({"to": [{"ipBlock": {"cidr": "198.51.100.7/32"}}], "ports": [{"protocol": "TCP", "port": 8443}]}));
     // API: DNS, PostgreSQL, storage, OIDC (443).
     assert_eq!(np("api")["egress"].as_array().unwrap().len(), 4);
     // Ingress restricted to the gateway namespace from the spec.
@@ -178,6 +215,29 @@ fn data_objects_carry_no_owner_reference() {
     for o in objects.iter().filter(|o| o.kind() != "Cluster") {
         assert!(o.value["metadata"]["ownerReferences"][0]["uid"] == "00000000-0000-0000-0000-000000000001", "{} {}", o.kind(), o.name());
     }
+}
+
+#[test]
+fn server_readable_runs_several_api_replicas_and_end_to_end_one() {
+    // The API's listener for Prometheus is a per-pod override.
+    let cr = sample("quickstart");
+    let objects = resources::desired(&cr, &env(false), &plan(&cr));
+    let api = objects.iter().find(|o| o.kind() == "Deployment" && o.name() == "lab-api").unwrap();
+    assert!(api.value["spec"]["template"]["spec"]["containers"][0]["env"].as_array().unwrap().iter().any(|e| e["name"] == "SCRIBYRA_SERVICE_METRICS_BIND" && e["value"] == "0.0.0.0:9090"));
+    let mut cr = sample("quickstart");
+    cr.spec.replicas = 3;
+    let objects = resources::desired(&cr, &env(false), &plan(&cr));
+    let api = objects.iter().find(|o| o.kind() == "Deployment" && o.name() == "lab-api").unwrap();
+    assert_eq!(api.value["spec"]["replicas"], 3);
+    assert_eq!(api.value["spec"]["strategy"]["type"], "RollingUpdate");
+    assert_eq!(api.value["spec"]["strategy"]["rollingUpdate"]["maxUnavailable"], 0);
+    // End to end: the API takes the database exclusively, so one replica, replaced not rolled.
+    let mut cr = sample("external");
+    cr.spec.replicas = 3;
+    let objects = resources::desired(&cr, &env(false), &plan(&cr));
+    let api = objects.iter().find(|o| o.kind() == "Deployment" && o.name() == "acme-api").unwrap();
+    assert_eq!(api.value["spec"]["replicas"], 1);
+    assert_eq!(api.value["spec"]["strategy"]["type"], "Recreate");
 }
 
 #[test]
@@ -214,8 +274,30 @@ fn workers_are_sandbox_ready() {
     let pod = &worker.value["spec"]["template"]["spec"];
     assert_eq!(pod["runtimeClassName"], "gvisor");
     assert_eq!(pod["hostUsers"], false);
-    assert_eq!(pod["containers"][0]["args"][0], "compile-worker");
-    assert!(pod["containers"][0]["image"].as_str().unwrap().ends_with(":0.2.0-texlive-medium"));
+    let container = &pod["containers"][0];
+    assert_eq!(container["args"][0], "compile-worker");
+    // One worker image per release: Node 22 and the WebAssembly compile runtime, no TeX Live.
+    assert_eq!(container["image"], "registry.example/scribyra/scribyra-worker:0.2.0");
+    let env_of = |name: &str| container["env"].as_array().unwrap().iter().find(|e| e["name"] == name).and_then(|e| e["value"].as_str()).map(str::to_owned);
+    assert_eq!(env_of("SCRIBYRA_SERVICE_COMPILE_WORKER_BIND").as_deref(), Some("0.0.0.0:8788"));
+    assert_eq!(env_of("SCRIBYRA_SERVICE_METRICS_BIND").as_deref(), Some("0.0.0.0:9090"));
+    assert_eq!(env_of("SCRIBYRA_SERVICE_COMPILE_RUNTIME").as_deref(), Some("/opt/scribyra/compile-runtime"));
+    assert_eq!(env_of("SCRIBYRA_SERVICE_COMPILE_CACHE").as_deref(), Some("/var/cache/scribyra/tex"));
+    assert_eq!(env_of("SCRIBYRA_COMPILE_CGROUP").as_deref(), Some("/sys/fs/cgroup"));
+    assert_eq!(container["readinessProbe"]["httpGet"]["path"], "/readyz");
+    assert_eq!(container["readinessProbe"]["httpGet"]["port"], "probes");
+    // The shared package cache: a writable claim (the root file system stays read-only).
+    assert!(container["volumeMounts"].as_array().unwrap().iter().any(|m| m["mountPath"] == "/var/cache/scribyra/tex" && m.get("readOnly").is_none()));
+    assert!(pod["volumes"].as_array().unwrap().iter().any(|v| v["persistentVolumeClaim"]["claimName"] == "tenant-42-compile-cache"));
+    let claim = objects.iter().find(|o| o.kind() == "PersistentVolumeClaim").unwrap();
+    assert_eq!(claim.name(), "tenant-42-compile-cache");
+    assert_eq!(claim.value["spec"]["accessModes"][0], "ReadWriteMany");
+    assert_eq!(claim.value["spec"]["storageClassName"], "shared-files");
+    assert_eq!(claim.value["spec"]["resources"]["requests"]["storage"], "10Gi");
+    // About 1 GiB requested per concurrent job (two here) plus the worker; the limit lets each
+    // job reach its own memoryMiB cap.
+    assert_eq!(container["resources"]["requests"]["memory"], "2304Mi");
+    assert_eq!(container["resources"]["limits"]["memory"], "4352Mi");
     assert_eq!(worker.value["spec"]["replicas"], 1, "operator scaler without KEDA");
     let keda = resources::desired(&cr, &env(true), &plan(&cr));
     assert!(keda.iter().all(|o| o.kind() != "ScaledObject"), "KEDA needs prometheusAddress");
