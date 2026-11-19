@@ -626,9 +626,12 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
         // Each start records a hash of the policy it runs with, so configuration changes appear
         // in the audit log; then the retention task purges what is older than it keeps.
         let policy = blob::hash(serde_json::to_string(deployment).unwrap_or_default().as_bytes());
-        let detail = serde_json::json!({"policy": policy, "encryption": deployment.encryption.as_str(), "schema": schema, "version": env!("CARGO_PKG_VERSION")});
+        let protection = crate::audit::protect(&s.store.pool).await?;
+        println!("{}", serde_json::json!({"event": "audit_protection", "state": protection}));
+        let retention = crate::audit::set_retention(&s.store.pool, config.audit_retention()).await?;
+        let detail = serde_json::json!({"policy": policy, "encryption": deployment.encryption.as_str(), "schema": schema, "version": env!("CARGO_PKG_VERSION"), "auditRetention": retention, "auditProtection": protection});
         crate::audit::record_now(&s.store.pool, &crate::audit::Actor::system(), "deployment.start", Some(("deployment", org)), detail).await?;
-        tokio::spawn(crate::audit::retain(s.store.pool.clone(), config.audit_retention(), config.audit_purge_seconds));
+        tokio::spawn(crate::audit::retain(s.store.pool.clone(), config.audit_purge_seconds));
     }
     println!(
         "{{\"event\":\"listening\",\"address\":\"{}\",\"protocol\":1,\"schema\":{schema}}}",

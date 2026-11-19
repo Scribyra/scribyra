@@ -100,6 +100,18 @@ fn unzip(bytes: &[u8]) -> BTreeMap<String, Vec<u8>> {
     files
 }
 
+/// Runs `sql` in a transaction held open for `seconds` by another connection (as a superuser), and
+/// returns once that connection is waiting with its changes uncommitted.
+fn hold(sr: &Sr, sql: &str, seconds: f64) -> std::thread::JoinHandle<()> {
+    let marker = random_hex(8);
+    let script = format!("BEGIN; {sql}; SELECT pg_sleep({seconds}) /* {marker} */; COMMIT;");
+    let url = postgres().url(sr.db().rsplit('/').next().unwrap());
+    let held = std::thread::spawn(move || {
+        postgres().psql(&url, &script);
+    });
+    eventually("the other transaction's lock", || psql(sr, &format!("SELECT count(*) FROM pg_stat_activity WHERE query LIKE '%{marker}%' AND query NOT LIKE '%pg_stat_activity%'")) == "1");
+    held
+}
 fn walk(dir: &std::path::Path) -> Vec<std::path::PathBuf> {
     let mut out = Vec::new();
     for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
@@ -276,8 +288,65 @@ fn audit_verify_finds_changed_and_deleted_rows_and_the_triggers_refuse_changes()
 }
 
 #[test]
+fn the_service_database_user_cannot_change_the_audit_log() {
+    // Review M1: the triggers trusted a session setting anyone can set (`set_config` then
+    // DELETE succeeded), and the service's user owned the tables (it could disable the
+    // triggers). The service here runs as an ordinary user; the operator created
+    // `scribyra_audit_owner` and let that user SET ROLE to it for the migration, then revoked it.
+    let user = format!("svc_{}", random_hex(6));
+    let name = format!("d_{}", random_hex(6));
+    let su = postgres().url("postgres");
+    postgres().psql(&su, "DO $$ BEGIN CREATE ROLE scribyra_audit_owner NOLOGIN; EXCEPTION WHEN duplicate_object OR unique_violation THEN NULL; END $$");
+    postgres().psql(&su, &format!("CREATE ROLE {user} LOGIN"));
+    postgres().psql(&su, &format!("GRANT scribyra_audit_owner TO {user} WITH INHERIT FALSE, SET TRUE"));
+    postgres().psql(&su, &format!("CREATE DATABASE {name} OWNER {user}"));
+    let url = postgres().url(&name).replace("postgres@", &format!("{user}@"));
+    let mut sr = Sr::start(Blobs::Fs, people(), json!({"database_url": url}), json!({}));
+    assert!(sr.env.service.logs.lock().unwrap().contains("\"state\":\"protected; reachable: this database user is a member of scribyra_audit_owner\""));
+    postgres().psql(&su, &format!("REVOKE scribyra_audit_owner FROM {user}"));
+    let alice = sr.api(&sr.login("alice"));
+    alice.create("P");
+    let before = psql(&sr, "SELECT count(*) || ' ' || max(seq) FROM audit_events");
+    for sql in [
+        "SELECT set_config('scribyra.audit_writer', 'purge', false); DELETE FROM audit_events",
+        "SELECT set_config('scribyra.audit_writer', 'append', false); UPDATE audit_head SET seq = 1",
+        "DELETE FROM audit_events WHERE seq = 2",
+        "UPDATE audit_events SET detail = '{}' WHERE seq = 2",
+        "TRUNCATE audit_events",
+        "INSERT INTO audit_events SELECT * FROM audit_events WHERE seq = 1",
+        "ALTER TABLE audit_events DISABLE TRIGGER audit_events_guard",
+        "ALTER TABLE audit_events DISABLE TRIGGER ALL",
+        "DROP TRIGGER audit_events_guard ON audit_events",
+        "UPDATE audit_settings SET floor_seconds = 0",
+        "CREATE OR REPLACE FUNCTION audit_guard() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN OLD; END $$",
+        "ALTER TABLE audit_events OWNER TO CURRENT_USER",
+        "SET ROLE scribyra_audit_owner",
+        "SELECT audit_purge(now())",
+    ] {
+        let refused = psql_refused(&sr, sql);
+        assert!(refused.contains("permission denied") || refused.contains("must be owner") || refused.contains("a purge cannot delete newer ones"), "{sql}: {refused}");
+    }
+    assert_eq!(psql(&sr, "SELECT count(*) || ' ' || max(seq) FROM audit_events"), before);
+    // It still appends (through the owner's functions), reads, exports and verifies.
+    alice.create("Q");
+    assert_eq!(alice.call("GET", "/v1/admin/audit/export", None).status, 200);
+    assert_eq!(verify(&sr, None).0, 0);
+    assert_eq!(psql(&sr, "SELECT audit_protect()"), "protected");
+    // A restart keeps it so.
+    sr.env.service.stop();
+    sr.env.service.start().unwrap();
+    assert!(sr.env.service.logs.lock().unwrap().contains("\"state\":\"protected\""));
+    assert_eq!(sr.env.service.run(&["migrate"]).1.contains("\"auditProtection\":\"protected\""), true);
+}
+
+#[test]
 fn retention_purges_old_events_records_it_and_stays_verifiable() {
     let mut sr = Sr::start(Blobs::Fs, people(), json!({"audit_retention_seconds": 3, "audit_purge_seconds": 1}), json!({}));
+    // The service keeps events at least 30 days; only the audit tables' owner (here the
+    // superuser) can lower that floor, which a test does to purge within seconds.
+    assert_eq!(psql(&sr, "SELECT retention_seconds FROM audit_settings"), (30 * 86400).to_string());
+    psql(&sr, "UPDATE audit_settings SET floor_seconds = 1");
+    assert_eq!(psql(&sr, "SELECT audit_set_retention(3)"), "3");
     let alice = sr.api(&sr.login("alice"));
     alice.create("Before");
     let before: i64 = psql(&sr, "SELECT max(seq) FROM audit_events").parse().unwrap();
@@ -295,6 +364,44 @@ fn retention_purges_old_events_records_it_and_stays_verifiable() {
     sr.env.service.stop();
     let first = psql(&sr, "SELECT min(seq) FROM audit_events");
     postgres().psql(&sr.db(), &format!("BEGIN; ALTER TABLE audit_events DISABLE TRIGGER audit_events_guard; DELETE FROM audit_events WHERE seq = {first}; ALTER TABLE audit_events ENABLE TRIGGER audit_events_guard; COMMIT;"));
+    let (code, report) = verify(&sr, None);
+    assert_eq!((code, report["anchored"].as_bool()), (1, Some(false)), "{report}");
+}
+
+#[test]
+fn a_purge_cannot_delete_young_events_and_verify_flags_one_that_did() {
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    alice.create("P1");
+    let head = alice.call("GET", "/v1/admin/audit?limit=1", None).json()["head"].clone();
+    let exported = format!("{}:{}", head["seq"], head["hash"].as_str().unwrap());
+    alice.create("P2");
+    // Review H2: `audit_purge(now() + '1s')` deleted every event, and verify with an exported
+    // head still said ok. The retention in the database (30 days at least) now bounds a purge.
+    for sql in ["SELECT audit_purge(now() + interval '1 second')", "SELECT audit_purge(now() - interval '29 days')", "SELECT audit_purge(NULL)", "SELECT audit_purge_expired() + audit_purge(now() + interval '1 day')"] {
+        assert!(psql_refused(&sr, sql).contains("a purge cannot delete newer ones"), "{sql}");
+    }
+    assert_eq!(psql(&sr, "SELECT audit_set_retention(1)"), (30 * 86400).to_string(), "not below the floor");
+    assert_eq!(psql(&sr, "SELECT audit_purge_expired()"), "0");
+    assert_eq!(verify(&sr, Some(&exported)).0, 0);
+    // Whoever can lower the floor (the tables' owner, a superuser) can still purge young events;
+    // verify reports the purge and that the exported event is gone.
+    psql(&sr, "UPDATE audit_settings SET floor_seconds = 0");
+    psql(&sr, "SELECT audit_set_retention(1)");
+    std::thread::sleep(std::time::Duration::from_millis(1100));
+    assert!(psql(&sr, "SELECT audit_purge(now() - interval '1 second')").parse::<i64>().unwrap() > 3);
+    let (code, report) = verify(&sr, Some(&exported));
+    let problems: Vec<&str> = report["problems"].as_array().unwrap().iter().map(|p| p["problem"].as_str().unwrap()).collect();
+    assert_eq!((code, report["anchored"].as_bool()), (1, Some(true)), "{report}");
+    assert!(problems.contains(&"the purge deleted events newer than the retention allows"), "{report}");
+    assert!(problems.contains(&"the given event was purged and is not the anchor the log starts from"), "{report}");
+    // A purge event appended by an account (not the service) anchors nothing.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    alice.create("Q");
+    let (k, hash) = (psql(&sr, "SELECT max(seq) - 1 FROM audit_events"), psql(&sr, "SELECT hash FROM audit_events WHERE seq = (SELECT max(seq) - 1 FROM audit_events)"));
+    psql(&sr, &format!("BEGIN; ALTER TABLE audit_events DISABLE TRIGGER audit_events_guard; DELETE FROM audit_events WHERE seq <= {k}; ALTER TABLE audit_events ENABLE TRIGGER audit_events_guard; COMMIT;"));
+    psql(&sr, &format!("SELECT audit_append('{}', NULL, 'audit.purge', 'audit', NULL, jsonb_build_object('count', {k}, 'last_seq', {k}, 'last_hash', '{hash}', 'before', 0))", account_of(&alice)));
     let (code, report) = verify(&sr, None);
     assert_eq!((code, report["anchored"].as_bool()), (1, Some(false)), "{report}");
 }
@@ -377,6 +484,35 @@ fn the_export_holds_every_project_the_members_and_the_audit_log() {
         assert_eq!(text.lines().filter(|l| l.contains("\"session.sign_in\"")).count(), 3);
         assert!(text.lines().last().unwrap().starts_with("# head "));
     }
+}
+
+#[test]
+fn the_export_never_writes_a_path_outside_a_project_folder() {
+    // Review H1: an editor names files `../../../../../tmp/x.sh` and `..\\..\\evil.bat`; the
+    // export wrote them as zip entries an unzip would place outside the export.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let ben = sr.api(&sr.login("ben"));
+    let cat = sr.api(&sr.login("cat"));
+    let p = ben.create("Paper");
+    assert_eq!(ben.invite(&p, "cat@example.org", "editor").status, 201);
+    let doc = Project::new();
+    assert_eq!(ben.append(&p, "b", 1, &doc.add_text("ok", "main.tex", None, "fine")).status, 201);
+    let evil = ["../../../../../tmp/x.sh", "..\\..\\evil.bat", "/etc/cron.d/x", "C:x", "a\u{1b}b"];
+    for (i, name) in evil.iter().enumerate() {
+        assert_eq!(cat.append(&p, "c", i as i64 + 1, &doc.add_text(&format!("e{i}"), name, None, "#!/bin/sh")).status, 201, "{name}");
+    }
+    let reply = alice.call("GET", "/v1/admin/export", None);
+    assert_eq!(reply.status, 200);
+    let files = unzip(&reply.body);
+    for name in files.keys() {
+        assert!(!name.contains('\\') && !name.starts_with('/') && name.split('/').all(|s| !s.is_empty() && s != "." && s != "..") && !name.chars().any(char::is_control), "{name:?}");
+    }
+    let folder = format!("projects/Paper-{}", &p[..8]);
+    assert_eq!(files.keys().filter(|k| k.starts_with("projects/")).cloned().collect::<Vec<_>>(), [format!("{folder}/main.tex")], "only the valid file");
+    let manifest: Value = serde_json::from_slice(&files["projects.json"]).unwrap();
+    let missing = manifest[0]["missing"].as_array().unwrap();
+    assert_eq!(missing.len(), 5, "{missing:?}");
 }
 
 #[test]
@@ -482,6 +618,102 @@ fn disable_unblock_remove_transfer_open_and_edit_as_administrator() {
 }
 
 #[test]
+fn configured_administrators_stay_and_an_operator_can_always_get_back_in() {
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let cat = sr.api(&sr.login("cat"));
+    let ben = sr.api(&sr.login("ben"));
+    let (alice_id, cat_id, ben_id) = (account_of(&alice), account_of(&cat), account_of(&ben));
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{cat_id}/role"), Some(json!({"role": "admin"}))).status, 200);
+    // Review M3: an administrator could disable or remove the configuration's administrators,
+    // and administrators could lock each other out with no way back.
+    assert_eq!(cat.call("POST", &format!("/v1/admin/members/{alice_id}/disable"), None).status, 409);
+    assert_eq!(cat.call("POST", &format!("/v1/admin/members/{alice_id}/remove"), Some(json!({}))).status, 409);
+    assert_eq!(psql(&sr, &format!("SELECT state FROM accounts WHERE account = '{alice_id}'")), "active");
+    assert_eq!(alice.call("GET", "/v1/admin/members", None).status, 200);
+    // When nobody can administer any more (here every administrator disabled by hand), the
+    // operator's command lets one back in, recorded as the service's own action.
+    psql(&sr, "UPDATE accounts SET state = 'disabled' WHERE role = 'admin'");
+    assert_eq!(alice.call("GET", "/v1/admin/members", None).status, 401);
+    let run = |who: &str| {
+        let (code, out) = sr.env.service.run(&["account", "unblock", who]);
+        (code, serde_json::from_str::<Value>(out.lines().last().unwrap_or("null")).unwrap_or(Value::Null))
+    };
+    let (code, out) = run("alice@example.org");
+    assert_eq!((code, out["account"].as_str(), out["from"].as_str()), (0, Some(alice_id.as_str()), Some("disabled")), "{out}");
+    assert_eq!(sr.api(&sr.login("alice")).call("GET", "/v1/admin/members", None).status, 200);
+    assert_eq!(run("test:CAT@example.org").0, 0);
+    assert_eq!(run(&ben_id).1["changed"], false, "ben was never disabled");
+    for nobody in ["nobody@example.org", "other:alice@example.org", "x"] {
+        let (code, out) = run(nobody);
+        assert_eq!((code, out["event"].as_str()), (1, Some("account_unblock_failed")), "{nobody}");
+    }
+    let unblocked: Vec<Value> = events(&alice).into_iter().filter(|e| e["action"] == "account.unblocked").collect();
+    assert_eq!(unblocked.iter().map(|e| (e["actor"].as_str().unwrap(), e["target"].as_str().unwrap(), e["detail"].clone())).collect::<Vec<_>>(), [("system", alice_id.as_str(), json!({"from": "disabled", "by": "cli"})), ("system", cat_id.as_str(), json!({"from": "disabled", "by": "cli"}))]);
+    assert_eq!(verify(&sr, None).0, 0);
+}
+
+#[test]
+fn projects_never_pass_to_an_account_disabled_meanwhile() {
+    // Review L1: the heir's row was read without a lock, so a transfer or removal could hand
+    // projects to an account being disabled at the same moment.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let ben = sr.api(&sr.login("ben"));
+    let cat = sr.api(&sr.login("cat"));
+    let (ben_id, cat_id) = (account_of(&ben), account_of(&cat));
+    let p = ben.create("Paper");
+    let held = hold(&sr, &format!("UPDATE accounts SET state = 'disabled' WHERE account = '{cat_id}'"), 1.5);
+    let reply = alice.call("POST", &format!("/v1/admin/projects/{p}/owner"), Some(json!({"account": cat_id})));
+    held.join().unwrap();
+    assert_eq!(reply.status, 409, "{}", String::from_utf8_lossy(&reply.body));
+    psql(&sr, &format!("UPDATE accounts SET state = 'active' WHERE account = '{cat_id}'"));
+    let held = hold(&sr, &format!("UPDATE accounts SET state = 'disabled' WHERE account = '{cat_id}'"), 1.5);
+    let reply = alice.call("POST", &format!("/v1/admin/members/{ben_id}/remove"), Some(json!({"transfer": cat_id})));
+    held.join().unwrap();
+    assert_eq!(reply.status, 409, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(psql(&sr, &format!("SELECT owner FROM sr_projects WHERE project = '{p}'")), ben_id);
+}
+
+#[test]
+fn an_administrator_disabled_or_demoted_meanwhile_cannot_act() {
+    // Review L2: the caller's role and state were checked before the action's transaction, so
+    // an administrator being disabled (or losing the grant) at that moment could still act;
+    // two administrators disabling each other could leave none.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let ben = sr.api(&sr.login("ben"));
+    let cat = sr.api(&sr.login("cat"));
+    let dan = sr.api(&sr.login("dan"));
+    let (ben_id, cat_id, dan_id) = (account_of(&ben), account_of(&cat), account_of(&dan));
+    for id in [&cat_id, &dan_id] {
+        assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{id}/role"), Some(json!({"role": "admin"}))).status, 200);
+    }
+    let p = ben.create("Paper");
+    let held = hold(&sr, &format!("UPDATE accounts SET state = 'disabled' WHERE account = '{cat_id}'"), 1.5);
+    let reply = cat.call("POST", &format!("/v1/admin/members/{ben_id}/disable"), None);
+    held.join().unwrap();
+    assert_eq!(reply.status, 403, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(psql(&sr, &format!("SELECT state FROM accounts WHERE account = '{ben_id}'")), "active");
+    let held = hold(&sr, &format!("UPDATE accounts SET admin_grant = false, role = 'member' WHERE account = '{dan_id}'"), 1.5);
+    let reply = dan.call("POST", &format!("/v1/admin/projects/{p}/open"), None);
+    held.join().unwrap();
+    assert_eq!(reply.status, 403, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(psql(&sr, "SELECT count(*) FROM audit_events WHERE action IN ('account.disabled', 'project.admin_open')"), "0");
+    // Two administrators disabling each other at once: one of them stays.
+    psql(&sr, &format!("UPDATE accounts SET state = 'active', admin_grant = true, role = 'admin' WHERE account IN ('{cat_id}', '{dan_id}')"));
+    let (cat, dan) = (sr.api(&sr.login("cat")), sr.api(&sr.login("dan")));
+    let both: Vec<_> = [(cat, dan_id.clone()), (dan, cat_id.clone())]
+        .into_iter()
+        .map(|(api, other)| std::thread::spawn(move || api.call("POST", &format!("/v1/admin/members/{other}/disable"), None).status))
+        .collect();
+    let mut statuses: Vec<u16> = both.into_iter().map(|t| t.join().unwrap()).collect();
+    statuses.sort();
+    assert!(statuses[0] == 200 && [401, 403].contains(&statuses[1]), "{statuses:?}");
+    assert_eq!(psql(&sr, &format!("SELECT count(*) FROM accounts WHERE account IN ('{cat_id}', '{dan_id}') AND state = 'active'")), "1");
+}
+
+#[test]
 fn removal_from_the_admin_group_at_the_provider_demotes_at_the_next_recheck() {
     let sr = Sr::start(
         Blobs::Fs,
@@ -502,6 +734,38 @@ fn removal_from_the_admin_group_at_the_provider_demotes_at_the_next_recheck() {
     assert_eq!(erin.call("GET", "/v1/sso/me", None).json()["role"], "member", "she keeps her session as a member");
     let change = events(&alice).into_iter().find(|e| e["action"] == "account.role_changed").unwrap();
     assert_eq!((change["actor"].as_str(), change["target"].as_str(), change["detail"].clone()), (Some("system"), Some(erin_id.as_str()), json!({"from": "admin", "to": "member", "by": "provider"})));
+}
+
+#[test]
+fn a_grant_never_outlasts_the_provider_taking_the_role_away() {
+    let sr = Sr::start(
+        Blobs::Fs,
+        people(),
+        json!({"sso_recheck_tick_seconds": 1}),
+        json!({"provider": {"offline_access": true, "groups_claim": "groups", "admin_groups": ["scribyra-admins"], "recheck_minutes": 1}}),
+    );
+    assert_eq!(sr.env.idp.control("groups?user=erin&groups=scribyra-admins").status, 200);
+    let erin = sr.api(&sr.login("erin"));
+    let alice = sr.api(&sr.login("alice"));
+    let erin_id = account_of(&erin);
+    // Review M2: granting a group's administrator was accepted silently, and the grant kept her an
+    // administrator after the provider removed her from the group.
+    assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{erin_id}/role"), Some(json!({"role": "admin"}))).status, 409);
+    assert_eq!(psql(&sr, &format!("SELECT admin_grant FROM accounts WHERE account = '{erin_id}'")), "f");
+    // A grant made before this was refused is cleared (and recorded) at the next recheck that
+    // finds her an administrator through the group.
+    psql(&sr, &format!("UPDATE accounts SET admin_grant = true WHERE account = '{erin_id}'"));
+    psql(&sr, "UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked");
+    eventually("the stale grant's clearing", || psql(&sr, &format!("SELECT admin_grant FROM accounts WHERE account = '{erin_id}'")) == "f");
+    let cleared = events(&alice).into_iter().find(|e| e["action"] == "account.admin_grant_cleared").unwrap();
+    assert_eq!((cleared["actor"].as_str(), cleared["target"].as_str()), (Some("system"), Some(erin_id.as_str())));
+    assert_eq!(sr.env.idp.control("groups?user=erin&groups=").status, 200);
+    psql(&sr, "UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked");
+    eventually("erin's demotion", || erin.call("GET", "/v1/admin/members", None).status == 403);
+    // The same at sign-in: a stale grant on someone the rules make an administrator goes.
+    psql(&sr, "UPDATE accounts SET admin_grant = true WHERE email = 'alice@example.org'");
+    sr.login("alice");
+    assert_eq!(psql(&sr, "SELECT admin_grant FROM accounts WHERE email = 'alice@example.org'"), "f");
 }
 
 #[test]

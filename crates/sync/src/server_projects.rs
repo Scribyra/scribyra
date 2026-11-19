@@ -572,6 +572,10 @@ impl Projects {
         let nodes = scribyra_core::tree::execute(scribyra_core::tree::Request { nodes, reserved, command: scribyra_core::tree::Command::Inspect })?;
         let mut files = Vec::new();
         for node in &nodes {
+            // The tree never returns an invalid path; whatever uses these paths relies on it.
+            if !scribyra_core::valid_path(&node.path) {
+                continue;
+            }
             let content = if node.folder {
                 Content::Folder
             } else if node.binary {
@@ -677,15 +681,26 @@ impl Projects {
     /// the rows and blobs.
     pub async fn delete(&self, project: &str, actor: &crate::audit::Actor, detail: Value) -> Result<bool, Error> {
         let mut tx = self.pool().begin().await?;
-        let bytes: Option<i64> = sqlx::query_scalar("UPDATE sr_projects SET deleted = now(), data_key_wrapped = NULL WHERE project = $1 AND deleted IS NULL RETURNING bytes").bind(project).fetch_optional(&mut *tx).await?;
-        let Some(bytes) = bytes else { return Ok(false) };
-        sqlx::query("SELECT bytes FROM usage WHERE scope = $1 FOR UPDATE").bind(DEPLOYMENT_SCOPE).execute(&mut *tx).await?;
-        sqlx::query("UPDATE usage SET bytes = greatest(bytes - $2, 0) WHERE scope = $1").bind(DEPLOYMENT_SCOPE).bind(bytes).execute(&mut *tx).await?;
-        notify(&mut tx, project).await?;
-        crate::audit::record(&mut tx, actor, "project.deleted", Some(("project", project)), detail).await?;
+        if !self.delete_in(&mut tx, project, actor, detail).await? {
+            return Ok(false);
+        }
         tx.commit().await?;
-        self.kick.notify_one();
+        self.erased();
         Ok(true)
+    }
+    /// [`Projects::delete`] in the caller's transaction; call [`Projects::erased`] once it commits.
+    pub async fn delete_in(&self, tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, project: &str, actor: &crate::audit::Actor, detail: Value) -> Result<bool, Error> {
+        let bytes: Option<i64> = sqlx::query_scalar("UPDATE sr_projects SET deleted = now(), data_key_wrapped = NULL WHERE project = $1 AND deleted IS NULL RETURNING bytes").bind(project).fetch_optional(&mut **tx).await?;
+        let Some(bytes) = bytes else { return Ok(false) };
+        sqlx::query("SELECT bytes FROM usage WHERE scope = $1 FOR UPDATE").bind(DEPLOYMENT_SCOPE).execute(&mut **tx).await?;
+        sqlx::query("UPDATE usage SET bytes = greatest(bytes - $2, 0) WHERE scope = $1").bind(DEPLOYMENT_SCOPE).bind(bytes).execute(&mut **tx).await?;
+        notify(tx, project).await?;
+        crate::audit::record(&mut **tx, actor, "project.deleted", Some(("project", project)), detail).await?;
+        Ok(true)
+    }
+    /// Wakes maintenance to remove an erased project's rows and blobs.
+    pub fn erased(&self) {
+        self.kick.notify_one();
     }
 
     /// One maintenance pass (any replica; rows are claimed with `SKIP LOCKED`): erased projects'

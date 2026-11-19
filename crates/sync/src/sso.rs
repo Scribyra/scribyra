@@ -102,6 +102,9 @@ pub struct Login {
     pub groups: Vec<String>,
     pub guest: bool,
     pub role: Role,
+    /// The role is administrator through an administrator's grant (`accounts.admin_grant`), not
+    /// the deployment's rules.
+    pub granted: bool,
     pub expires: SystemTime,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,6 +146,13 @@ pub fn normalise_email(text: &str) -> String {
 pub fn vouches(provider: &Configured, email: &str) -> bool {
     email.rsplit_once('@').is_some_and(|(_, domain)| provider.email_domains.iter().any(|d| d == domain))
 }
+/// Whether the deployment's `admins` list names this identity (its `issuer#subject`, or its
+/// verified email as `provider:email` or as an email the provider vouches for).
+pub fn listed(deployment: &Deployment, provider: &Configured, subject: &str, email: Option<&str>, email_verified: bool) -> bool {
+    let pair = format!("{}#{subject}", provider.issuer);
+    let email = email.filter(|_| email_verified).map(normalise_email);
+    deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)))
+}
 /// The deployment role of an identity, or the code of the rule that refuses it: guests when the
 /// deployment admits none, and people outside `member_groups` when the provider names some.
 /// Administrators are the `admins` list (a verified email at a provider whose `email_domains`
@@ -155,10 +165,7 @@ pub fn admit(deployment: &Deployment, provider: &Configured, subject: &str, emai
             Guests::Shared => Ok(Role::Guest),
         };
     }
-    let pair = format!("{}#{subject}", provider.issuer);
-    let email = email.filter(|_| email_verified).map(normalise_email);
-    let listed = deployment.admins.iter().any(|a| *a == pair || email.as_deref().is_some_and(|e| admin_email_matches(a, provider, e)));
-    let admin = listed || groups.iter().any(|g| provider.admin_groups.contains(g));
+    let admin = listed(deployment, provider, subject, email, email_verified) || groups.iter().any(|g| provider.admin_groups.contains(g));
     if !admin && !provider.member_groups.is_empty() && !groups.iter().any(|g| provider.member_groups.contains(g)) {
         return Err("not_member");
     }
@@ -393,7 +400,8 @@ impl Sso {
         let Ok(role) = admit(deployment, configured, &subject, email.as_deref(), email_verified, &groups, guest) else { return Ok(None) };
         // An administrator can make a member an administrator (slice 10); the configuration's
         // own administrators and guests are decided by it alone.
-        let role = if role == Role::Member && row.get::<bool, _>(10) { Role::Admin } else { role };
+        let granted = role == Role::Member && row.get::<bool, _>(10);
+        let role = if granted { Role::Admin } else { role };
         Ok(Some(Login {
             org: org.clone(),
             account: row.get(9),
@@ -406,8 +414,19 @@ impl Sso {
             groups,
             guest,
             role,
+            granted,
             expires: UNIX_EPOCH + Duration::from_secs(row.get::<i64, _>(8).max(0) as u64),
         }))
+    }
+    /// Whether the deployment's `admins` list names this account (from the identity it signed in
+    /// with last). Such an administrator is the configuration's to change: the admin area does
+    /// not disable or remove them (review M3).
+    pub async fn listed_admin(&self, account: &str) -> Result<bool, StoreError> {
+        let row: Option<(String, String, String, Option<String>, bool)> =
+            sqlx::query_as("SELECT provider, issuer, subject, email, email_verified FROM accounts WHERE account = $1").bind(account).fetch_optional(&self.store.pool).await?;
+        let Some((provider, issuer, subject, email, verified)) = row else { return Ok(false) };
+        let Some((deployment, configured)) = self.configured(&provider).filter(|(_, p)| p.issuer == issuer) else { return Ok(false) };
+        Ok(listed(deployment, configured, &subject, email.as_deref(), verified))
     }
     /// The role the deployment's rules (`admins`, groups, guests) alone give an account, from its
     /// newest sign-in: `None` when it never signed in or the rules refuse it now.
@@ -779,10 +798,14 @@ impl Sso {
                 let admitted = admit(deployment, configured, subject, id.email.as_deref(), id.email_verified, &id.groups, id.guest);
                 if let Ok(role) = admitted {
                     let mut tx = self.store.pool.begin().await?;
-                    let changed: Option<(String, String, String)> = sqlx::query_as(
-                        "WITH old AS (SELECT account, role FROM accounts WHERE provider = $1 AND subject = $2 FOR UPDATE)
-                         UPDATE accounts a SET email = $3, email_verified = $4, name = $5, role = CASE WHEN $6 = 'member' AND a.admin_grant THEN 'admin' ELSE $6 END, guest = $7
-                         FROM old WHERE a.account = old.account RETURNING a.account, old.role, a.role",
+                    // An administrator's grant lasts only while the rules make the account a
+                    // member: one the rules make an administrator (or guest) loses it, so the
+                    // provider alone decides when it takes that away (review M2).
+                    let changed: Option<(String, String, String, bool)> = sqlx::query_as(
+                        "WITH old AS (SELECT account, role, admin_grant FROM accounts WHERE provider = $1 AND subject = $2 FOR UPDATE)
+                         UPDATE accounts a SET email = $3, email_verified = $4, name = $5, role = CASE WHEN $6 = 'member' AND a.admin_grant THEN 'admin' ELSE $6 END, guest = $7,
+                           admin_grant = a.admin_grant AND $6 = 'member'
+                         FROM old WHERE a.account = old.account RETURNING a.account, old.role, a.role, old.admin_grant AND NOT a.admin_grant",
                     )
                     .bind(&configured.id)
                     .bind(subject)
@@ -794,8 +817,13 @@ impl Sso {
                     .fetch_optional(&mut *tx)
                     .await?;
                     // A role the provider's groups changed (for example removal from an admin group).
-                    if let Some((account, from, to)) = changed.filter(|(_, from, to)| from != to) {
-                        crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.role_changed", Some(("account", &account)), json!({"from": from, "to": to, "by": "provider"})).await?;
+                    if let Some((account, from, to, cleared)) = changed {
+                        if cleared {
+                            crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.admin_grant_cleared", Some(("account", &account)), json!({"role": to, "by": "provider"})).await?;
+                        }
+                        if from != to {
+                            crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.role_changed", Some(("account", &account)), json!({"from": from, "to": to, "by": "provider"})).await?;
+                        }
                     }
                     tx.commit().await?;
                 }
@@ -1173,13 +1201,13 @@ async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::s
         Ok(tx) => tx,
         Err(e) => return internal(e),
     };
-    let account = sqlx::query_as::<_, (String, String, bool, String, Option<String>)>(
-        "WITH old AS (SELECT role FROM accounts WHERE provider = $2 AND subject = $4)
+    let account = sqlx::query_as::<_, (String, String, bool, String, Option<String>, bool)>(
+        "WITH old AS (SELECT role, admin_grant FROM accounts WHERE provider = $2 AND subject = $4)
          INSERT INTO accounts (account, provider, issuer, subject, email, email_verified, name, role, guest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
          ON CONFLICT (provider, subject) DO UPDATE SET issuer = EXCLUDED.issuer, email = EXCLUDED.email, email_verified = EXCLUDED.email_verified,
            name = EXCLUDED.name, role = CASE WHEN EXCLUDED.role = 'member' AND accounts.admin_grant THEN 'admin' ELSE EXCLUDED.role END, guest = EXCLUDED.guest, last_seen = now(),
-           state = CASE WHEN accounts.state = 'blocked' THEN 'active' ELSE accounts.state END
-         RETURNING account, state, (xmax = 0), role, (SELECT role FROM old)",
+           state = CASE WHEN accounts.state = 'blocked' THEN 'active' ELSE accounts.state END, admin_grant = accounts.admin_grant AND EXCLUDED.role = 'member'
+         RETURNING account, state, (xmax = 0), role, (SELECT role FROM old), COALESCE((SELECT admin_grant FROM old), false) AND NOT admin_grant",
     )
     .bind(random_hex())
     .bind(&grant.provider)
@@ -1193,8 +1221,11 @@ async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::s
     .fetch_one(&mut *tx)
     .await;
     let account = match account {
-        Ok((account, state, created, role, old)) if state == "active" => {
+        Ok((account, state, created, role, old, cleared)) if state == "active" => {
             let recorded = async {
+                if cleared {
+                    crate::audit::record(&mut tx, &crate::audit::Actor::system(), "account.admin_grant_cleared", Some(("account", &account)), json!({"role": role, "by": "provider"})).await?;
+                }
                 if created {
                     crate::audit::record(&mut tx, &crate::audit::Actor::account(&account, ip), "account.created", Some(("account", &account)), json!({"provider": grant.provider, "role": role})).await?;
                 } else if let Some(old) = old.filter(|o| *o != role) {

@@ -1,12 +1,17 @@
 //! The audit log (design section 5): every security-relevant action is one row of
 //! `audit_events`, appended only through the SQL function `audit_append` (migration `0015`),
 //! which numbers rows without gaps under a lock on the one `audit_head` row (so appends from every
-//! replica form one line) and chains them: `hash = SHA-256(prev ‖ canonical row)`. Triggers
-//! refuse direct inserts, updates, deletes outside a purge, and truncation.
+//! replica form one line) and chains them: `hash = SHA-256(prev ‖ canonical row)`. The NOLOGIN
+//! role `scribyra_audit_owner` owns the tables and the functions that write them (migration
+//! `0031`, [`protect`]); the service's database user only reads the tables and calls the
+//! functions, and triggers refuse every change that does not come from the owner.
 //!
 //! [`verify`] recomputes the chain outside the database (`scribyra-sync audit verify`), from the
 //! first row or, after a retention purge, from the anchor its `audit.purge` event records; it
-//! reports a changed row, a deleted row and a head that does not match.
+//! reports a changed row, a deleted row, a head that does not match, and a purge that deleted
+//! events younger than the retention. Retention lives in the database (`audit_settings`, migration
+//! `0030`): a purge cannot delete events younger than it, and the service cannot set it below 30
+//! days.
 //!
 //! Never recorded: project content, ID tokens, session tokens, email bodies; emails appear only
 //! as account details (resolved from `accounts` when the log is read), never in `detail`.
@@ -77,15 +82,31 @@ pub async fn head(pool: &PgPool) -> Result<(i64, String), sqlx::Error> {
     sqlx::query_as("SELECT seq, hash FROM audit_head").fetch_one(pool).await
 }
 
-/// Deletes events older than `seconds` (retention) through `audit_purge`, which records the purge.
-pub async fn purge(pool: &PgPool, seconds: u64) -> Result<i64, sqlx::Error> {
-    sqlx::query_scalar("SELECT audit_purge(now() - make_interval(secs => $1))").bind(seconds as f64).fetch_one(pool).await
+/// Hands the audit tables to the role `scribyra_audit_owner` where the database user can
+/// (`audit_protect`, migration `0031`; idempotent) and returns the outcome: `protected`,
+/// `protected; reachable: …` (this user can still become the owner) or `unprotected: …`.
+pub async fn protect(pool: &PgPool) -> Result<String, sqlx::Error> {
+    sqlx::query_scalar("SELECT audit_protect()").fetch_one(pool).await
+}
+/// The shortest retention outside tests (`audit_settings.floor_seconds`; the service cannot lower
+/// it). `audit verify` flags a purge whose cutoff was newer than its time minus this (or the
+/// configured retention, if shorter).
+pub const RETENTION_FLOOR_SECONDS: u64 = 30 * 24 * 3600;
+/// Stores the configured retention in the database (raised to its floor) and returns the
+/// retention in force, in seconds.
+pub async fn set_retention(pool: &PgPool, seconds: u64) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT audit_set_retention($1)").bind(seconds.min(i64::MAX as u64) as i64).fetch_one(pool).await
+}
+/// Deletes the events older than the retention in force through `audit_purge_expired`, which
+/// records the purge.
+pub async fn purge(pool: &PgPool) -> Result<i64, sqlx::Error> {
+    sqlx::query_scalar("SELECT audit_purge_expired()").fetch_one(pool).await
 }
 /// The retention task: purges at start and then every `every` seconds (any replica; the purge
 /// takes the head's lock, so replicas never purge the same events twice).
-pub async fn retain(pool: PgPool, retention_seconds: u64, every: u64) {
+pub async fn retain(pool: PgPool, every: u64) {
     loop {
-        match purge(&pool, retention_seconds).await {
+        match purge(&pool).await {
             Ok(n) if n > 0 => println!("{}", json!({"event": "audit_purged", "count": n})),
             Ok(_) => {}
             Err(_) => println!("{}", json!({"event": "audit_purge_failed"})),
@@ -130,16 +151,37 @@ fn chain(prev: &str, canonical: &str) -> Option<String> {
 }
 /// Recomputes every hash, checks that sequence numbers have no gap and each row's `prev` is the
 /// previous row's hash, that the first row is the chain's start or a purge's anchor, and that the
-/// head row names the last row. `expect` (sequence number, hash), from an export, must also match
-/// if that event is still kept.
-pub async fn verify(pool: &PgPool, expect: Option<(i64, &str)>) -> Result<Report, sqlx::Error> {
+/// head row names the last row. A purge anchors only as a `system` `audit.purge` event recorded
+/// after the events it names; one whose cutoff was newer than its own time minus `retention`
+/// seconds (pass the shorter of the configured retention and [`RETENTION_FLOOR_SECONDS`]) is a
+/// problem. `expect` (sequence number, hash), from an export, must match its event; an event
+/// purged since is accepted only as the anchor of the first kept event, and one past the last
+/// event is a problem.
+pub async fn verify(pool: &PgPool, expect: Option<(i64, &str)>, retention: u64) -> Result<Report, sqlx::Error> {
     let mut report = Report { head: head(pool).await?, ..Report::default() };
     let mut previous: Option<(i64, String)> = None;
     let mut after = 0i64;
-    // Purge anchors: (last purged seq, its hash) from every kept `audit.purge` event.
-    let anchors: Vec<(i64, String)> = sqlx::query_as("SELECT (detail->>'last_seq')::bigint, detail->>'last_hash' FROM audit_events WHERE action = 'audit.purge' AND detail ? 'last_seq' AND detail ? 'last_hash'")
-        .fetch_all(pool)
-        .await?;
+    let mut first_prev = None;
+    // Purges: (seq, actor, time and cutoff in ms, last purged seq, its hash), from every kept
+    // `audit.purge` event.
+    let purges: Vec<(i64, String, i64, Option<i64>, Option<i64>, Option<String>)> = sqlx::query_as(
+        "SELECT seq, actor, (extract(epoch FROM time) * 1000)::bigint, (detail->>'before')::bigint, (detail->>'last_seq')::bigint, detail->>'last_hash' FROM audit_events WHERE action = 'audit.purge' ORDER BY seq",
+    )
+    .fetch_all(pool)
+    .await?;
+    let window = retention.min(RETENTION_FLOOR_SECONDS) as i64 * 1000;
+    for (seq, _, time, before, ..) in &purges {
+        if before.is_none_or(|b| b > time - window) {
+            report.problems.push((*seq, "the purge deleted events newer than the retention allows".into()));
+        }
+    }
+    let anchors: Vec<(i64, &str)> = purges
+        .iter()
+        .filter_map(|(seq, actor, _, _, last, hash)| match (last, hash) {
+            (Some(last), Some(hash)) if actor == "system" && last < seq => Some((*last, hash.as_str())),
+            _ => None,
+        })
+        .collect();
     loop {
         let rows = sqlx::query(&format!("SELECT seq, prev, hash, {CANONICAL} FROM audit_events WHERE seq > $1 ORDER BY seq LIMIT 5000")).bind(after).fetch_all(pool).await?;
         if rows.is_empty() {
@@ -156,6 +198,7 @@ pub async fn verify(pool: &PgPool, expect: Option<(i64, &str)>) -> Result<Report
                     if !report.anchored {
                         report.problems.push((seq, "the first event is neither the chain's start nor anchored by a purge".into()));
                     }
+                    first_prev = Some(prev.clone());
                 }
                 Some((p_seq, p_hash)) => {
                     if seq != p_seq + 1 {
@@ -184,6 +227,16 @@ pub async fn verify(pool: &PgPool, expect: Option<(i64, &str)>) -> Result<Report
         None if report.head.0 != 0 => report.problems.push((report.head.0, "the head names events that are gone".into())),
         None => report.anchored = true,
         _ => {}
+    }
+    if let Some((s, h)) = expect {
+        if s > report.last.unwrap_or(0) {
+            report.problems.push((s, "the given event is not in the log (events after it were deleted)".into()));
+        } else if let Some(first) = report.first
+            && s < first
+            && !(report.anchored && s == first - 1 && first_prev.as_deref() == Some(h))
+        {
+            report.problems.push((s, "the given event was purged and is not the anchor the log starts from".into()));
+        }
     }
     Ok(report)
 }
