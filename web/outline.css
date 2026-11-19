@@ -1,0 +1,44 @@
+/* Outline panel: one line per heading, a chevron per parent, the full title on hover or focus. */
+.tool-panel.outline-panel{padding:10px 0 0;gap:6px;overflow:hidden}
+.outline-toolbar{display:flex;align-items:center;gap:2px;padding:0 8px 0 12px}
+.tool-panel .outline-toolbar select{flex:1;min-width:0;width:auto;margin:0 4px 0 0;padding:5px 6px;font-size:12px;max-width:none}
+.outline-toolbar .icon-button{width:27px;height:27px}
+.outline-toolbar .icon-button svg{width:15px;height:15px}
+.outline-panel .tool-status{padding:0 14px 2px;font-size:11px}
+.outline-tree{position:relative;flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;padding-bottom:10px;overscroll-behavior:contain;scrollbar-width:thin}
+.outline-tree:focus{outline:none}
+.outline-spacer{position:relative}
+.outline-row{position:absolute;top:0;left:6px;right:6px;height:26px;display:flex;align-items:center;gap:4px;padding:0 8px 0 calc(2px + var(--depth,0) * 14px);border-radius:5px;font-size:12px;color:var(--text);cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap;will-change:transform}
+/* Faint guides show where each level starts, as in a code editor's outline. */
+.outline-row:not([aria-level="1"]){background-image:repeating-linear-gradient(to right,transparent 0 10px,var(--border) 10px 11px,transparent 11px 14px);background-size:calc(var(--depth,0) * 14px) 100%;background-repeat:no-repeat;background-position:2px 0}
+.outline-row:hover{background-color:var(--subtle)}
+.outline-row[aria-current=location]{background-color:var(--accent-soft);color:var(--accent)}
+.outline-row[aria-current=location]::before{content:"";position:absolute;left:0;top:5px;bottom:5px;width:2px;border-radius:2px;background:var(--accent)}
+.outline-row:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.outline-row[data-command=part],.outline-row[data-command=chapter],.outline-row[data-command=title]{font-weight:600}
+.outline-row[data-kind=file] .outline-title{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:11px;color:var(--muted)}
+.outline-chevron{flex:0 0 18px;height:18px;display:grid;place-items:center;border-radius:4px;color:var(--muted)}
+.outline-chevron:not(:empty):hover{background:color-mix(in srgb,var(--text) 9%,transparent);color:var(--text)}
+.outline-chevron svg{width:12px;height:12px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;transition:transform .12s ease}
+.outline-row[aria-expanded=true] .outline-chevron svg{transform:rotate(90deg)}
+.outline-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis}
+.outline-row.peeking .outline-title{opacity:0}
+/* The revealed title sits exactly over the row's own text and extends past the sidebar edge. */
+.outline-peek{position:fixed;z-index:40;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:10px;width:max-content;padding:3px 10px 3px 3px;border:1px solid var(--border);border-radius:5px;background:var(--subtle);color:var(--text);font-size:12px;line-height:18px;box-shadow:0 6px 22px #1a1d3a24,0 1px 3px #1a1d3a14;pointer-events:none;opacity:0;transition:opacity .12s ease;overflow-wrap:anywhere}
+.outline-peek.visible{opacity:1}
+.outline-peek.instant{transition:none}
+.outline-peek[data-current=true]{background:var(--accent-soft);color:var(--accent)}
+.outline-peek[data-kind=file] span{font-family:"SFMono-Regular",Consolas,"Liberation Mono",monospace;font-size:11px}
+.outline-peek small{font-size:10.5px;font-weight:400;color:var(--muted);white-space:nowrap}
+.outline-peek small:empty{display:none}
+:root[data-theme=dark] .outline-peek{box-shadow:0 8px 26px #0008,0 1px 3px #0006}
+/* The sidebar's resize handle overlays its border, as wide as a finger needs and no wider on screen. */
+.file-sidebar{width:var(--sidebar-width,224px)}
+.sidebar-divider{flex:0 0 7px;margin:0 -4px 0 -3px;position:relative;z-index:4;cursor:col-resize;touch-action:none}
+.sidebar-divider::after{content:"";position:absolute;top:0;bottom:0;left:2px;width:3px;border-radius:2px;background:transparent;transition:background .12s}
+.sidebar-divider:hover::after,.sidebar-divider:focus-visible::after,.sidebar-divider.dragging::after{background:var(--accent)}
+.sidebar-divider:focus-visible{outline:none}
+body.resizing-sidebar,body.resizing-sidebar *{cursor:col-resize!important;user-select:none!important;-webkit-user-select:none!important}
+@media(max-width:760px){.workspace:has(.review-workspace:not([hidden])) .sidebar-divider{display:none}}
+@media(max-width:740px){.sidebar-divider{display:none}.file-sidebar{width:170px}}
+@media(prefers-reduced-motion:reduce){.outline-peek,.outline-chevron svg{transition:none}}
