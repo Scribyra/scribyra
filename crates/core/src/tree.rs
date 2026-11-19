@@ -57,11 +57,37 @@ fn check_ids(nodes: &[Node]) -> Result<(), String> {
     Ok(())
 }
 
+/// The path shown for a node whose name or whole path is invalid: one segment with separators,
+/// backslashes, colons and control characters replaced, at most 240 UTF-8 bytes. Never a path
+/// that leaves the project (no `..`, absolute or drive path), so whatever lists, exports or
+/// compiles the files can trust every path; the node's conflict says what to repair.
+fn display_path(path: &str) -> String {
+    let mut out = String::new();
+    for c in path.chars() {
+        let c = if c.is_control() || matches!(c, '/' | '\\' | ':') {
+            '_'
+        } else {
+            c
+        };
+        if out.len() + c.len_utf8() > 240 {
+            break;
+        }
+        out.push(c);
+    }
+    if out.is_empty() || out == "." || out == ".." {
+        "_".into()
+    } else {
+        out
+    }
+}
+
 /// Every node remains visible even when independent valid moves form a cycle after merge.
-/// Conflicts are a projection: never silently rename or delete the underlying graph.
+/// Conflicts are a projection: never silently rename or delete the underlying graph. Every
+/// returned path is valid (`valid_path`), also for a conflicted node (see [`display_path`]).
 fn inspect(nodes: &[Node]) -> Vec<Node> {
     let by_id: HashMap<_, _> = nodes.iter().map(|n| (n.id.as_str(), n)).collect();
     let mut result = Vec::with_capacity(nodes.len());
+    let mut shown = HashSet::new();
     for source in nodes {
         let mut node = source.clone();
         node.conflict = None;
@@ -107,17 +133,25 @@ fn inspect(nodes: &[Node]) -> Vec<Node> {
         if node.conflict.is_none() && !valid_path(&node.path) {
             node.conflict = Some("Path exceeds 240 UTF-8 bytes. Move or rename this item.".into());
         }
+        if !valid_path(&node.path) {
+            // Conflicted already (invalid name or too long); shown paths never clash with others.
+            node.path = display_path(&node.path);
+            shown.insert(node.id.clone());
+        }
         if node.folder && node.binary {
             node.conflict = Some("Folders cannot contain binary data.".into());
         }
         result.push(node);
     }
     let mut counts: HashMap<String, usize> = HashMap::new();
-    for node in &result {
+    for node in result.iter().filter(|n| !shown.contains(&n.id)) {
         *counts.entry(collision_key(&node.path)).or_default() += 1;
     }
     for node in &mut result {
-        if node.conflict.is_none() && counts[&collision_key(&node.path)] > 1 {
+        if node.conflict.is_none()
+            && !shown.contains(&node.id)
+            && counts[&collision_key(&node.path)] > 1
+        {
             node.conflict = Some("A file or folder with this path already exists, including case or Unicode variants. Rename one of the marked items.".into());
         }
     }
@@ -468,6 +502,48 @@ mod tests {
         )
         .unwrap();
         assert!(nodes.iter().all(|n| n.conflict.is_none()));
+    }
+    #[test]
+    fn invalid_names_never_yield_an_invalid_path() {
+        // Review H1: a conflicted node's path was its raw name, which the export wrote as a zip
+        // entry (`../../x.sh`) and the compile staged.
+        let named = |id: &str, name: &str, parent: Option<&str>, folder: bool| Node {
+            id: id.into(),
+            name: Some(name.into()),
+            parent_id: parent.map(Into::into),
+            folder,
+            ..Default::default()
+        };
+        let nodes = vec![
+            named("a", "../../../../../tmp/x.sh", None, false),
+            named("b", "..\\..\\evil.bat", None, false),
+            named("c", "..", None, false),
+            named("d", "/etc/passwd", None, false),
+            named("e", "a\u{0}b\nc", None, false),
+            named("f", "C:", None, false),
+            named("deep", "d", None, true),
+            named("long", &"y".repeat(200), Some("deep"), true),
+            named("leaf", &"z".repeat(100), Some("long"), false),
+        ];
+        let view = run(nodes, Command::Inspect).unwrap();
+        for node in &view {
+            assert!(valid_path(&node.path), "{node:?}");
+        }
+        let by = |id: &str| view.iter().find(|n| n.id == id).unwrap().clone();
+        for id in ["a", "b", "c", "d", "e", "f", "leaf"] {
+            assert!(by(id).conflict.is_some(), "{id}");
+        }
+        assert_eq!(by("a").path, ".._.._.._.._.._tmp_x.sh");
+        assert_eq!(by("b").path, ".._.._evil.bat");
+        assert_eq!(by("c").path, "_");
+        assert!(by("leaf").path.len() <= 240);
+        // A shown path never marks a valid item as clashing with it.
+        let view = run(
+            vec![named("a", "a:b", None, false), named("v", "a_b", None, false)],
+            Command::Inspect,
+        )
+        .unwrap();
+        assert_eq!(view.iter().find(|n| n.id == "v").unwrap().conflict, None);
     }
     #[test]
     fn deletion_uses_parent_identity_not_path_prefixes() {

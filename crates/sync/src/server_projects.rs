@@ -572,6 +572,10 @@ impl Projects {
         let nodes = scribyra_core::tree::execute(scribyra_core::tree::Request { nodes, reserved, command: scribyra_core::tree::Command::Inspect })?;
         let mut files = Vec::new();
         for node in &nodes {
+            // The tree never returns an invalid path; whatever uses these paths relies on it.
+            if !scribyra_core::valid_path(&node.path) {
+                continue;
+            }
             let content = if node.folder {
                 Content::Folder
             } else if node.binary {

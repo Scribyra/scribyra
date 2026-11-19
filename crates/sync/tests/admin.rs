@@ -380,6 +380,35 @@ fn the_export_holds_every_project_the_members_and_the_audit_log() {
 }
 
 #[test]
+fn the_export_never_writes_a_path_outside_a_project_folder() {
+    // Review H1: an editor names files `../../../../../tmp/x.sh` and `..\\..\\evil.bat`; the
+    // export wrote them as zip entries an unzip would place outside the export.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let ben = sr.api(&sr.login("ben"));
+    let cat = sr.api(&sr.login("cat"));
+    let p = ben.create("Paper");
+    assert_eq!(ben.invite(&p, "cat@example.org", "editor").status, 201);
+    let doc = Project::new();
+    assert_eq!(ben.append(&p, "b", 1, &doc.add_text("ok", "main.tex", None, "fine")).status, 201);
+    let evil = ["../../../../../tmp/x.sh", "..\\..\\evil.bat", "/etc/cron.d/x", "C:x", "a\u{1b}b"];
+    for (i, name) in evil.iter().enumerate() {
+        assert_eq!(cat.append(&p, "c", i as i64 + 1, &doc.add_text(&format!("e{i}"), name, None, "#!/bin/sh")).status, 201, "{name}");
+    }
+    let reply = alice.call("GET", "/v1/admin/export", None);
+    assert_eq!(reply.status, 200);
+    let files = unzip(&reply.body);
+    for name in files.keys() {
+        assert!(!name.contains('\\') && !name.starts_with('/') && name.split('/').all(|s| !s.is_empty() && s != "." && s != "..") && !name.chars().any(char::is_control), "{name:?}");
+    }
+    let folder = format!("projects/Paper-{}", &p[..8]);
+    assert_eq!(files.keys().filter(|k| k.starts_with("projects/")).cloned().collect::<Vec<_>>(), [format!("{folder}/main.tex")], "only the valid file");
+    let manifest: Value = serde_json::from_slice(&files["projects.json"]).unwrap();
+    let missing = manifest[0]["missing"].as_array().unwrap();
+    assert_eq!(missing.len(), 5, "{missing:?}");
+}
+
+#[test]
 fn disable_unblock_remove_transfer_open_and_edit_as_administrator() {
     let sr = start(Blobs::Fs);
     let alice = sr.api(&sr.login("alice"));

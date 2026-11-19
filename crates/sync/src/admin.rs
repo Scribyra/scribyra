@@ -695,8 +695,10 @@ fn chrono_like(ms: i64) -> Option<String> {
 // --- Export everything
 
 /// A streamed zip: per project its files (`projects/<name>-<id>/<path>`), materialised from the
-/// server's state, `projects.json` (what each folder holds), `members.json` and `audit.jsonl`
-/// (every event, ending with the head). Recorded (`export.everything`) before it starts.
+/// server's state, `projects.json` (what each folder holds; `missing` lists the files left out:
+/// assets not on the server, and files the tree marks as conflicts, whose paths are not
+/// trustworthy), `members.json` and `audit.jsonl` (every event, ending with the head). Entry
+/// names are unique (also ignoring case). Recorded (`export.everything`) before it starts.
 async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -> Response {
     let caller = admin!(a, headers, source);
     let projects = check!(a.readable()).clone();
@@ -721,7 +723,18 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
             match projects.materialise(id).await {
                 Ok(m) => {
                     let mut missing = Vec::new();
+                    let mut names = std::collections::HashSet::new();
                     for file in &m.files {
+                        if matches!(file.content, server_projects::Content::Folder) {
+                            continue;
+                        }
+                        // A file the tree marks as a conflict (an invalid name, a cycle, a clash)
+                        // has no trustworthy path: listed as missing, never written (review H1).
+                        let name = format!("projects/{folder}/{}", file.path);
+                        if file.conflict.is_some() || !entry_path(&file.path) || !names.insert(name.to_lowercase()) {
+                            missing.push(file.path.clone());
+                            continue;
+                        }
                         let bytes = match &file.content {
                             server_projects::Content::Folder => continue,
                             server_projects::Content::Text(text) => text.as_bytes().to_vec(),
@@ -731,7 +744,7 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
                                 continue;
                             }
                         };
-                        if !zip.file(&format!("projects/{folder}/{}", file.path), &bytes).await {
+                        if !zip.file(&name, &bytes).await {
                             return;
                         }
                     }
@@ -776,6 +789,11 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     h.insert(header::CONTENT_DISPOSITION, HeaderValue::from_static("attachment; filename=\"scribyra-export.zip\""));
     response
+}
+/// Whether a file's path is safe inside a zip entry: relative, `/`-separated, without `.` or `..`
+/// segments, backslashes, colons or control characters (what `valid_path` accepts).
+fn entry_path(path: &str) -> bool {
+    scribyra_core::valid_path(path)
 }
 /// A folder name for a project: its name without path separators or control characters, and
 /// the start of its ID, unique within the export.
