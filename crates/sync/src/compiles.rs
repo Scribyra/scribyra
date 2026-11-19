@@ -1,13 +1,15 @@
 //! Server compile (design section 6, slice 11): the queue, the compile worker and the routes.
 //!
 //! A request materialises the project (at the `seq` the caller saw, or its head) and digests its
-//! files; a successful compile of the same digest, engine and TeX Live tree is reused. Otherwise
-//! a `compiles` row is queued: FIFO, at most `compile_limits.queue` waiting, at most one queued
-//! job per project (a newer request replaces it) and one running (a project's next job waits
-//! for the running one), `per_member_per_hour` requests per member. Workers (`scribyra-sync
-//! compile-worker`, or `compile_worker_in_process` in `serve`) take jobs with `FOR UPDATE SKIP
-//! LOCKED`, run `concurrency` at once in the [`scribyra_compile`] sandbox, heartbeat each one,
-//! and store the PDF and log sealed with the project's data key. A job whose worker stops
+//! files (after `per_member_per_hour` and `per_project_per_minute` admitted it); a successful
+//! compile of the same digest, engine and TeX Live tree is reused. Otherwise a `compiles` row is
+//! queued: at most `compile_limits.queue` waiting, `active_per_member` per requester and
+//! `active_per_owner` per owner, at most one queued job per project (a newer request replaces
+//! it) and one running (a project's next job waits for the running one). Workers
+//! (`scribyra-sync compile-worker`, or `compile_worker_in_process` in `serve`) take jobs round
+//! robin by requester with `FOR UPDATE SKIP LOCKED` under a per-claim token, run `concurrency`
+//! at once in the [`scribyra_compile`] sandbox, heartbeat each one, and store the PDF and log
+//! sealed with the project's data key under the claim's slot. A job whose worker stops
 //! heartbeating is requeued once, then failed; SIGTERM requeues what does not finish within
 //! `shutdown_grace_seconds`. Only the newest successful PDF and log and the newest failed log
 //! keep their blobs. Every change `NOTIFY`s the project, so heads polls wake.
@@ -44,9 +46,15 @@ use tokio::{sync::watch, task::JoinSet};
 pub const CHANNEL: &str = "scribyra_compile";
 /// Serialises the queue bound across replicas (`pg_advisory_xact_lock`).
 const QUEUE_LOCK: i64 = 0x5343_5259_434f_4d50;
+/// With the account's `hashtext`, serialises one member's rate checks (`pg_advisory_xact_lock`).
+const RATE_LOCK: i32 = 0x5352_4154;
+/// How often finished rows past `retention_days` are looked for (by each process that reaps).
+const SWEEP: Duration = Duration::from_secs(600);
 /// How often an idle worker looks for jobs when no notice arrives.
 const POLL: Duration = Duration::from_secs(2);
 const NO_MAIN: &str = "choose a main .tex file first";
+/// The log members see when the sandbox itself failed.
+const SANDBOX_FAILED: &str = "The compile sandbox on the server failed before TeX could finish. This is not caused by the project; the server's operator has the details.";
 
 /// The compile mode members see for a project: the deployment's, or with `both` the project's.
 pub fn effective_mode(config: &Config, project_setting: &str) -> &'static str {
@@ -113,19 +121,6 @@ pub fn source(m: &Materialised) -> Result<Source, &'static str> {
     let digest = format!("scribyra-compile/1\n{main}\n{bib}\n{}", parts.concat());
     Ok(Source { content_hash: blob::hash(digest.as_bytes()), engine, main, bibliography })
 }
-/// The sandbox job for materialised files (with asset bytes), or the reason, for the log.
-fn job(m: &Materialised, s: &Source, source_date_epoch: u64) -> Result<scribyra_compile::Job, String> {
-    let mut files = Vec::new();
-    for f in &m.files {
-        match &f.content {
-            Content::Folder => {}
-            Content::Text(t) => files.push((f.path.clone(), t.as_bytes().to_vec())),
-            Content::Asset { bytes: Some(b), .. } => files.push((f.path.clone(), b.clone())),
-            Content::Asset { bytes: None, .. } => return Err(format!("{} has not reached the server yet; compile again once it has synced.", f.path)),
-        }
-    }
-    Ok(scribyra_compile::Job { files, main: s.main.clone(), engine: s.engine, bibliography: s.bibliography, source_date_epoch })
-}
 /// The sandbox limits from `deployment.compile_limits` (the rest at the runner's defaults).
 pub fn limits(c: &CompileLimits) -> scribyra_compile::Limits {
     scribyra_compile::Limits { cpu_seconds: c.cpu_seconds.into(), wall_seconds: c.wall_seconds.into(), memory_mib: c.memory_mib.into(), scratch_mib: c.scratch_mib.into(), output_mib: c.output_mib.into(), passes: c.passes, ..scribyra_compile::Limits::default() }
@@ -148,6 +143,9 @@ pub enum RequestError {
     Compacted,
     BeyondHead,
     RateLimited,
+    /// The requester, or the project's owner, has `active_per_member`/`active_per_owner` jobs
+    /// queued or running already.
+    Busy,
     QueueFull,
     Internal,
 }
@@ -165,6 +163,17 @@ pub struct Claimed {
     pub seq: i64,
     pub engine: Engine,
     pub queued_secs: i64,
+    /// This claim's random token (the `worker` column): a job taken back and claimed again,
+    /// even by the same process, gets a new one, so the earlier claim can no longer heartbeat,
+    /// finish or give it back (review H1).
+    pub holder: String,
+}
+impl Claimed {
+    /// The slot this claim's PDF and log are stored under (blob name and associated data): the
+    /// job and the claim, so a lost claim's late finish never touches another claim's blobs.
+    fn slot(&self) -> String {
+        format!("{}-{}", self.job, &self.holder[..16])
+    }
 }
 /// How a job ended, before it is stored.
 #[derive(Debug, Clone)]
@@ -200,7 +209,15 @@ impl Finished {
             Status::Cancelled => ("cancelled".into(), Some("the compile was cancelled")),
             Status::SandboxFailure => ("sandbox_failure".into(), Some("the compile sandbox failed")),
         };
-        Finished { outcome, error, content_hash: Some(content_hash), cpu_ms: o.cpu_ms, passes: o.passes, pdf: o.pdf, log: Some(o.log) }
+        // Review L4: a sandbox failure's log is the host's error (paths of this machine); members
+        // get a fixed text and the operator's log the details.
+        let log = if o.status == Status::SandboxFailure {
+            println!("{}", json!({"event": "compile_sandbox_failure", "reason": o.log.chars().take(2000).collect::<String>()}));
+            SANDBOX_FAILED.to_owned()
+        } else {
+            o.log
+        };
+        Finished { outcome, error, content_hash: Some(content_hash), cpu_ms: o.cpu_ms, passes: o.passes, pdf: o.pdf, log: Some(log) }
     }
 }
 fn ms(column: &str) -> String {
@@ -214,6 +231,8 @@ pub struct Compiles {
     /// The configured TeX Live store path's name (part of the cache key).
     pub texlive: String,
     heartbeat_timeout: u64,
+    /// When this process last swept old rows.
+    swept: std::sync::Mutex<Option<Instant>>,
 }
 impl Compiles {
     /// `None` unless the deployment's `compile` is `server` or `both`.
@@ -225,7 +244,7 @@ impl Compiles {
         }
         let texlive = d.texlive.as_ref()?.file_name()?.to_string_lossy().into_owned();
         let (limits, heartbeat_timeout) = (d.compile_limits.clone(), config.compile_heartbeat_timeout_seconds);
-        Some(Arc::new(Self { projects, limits, texlive, heartbeat_timeout }))
+        Some(Arc::new(Self { projects, limits, texlive, heartbeat_timeout, swept: Default::default() }))
     }
     fn pool(&self) -> &PgPool {
         &self.projects.store.pool
@@ -234,8 +253,35 @@ impl Compiles {
         self.projects.store.config.deployment.as_ref().map(|d| d.compile).unwrap_or_default()
     }
 
+    /// Counts a request against `per_member_per_hour` and `per_project_per_minute` before
+    /// anything is materialised (review M2: every request replayed the whole project first, and
+    /// cached, existing and failed answers were free). Refused requests are not recorded.
+    async fn admit(&self, project: &str, account: &str) -> Result<(), RequestError> {
+        let mut tx = self.pool().begin().await?;
+        // Review L1: one member's requests on several projects at once are counted one by one.
+        sqlx::query("SELECT pg_advisory_xact_lock($1, hashtext($2))").bind(RATE_LOCK).bind(account).execute(&mut *tx).await?;
+        let (member, recent): (i64, i64) = sqlx::query_as(
+            "SELECT (SELECT count(*) FROM compile_requests WHERE account = $1 AND at > now() - interval '1 hour'),
+                    (SELECT count(*) FROM compile_requests WHERE project = $2 AND at > now() - interval '1 minute')",
+        )
+        .bind(account)
+        .bind(project)
+        .fetch_one(&mut *tx)
+        .await?;
+        if member >= self.limits.per_member_per_hour as i64 || recent >= self.limits.per_project_per_minute as i64 {
+            return Err(RequestError::RateLimited);
+        }
+        let n = sqlx::query("INSERT INTO compile_requests (account, project) SELECT $1, project FROM sr_projects WHERE project = $2 AND deleted IS NULL").bind(account).bind(project).execute(&mut *tx).await?.rows_affected();
+        if n == 0 {
+            return Err(RequestError::NotFound);
+        }
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// Queues a compile of `project` at `seq` (its head when `None`) for `account`.
     pub async fn request(&self, project: &str, account: &str, seq: Option<i64>) -> Result<Requested, RequestError> {
+        self.admit(project, account).await?;
         let m = match self.projects.materialise_at(project, seq, false).await {
             Ok(m) => m,
             Err(e) if e.to_string() == server_projects::COMPACTED => return Err(RequestError::Compacted),
@@ -245,21 +291,22 @@ impl Compiles {
         };
         let s = source(&m).map_err(|_| RequestError::NoMain)?;
         let engine = engine_name(s.engine);
+        let mut tx = self.pool().begin().await?;
+        // The project row serialises requests for one project (and against workers finishing).
+        let owner: Option<String> = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
+        let Some(owner) = owner else { return Err(RequestError::NotFound) };
+        // Under the project's lock (which finishing jobs take too): the PDF a cached answer
+        // names is the one `GET …/compile/pdf` serves, and `?job=` asks for exactly it (review
+        // L5: looked up before the lock, it could name a PDF already replaced).
         let cached: Option<String> = sqlx::query_scalar("SELECT job FROM compiles WHERE project = $1 AND state = 'done' AND pdf_blob IS NOT NULL AND content_hash = $2 AND engine = $3 AND texlive = $4 ORDER BY finished DESC LIMIT 1")
             .bind(project)
             .bind(&s.content_hash)
             .bind(engine)
             .bind(&self.texlive)
-            .fetch_optional(self.pool())
+            .fetch_optional(&mut *tx)
             .await?;
         if let Some(job) = cached {
             return Ok(Requested::Cached { job });
-        }
-        let mut tx = self.pool().begin().await?;
-        // The project row serialises requests for one project (and against workers finishing).
-        let live: Option<i32> = sqlx::query_scalar("SELECT 1 FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
-        if live.is_none() {
-            return Err(RequestError::NotFound);
         }
         let same: Option<(String, String)> = sqlx::query_as("SELECT job, state FROM compiles WHERE project = $1 AND state IN ('queued', 'running') AND content_hash = $2 AND engine = $3 AND texlive = $4 ORDER BY queued DESC LIMIT 1")
             .bind(project)
@@ -271,17 +318,27 @@ impl Compiles {
         if let Some((job, state)) = same {
             return Ok(Requested::Existing { job, state });
         }
-        let recent: i64 = sqlx::query_scalar("SELECT count(*) FROM compiles WHERE requested_by = $1 AND queued > now() - interval '1 hour'").bind(account).fetch_one(&mut *tx).await?;
-        if recent >= self.limits.per_member_per_hour as i64 {
-            return Err(RequestError::RateLimited);
-        }
+        // The queue lock serialises the bounds below (the queue, each member's and each owner's
+        // active jobs) across projects and replicas.
+        sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(QUEUE_LOCK).execute(&mut *tx).await?;
         let replaced: Option<String> = sqlx::query_scalar("UPDATE compiles SET state = 'replaced', finished = now() WHERE project = $1 AND state = 'queued' RETURNING job").bind(project).fetch_optional(&mut *tx).await?;
         if replaced.is_none() {
-            sqlx::query("SELECT pg_advisory_xact_lock($1)").bind(QUEUE_LOCK).execute(&mut *tx).await?;
             let queued: i64 = sqlx::query_scalar("SELECT count(*) FROM compiles WHERE state = 'queued'").fetch_one(&mut *tx).await?;
             if queued >= self.limits.queue as i64 {
                 return Err(RequestError::QueueFull);
             }
+        }
+        // Review M1: one member (or one owner's projects) could fill the queue.
+        let (mine, owners): (i64, i64) = sqlx::query_as(
+            "SELECT count(*) FILTER (WHERE c.requested_by = $1), count(*) FILTER (WHERE p.owner = $2)
+             FROM compiles c JOIN sr_projects p USING (project) WHERE c.state IN ('queued', 'running') AND (c.requested_by = $1 OR p.owner = $2)",
+        )
+        .bind(account)
+        .bind(&owner)
+        .fetch_one(&mut *tx)
+        .await?;
+        if mine >= self.limits.active_per_member as i64 || owners >= self.limits.active_per_owner as i64 {
+            return Err(RequestError::Busy);
         }
         let job = server_projects::random_hex();
         sqlx::query("INSERT INTO compiles (job, project, seq, content_hash, engine, texlive, requested_by) VALUES ($1, $2, $3, $4, $5, $6, $7)")
@@ -300,15 +357,21 @@ impl Compiles {
         Ok(Requested::Queued { job, replaced: replaced.is_some() })
     }
 
-    /// Takes the oldest queued job whose project has none running.
-    pub async fn claim(&self, worker: &str) -> Result<Option<Claimed>, Error> {
+    /// Takes a queued job whose project has none running, under a new claim token: round robin
+    /// by requester (review M1), so the requester with the fewest running jobs goes first, each
+    /// requester's oldest job first, then the oldest of those.
+    pub async fn claim(&self) -> Result<Option<Claimed>, Error> {
+        let holder = server_projects::random_hex();
         let row = sqlx::query(
             "UPDATE compiles SET state = 'running', worker = $1, started = now(), heartbeat = now(), attempts = attempts + 1
              WHERE job = (SELECT c.job FROM compiles c WHERE c.state = 'queued' AND NOT EXISTS (SELECT 1 FROM compiles r WHERE r.project = c.project AND r.state = 'running')
-                          ORDER BY c.queued LIMIT 1 FOR UPDATE SKIP LOCKED)
+                          ORDER BY (SELECT count(*) FROM compiles r WHERE r.state = 'running' AND r.requested_by IS NOT DISTINCT FROM c.requested_by),
+                                   (SELECT count(*) FROM compiles q WHERE q.state = 'queued' AND q.requested_by IS NOT DISTINCT FROM c.requested_by AND q.queued < c.queued),
+                                   c.queued
+                          LIMIT 1 FOR UPDATE SKIP LOCKED)
              RETURNING job, project, seq, engine, extract(epoch FROM queued)::bigint",
         )
-        .bind(worker)
+        .bind(&holder)
         .fetch_optional(self.pool())
         .await;
         let row = match row {
@@ -318,19 +381,45 @@ impl Compiles {
             Err(e) => return Err(e.into()),
         };
         let Some(r) = row else { return Ok(None) };
-        let claimed = Claimed { job: r.get(0), project: r.get(1), seq: r.get(2), engine: engine_from(r.get::<&str, _>(3)), queued_secs: r.get(4) };
+        let claimed = Claimed { job: r.get(0), project: r.get(1), seq: r.get(2), engine: engine_from(r.get::<&str, _>(3)), queued_secs: r.get(4), holder };
         let mut tx = self.pool().begin().await?;
         server_projects::notify(&mut tx, &claimed.project).await?;
         tx.commit().await?;
         Ok(Some(claimed))
     }
-    /// Reports a running job alive; `false` when the worker no longer holds it.
-    pub async fn heartbeat(&self, job: &str, worker: &str) -> Result<bool, Error> {
-        let n = sqlx::query("UPDATE compiles SET heartbeat = now() WHERE job = $1 AND worker = $2 AND state = 'running'").bind(job).bind(worker).execute(self.pool()).await?.rows_affected();
+    /// Reports a running job alive; `false` when this claim no longer holds it.
+    pub async fn heartbeat(&self, claimed: &Claimed) -> Result<bool, Error> {
+        let n = sqlx::query("UPDATE compiles SET heartbeat = now() WHERE job = $1 AND worker = $2 AND state = 'running'").bind(&claimed.job).bind(&claimed.holder).execute(self.pool()).await?.rows_affected();
         Ok(n == 1)
     }
     /// Takes back running jobs whose worker stopped heartbeating: requeued once, then failed.
+    /// Every [`SWEEP`] also removes request records older than an hour and finished rows older
+    /// than `retention_days` (review L3: rows were kept forever), except those holding the
+    /// newest PDF or log and each project's latest job.
     pub async fn reap(&self) -> Result<u64, Error> {
+        let due = {
+            let mut swept = self.swept.lock().unwrap();
+            let due = swept.is_none_or(|t| t.elapsed() >= SWEEP);
+            if due {
+                *swept = Some(Instant::now());
+            }
+            due
+        };
+        if due {
+            sqlx::query("DELETE FROM compile_requests WHERE at < now() - interval '1 hour'").execute(self.pool()).await?;
+            let n = sqlx::query(
+                "DELETE FROM compiles c WHERE c.state IN ('done', 'failed', 'replaced') AND c.finished < now() - make_interval(days => $1)
+                   AND c.pdf_blob IS NULL AND c.log_blob IS NULL
+                   AND c.job IS DISTINCT FROM (SELECT l.job FROM compiles l WHERE l.project = c.project AND l.state <> 'replaced' ORDER BY l.queued DESC LIMIT 1)",
+            )
+            .bind(self.limits.retention_days as i32)
+            .execute(self.pool())
+            .await?
+            .rows_affected();
+            if n > 0 {
+                println!("{}", json!({"event": "compile_rows_expired", "rows": n}));
+            }
+        }
         let expired: Vec<(String, String)> = sqlx::query_as("SELECT job, project FROM compiles WHERE state = 'running' AND heartbeat < now() - make_interval(secs => $1)")
             .bind(self.heartbeat_timeout as f64)
             .fetch_all(self.pool())
@@ -346,10 +435,10 @@ impl Compiles {
         Ok(n)
     }
     /// A worker gives a job back (SIGTERM): requeued without using up its retry.
-    pub async fn requeue(&self, claimed: &Claimed, worker: &str) -> Result<bool, Error> {
-        Ok(self.take_back(&claimed.job, &claimed.project, Some(worker)).await?.is_some())
+    pub async fn requeue(&self, claimed: &Claimed) -> Result<bool, Error> {
+        Ok(self.take_back(&claimed.job, &claimed.project, Some(&claimed.holder)).await?.is_some())
     }
-    /// Expired (`worker` `None`) or handed back by `worker`: back to the queue, `replaced` when a
+    /// Expired (`worker` `None`) or handed back by the claim `worker`: back to the queue, `replaced` when a
     /// newer request is queued already, `failed` after a second lost attempt.
     async fn take_back(&self, job: &str, project: &str, worker: Option<&str>) -> Result<Option<&'static str>, Error> {
         let mut tx = self.pool().begin().await?;
@@ -388,9 +477,11 @@ impl Compiles {
         Ok(Some(state))
     }
 
-    /// The claimed job's sandbox input (or how it failed before running).
+    /// The claimed job's sandbox input (or how it failed before running). Sizes are checked
+    /// from the texts and the assets' recorded sizes before any asset is read, and again as each
+    /// one is read (review M3: every asset was read into memory before the size check).
     pub async fn prepare(&self, claimed: &Claimed) -> Result<(scribyra_compile::Job, String), Finished> {
-        let m = match self.projects.materialise_at(&claimed.project, Some(claimed.seq), true).await {
+        let m = match self.projects.materialise_at(&claimed.project, Some(claimed.seq), false).await {
             Ok(m) => m,
             Err(e) if e.to_string() == server_projects::COMPACTED => {
                 return Err(Finished::failed("rejected", "that version of the project is no longer stored; compile again", Some("The version this compile was asked for has been compacted on the server. Compile again.".into())));
@@ -399,31 +490,63 @@ impl Compiles {
         };
         let mut s = source(&m).map_err(|e| Finished::failed("rejected", NO_MAIN, Some(e.into())))?;
         s.engine = claimed.engine;
-        let job = job(&m, &s, claimed.queued_secs.max(0) as u64).map_err(|log| Finished::failed("rejected", "a file of the project is missing on the server", Some(log)))?;
+        let l = limits(&self.limits);
+        let max = (l.input_mib << 20).min((l.scratch_mib << 20).saturating_sub(1));
+        let too_large = |total: u64| Finished::failed("rejected", "the project's files are too large to compile on the server", Some(format!("The project's files total at least {total} bytes; the server compiles at most {max}.")));
+        let size = |c: &Content| match c {
+            Content::Folder => 0,
+            Content::Text(t) => t.len() as u64,
+            Content::Asset { size, .. } => *size,
+        };
+        let declared: u64 = m.files.iter().map(|f| size(&f.content)).sum();
+        if declared > max {
+            return Err(too_large(declared));
+        }
+        let (mut files, mut total) = (Vec::new(), 0u64);
+        for f in &m.files {
+            let bytes = match &f.content {
+                Content::Folder => continue,
+                Content::Text(t) => t.as_bytes().to_vec(),
+                // Projects from before content-addressed assets keep the bytes inline.
+                Content::Asset { bytes: Some(b), .. } => b.clone(),
+                Content::Asset { hash, .. } => match self.projects.object(&claimed.project, hash).await {
+                    Ok(Some(b)) => b,
+                    Ok(None) => return Err(Finished::failed("rejected", "a file of the project is missing on the server", Some(format!("{} has not reached the server yet; compile again once it has synced.", f.path)))),
+                    Err(_) => return Err(Finished::failed("rejected", "the project could not be read", None)),
+                },
+            };
+            total += bytes.len() as u64;
+            if total > max {
+                return Err(too_large(total));
+            }
+            files.push((f.path.clone(), bytes));
+        }
+        let job = scribyra_compile::Job { files, main: s.main.clone(), engine: s.engine, bibliography: s.bibliography, source_date_epoch: claimed.queued_secs.max(0) as u64 };
         Ok((job, s.content_hash))
     }
 
-    /// Stores a finished job (sealed PDF and log, sizes, CPU time) if `worker` still holds it,
+    /// Stores a finished job (sealed PDF and log, sizes, CPU time) if this claim still holds it,
     /// drops the blobs of older results, charges the project's quota and wakes the members.
-    /// Over quota the job fails with no PDF. Returns the state written, if any.
-    pub async fn finish(&self, claimed: &Claimed, worker: &str, f: Finished) -> Result<Option<&'static str>, Error> {
+    /// Over quota the job fails with no PDF. Returns the state written, if any. The blobs are
+    /// named after the claim, so only blobs this call wrote are ever removed here, and only once
+    /// the database refused them (review H1).
+    pub async fn finish(&self, claimed: &Claimed, f: Finished) -> Result<Option<&'static str>, Error> {
         let project = &claimed.project;
         let Some(key) = self.projects.project_key(project).await? else { return Ok(None) };
         let mut f = f;
         if f.pdf.as_ref().is_some_and(|p| p.len() + 64 > blob::MAX_BLOB_BYTES) {
             f = Finished { pdf: None, outcome: "limit_output".into(), error: Some("the compile wrote too much output"), ..f };
         }
+        let slot = claimed.slot();
         let mut stored = Vec::new();
-        let sealed = |kind: &str, plain: &[u8]| (format!("sr/{project}/c/{}-{kind}", claimed.job), seal(&key, &item_ad(project, kind, &claimed.job), plain));
+        let sealed = |kind: &str, plain: &[u8]| (format!("sr/{project}/c/{slot}-{kind}"), seal(&key, &item_ad(project, kind, &slot), plain));
         let items = [f.pdf.as_deref().map(|p| sealed("pdf", p)), f.log.as_deref().map(|l| sealed("log", l.as_bytes()))];
         let mut slots = [None, None];
         for (slot, item) in slots.iter_mut().zip(items) {
             if let Some((name, bytes)) = item {
                 let size = bytes.len() as i64;
                 if let Err(e) = self.projects.store.blobs.put(&BlobKey::new(name.clone())?, Bytes::from(bytes)).await {
-                    for name in stored {
-                        self.projects.forget_blob(Some(name)).await;
-                    }
+                    self.forget(stored).await;
                     return Err(e.into());
                 }
                 stored.push(name.clone());
@@ -432,31 +555,39 @@ impl Compiles {
         }
         let [pdf, log] = slots;
         let state = if f.outcome == "success" && pdf.is_some() { "done" } else { "failed" };
-        let written = self.store_result(claimed, worker, &f, state, pdf.clone(), log.clone()).await;
-        match written {
+        match self.store_result(claimed, &f, state, pdf.clone(), log.clone()).await {
             Ok(Some(true)) => Ok(Some(state)),
             Ok(Some(false)) => {
-                for name in stored {
-                    self.projects.forget_blob(Some(name)).await;
-                }
+                self.forget(stored).await;
                 let over = Finished::failed("quota", "the PDF does not fit in the project's storage quota", None);
-                Ok(self.store_result(claimed, worker, &over, "failed", None, None).await?.map(|_| "failed"))
+                Ok(self.store_result(claimed, &over, "failed", None, None).await?.map(|_| "failed"))
             }
-            Ok(None) | Err(_) => {
-                for name in stored {
-                    self.projects.forget_blob(Some(name)).await;
+            Ok(None) => {
+                self.forget(stored).await;
+                Ok(None)
+            }
+            // The commit may have gone through: remove the blobs only if no row names them.
+            Err(e) => {
+                let named: Result<bool, sqlx::Error> = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM compiles WHERE pdf_blob = ANY($1) OR log_blob = ANY($1))").bind(&stored).fetch_one(self.pool()).await;
+                if let Ok(false) = named {
+                    self.forget(stored).await;
                 }
-                written.map(|_| None)
+                Err(e)
             }
         }
     }
+    async fn forget(&self, names: Vec<String>) {
+        for name in names {
+            self.projects.forget_blob(Some(name)).await;
+        }
+    }
     /// `Some(false)`: over quota, nothing written. `None`: the job is no longer this worker's.
-    async fn store_result(&self, claimed: &Claimed, worker: &str, f: &Finished, state: &str, pdf: Option<(String, i64)>, log: Option<(String, i64)>) -> Result<Option<bool>, Error> {
+    async fn store_result(&self, claimed: &Claimed, f: &Finished, state: &str, pdf: Option<(String, i64)>, log: Option<(String, i64)>) -> Result<Option<bool>, Error> {
         let project = &claimed.project;
         let mut tx = self.pool().begin().await?;
         let row: Option<(String, i64)> = sqlx::query_as("SELECT owner, bytes FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(project).fetch_optional(&mut *tx).await?;
         let Some((owner, project_bytes)) = row else { return Ok(None) };
-        let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM compiles WHERE job = $1 AND state = 'running' AND worker = $2 FOR UPDATE").bind(&claimed.job).bind(worker).fetch_optional(&mut *tx).await?;
+        let held: Option<i32> = sqlx::query_scalar("SELECT 1 FROM compiles WHERE job = $1 AND state = 'running' AND worker = $2 FOR UPDATE").bind(&claimed.job).bind(&claimed.holder).fetch_optional(&mut *tx).await?;
         if held.is_none() {
             return Ok(None);
         }
@@ -557,9 +688,12 @@ impl Compiles {
         let Some(r) = row else { return Ok(None) };
         let (id, seq, blob_key, size, error): (String, i64, Option<String>, Option<i64>, Option<String>) = (r.get(0), r.get(1), r.get(2), r.get(3), r.get(4));
         let Some(blob_key) = blob_key else { return Ok(Some((id, seq, error.unwrap_or_default().into_bytes()))) };
+        // The slot is in the blob's name: `sr/<project>/c/<slot>-<kind>` (`<job>` for results
+        // stored before claims had tokens, `<job>-<claim>` since).
+        let slot = blob_key.strip_prefix(&format!("sr/{project}/c/")).and_then(|r| r.strip_suffix(&format!("-{kind}"))).ok_or("a compile result has an unexpected name")?.to_owned();
         let key = self.projects.project_key(project).await?.ok_or("the project key does not open")?;
         let sealed = self.projects.read_body(None, Some(blob_key), size.unwrap_or(0)).await?;
-        let plain = open(&key, &item_ad(project, kind, &id), &sealed).ok_or("a compile result does not open")?;
+        let plain = open(&key, &item_ad(project, kind, &slot), &sealed).ok_or("a compile result does not open")?;
         Ok(Some((id, seq, plain)))
     }
 }
@@ -586,13 +720,63 @@ pub fn runner(config: &Config) -> std::io::Result<Arc<Bubblewrap>> {
 pub struct Worker {
     compiles: Arc<Compiles>,
     runner: Arc<dyn Runner>,
-    id: String,
     heartbeat: Duration,
+    /// Without a heartbeat that went through for this long a job counts as lost: the reaper may
+    /// take it back once `compile_heartbeat_timeout_seconds` pass, so the worker stops first.
+    lost_after: Duration,
+}
+/// What heartbeats said while a job ran.
+enum Beat {
+    Held,
+    /// Taken back, or no heartbeat went through for `lost_after`.
+    Lost,
+}
+/// One job's heartbeats: every `heartbeat` through every phase (prepare, run, store).
+struct Pulse {
+    tick: tokio::time::Interval,
+    last_ok: Instant,
 }
 impl Worker {
     pub fn new(compiles: Arc<Compiles>, runner: Arc<dyn Runner>) -> Arc<Worker> {
-        let heartbeat = Duration::from_secs(compiles.projects.store.config.compile_heartbeat_seconds);
-        Arc::new(Worker { compiles, runner, id: server_projects::random_hex(), heartbeat })
+        let config = &compiles.projects.store.config;
+        let heartbeat = Duration::from_secs(config.compile_heartbeat_seconds);
+        let lost_after = Duration::from_secs(config.compile_heartbeat_timeout_seconds).saturating_sub(heartbeat).max(heartbeat);
+        Arc::new(Worker { compiles, runner, heartbeat, lost_after })
+    }
+    fn pulse(&self) -> Pulse {
+        let mut tick = tokio::time::interval(self.heartbeat);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.reset();
+        Pulse { tick, last_ok: Instant::now() }
+    }
+    /// Waits for the next tick and heartbeats once. Errors count as lost once none went through
+    /// for `lost_after` (review H1: they were ignored, so a worker cut off from the database
+    /// kept compiling a job the reaper had handed to someone else).
+    async fn beat(&self, claimed: &Claimed, pulse: &mut Pulse) -> Beat {
+        pulse.tick.tick().await;
+        // A database that does not answer counts as an error, not as a wait.
+        match tokio::time::timeout(self.heartbeat, self.compiles.heartbeat(claimed)).await.unwrap_or_else(|_| Err("heartbeat timed out".into())) {
+            Ok(true) => {
+                pulse.last_ok = Instant::now();
+                Beat::Held
+            }
+            Ok(false) => Beat::Lost,
+            Err(_) if pulse.last_ok.elapsed() >= self.lost_after => Beat::Lost,
+            Err(_) => {
+                println!("{}", json!({"event": "compile_heartbeat_failed"}));
+                Beat::Held
+            }
+        }
+    }
+    /// Drives `work` while heartbeating; `None` (and `work` dropped) once the job is lost.
+    async fn alive<T>(&self, claimed: &Claimed, pulse: &mut Pulse, work: impl std::future::Future<Output = T>) -> Option<T> {
+        tokio::pin!(work);
+        loop {
+            tokio::select! {
+                out = &mut work => return Some(out),
+                beat = self.beat(claimed, pulse) => if let Beat::Lost = beat { return None },
+            }
+        }
     }
     /// Takes and runs jobs until `shutdown`; then lets running jobs finish for up to `grace`
     /// and gives back (requeues) those that do not.
@@ -614,7 +798,7 @@ impl Worker {
                     println!("{}", json!({"event": "compile_reap_failed"}));
                 }
             }
-            match self.compiles.claim(&self.id).await {
+            match self.compiles.claim().await {
                 Ok(Some(claimed)) => {
                     tasks.spawn(self.clone().execute(claimed, permit, aborted.clone()));
                     continue;
@@ -655,18 +839,19 @@ impl Worker {
     async fn execute(self: Arc<Self>, claimed: Claimed, _slot: tokio::sync::OwnedSemaphorePermit, mut aborted: watch::Receiver<bool>) {
         let started = Instant::now();
         metrics::global().running(1);
-        let finished = match self.compiles.prepare(&claimed).await {
-            Err(f) => Some(f),
-            Ok((job, hash)) => {
+        let mut pulse = self.pulse();
+        let finished = match self.alive(&claimed, &mut pulse, self.compiles.prepare(&claimed)).await {
+            None => None,
+            Some(Err(f)) => Some(f),
+            Some(Ok((job, hash))) => {
                 let mut running = scribyra_compile::spawn(self.runner.clone(), job, limits(&self.compiles.limits));
-                let mut tick = tokio::time::interval(self.heartbeat);
-                tick.tick().await;
                 loop {
                     tokio::select! {
                         outcome = &mut running => break Some(Finished::from_outcome(outcome, hash)),
-                        _ = tick.tick() => {
-                            if matches!(self.compiles.heartbeat(&claimed.job, &self.id).await, Ok(false)) {
-                                // Taken back after a missed heartbeat: someone else owns it now.
+                        beat = self.beat(&claimed, &mut pulse) => {
+                            if let Beat::Lost = beat {
+                                // Taken back after a missed heartbeat (someone else may own it
+                                // now), or cut off from the database for too long.
                                 running.cancel();
                                 let _ = (&mut running).await;
                                 break None;
@@ -675,7 +860,7 @@ impl Worker {
                         _ = async { aborted.wait_for(|a| *a).await.is_ok() } => {
                             running.cancel();
                             let _ = (&mut running).await;
-                            let requeued = self.compiles.requeue(&claimed, &self.id).await.unwrap_or(false);
+                            let requeued = self.compiles.requeue(&claimed).await.unwrap_or(false);
                             println!("{}", json!({"event": "compile_requeued", "requeued": requeued}));
                             metrics::global().compile_job("requeued", started.elapsed().as_millis() as u64, 0);
                             metrics::global().running(-1);
@@ -686,9 +871,23 @@ impl Worker {
             }
         };
         metrics::global().running(-1);
-        let Some(finished) = finished else { return };
+        let Some(finished) = finished else {
+            println!("{}", json!({"event": "compile_discarded"}));
+            return;
+        };
         let (outcome, cpu_ms) = (finished.outcome.clone(), finished.cpu_ms);
-        let state = self.compiles.finish(&claimed, &self.id, finished).await;
+        // Storing keeps heartbeating (uploads take time) but is never cut short: whether the
+        // claim still holds the job is decided under the project's lock when the row is written.
+        let state = {
+            let store = self.compiles.finish(&claimed, finished);
+            tokio::pin!(store);
+            loop {
+                tokio::select! {
+                    state = &mut store => break state,
+                    _ = self.beat(&claimed, &mut pulse) => {}
+                }
+            }
+        };
         let wall_ms = started.elapsed().as_millis() as u64;
         metrics::global().compile_job(&outcome, wall_ms, cpu_ms);
         match state {
@@ -803,6 +1002,7 @@ async fn start(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderM
         Err(e) => {
             metrics::global().compile_request(match e {
                 RequestError::RateLimited => "rate_limited",
+                RequestError::Busy => "busy",
                 RequestError::QueueFull => "queue_full",
                 _ => "refused",
             });
@@ -817,6 +1017,7 @@ async fn start(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderM
                 RequestError::Compacted => error(StatusCode::GONE, "compacted"),
                 RequestError::BeyondHead => error(StatusCode::BAD_REQUEST, "seq is beyond the head"),
                 RequestError::RateLimited => retry(error(StatusCode::TOO_MANY_REQUESTS, "compile limit reached; try again later")),
+                RequestError::Busy => retry(error(StatusCode::TOO_MANY_REQUESTS, "too many compiles are waiting for you or this project's owner; try again when one finishes")),
                 RequestError::QueueFull => retry(error(StatusCode::SERVICE_UNAVAILABLE, "the compile queue is full; try again later")),
                 RequestError::Internal => internal(()),
             }
@@ -847,7 +1048,7 @@ async fn status(State(sr): State<Shared>, Path(p): Path<String>, headers: Header
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct LogQuery {
+struct JobQuery {
     #[serde(default)]
     job: Option<String>,
 }
@@ -874,16 +1075,17 @@ async fn artefact(sr: Shared, p: String, headers: HeaderMap, kind: &'static str,
             h.insert(header::HeaderName::from_static("scribyra-compile-seq"), HeaderValue::from(seq));
             response
         }
+        Ok(None) if job.is_some() => error(StatusCode::NOT_FOUND, if kind == "pdf" { "that compile's PDF is not kept" } else { "that compile's log is not kept" }),
         Ok(None) => error(StatusCode::NOT_FOUND, if kind == "pdf" { "no PDF yet" } else { "no compile log" }),
         Err(e) => internal(e),
     }
 }
-/// `GET …/compile/pdf`: any member; the latest successful PDF.
-async fn pdf(State(sr): State<Shared>, Path(p): Path<String>, headers: HeaderMap) -> Response {
-    artefact(sr, p, headers, "pdf", None).await
+/// `GET …/compile/pdf?job=`: any member; the latest successful PDF, or `job`'s while it is kept.
+async fn pdf(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<JobQuery>, headers: HeaderMap) -> Response {
+    artefact(sr, p, headers, "pdf", q.job).await
 }
 /// `GET …/compile/log?job=`: any member; a kept log.
-async fn log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<LogQuery>, headers: HeaderMap) -> Response {
+async fn log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<JobQuery>, headers: HeaderMap) -> Response {
     artefact(sr, p, headers, "log", q.job).await
 }
 #[derive(Deserialize)]
@@ -891,7 +1093,8 @@ async fn log(State(sr): State<Shared>, Path(p): Path<String>, Query(q): Query<Lo
 struct Settings {
     compile: String,
 }
-/// `PUT …/settings {compile}`: owners and editors, when the deployment's `compile` is `both`.
+/// `PUT …/settings {compile}`: owners and editors who are not guests (as for sharing; review
+/// L2), when the deployment's `compile` is `both`.
 async fn settings(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Settings>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
         Ok(c) => c,
@@ -901,8 +1104,8 @@ async fn settings(State(sr): State<Shared>, Path(p): Path<String>, source: Optio
         Ok(a) => a,
         Err(r) => return r,
     };
-    if !access.writes() {
-        return error(StatusCode::FORBIDDEN, "only the owner and editors can change this project's settings");
+    if !access.writes() || caller.role == crate::sso::Role::Guest {
+        return error(StatusCode::FORBIDDEN, "only the owner and editors who are not guests can change this project's settings");
     }
     if !matches!(request.compile.as_str(), "browser" | "server") {
         return error(StatusCode::BAD_REQUEST, "compile must be \"browser\" or \"server\"");
@@ -957,5 +1160,16 @@ mod tests {
         assert_eq!(biber.bibliography, Bibliography::Biber);
         assert_eq!(source(&m(&[("main.tex", "\\usepackage[backend = bibtex]{biblatex}")], None, None)).unwrap().bibliography, Bibliography::Bibtex);
         assert_eq!(source(&m(&[("main.tex", "\\bibliography{refs}")], None, None)).unwrap().bibliography, Bibliography::Bibtex);
+    }
+
+    #[test]
+    fn a_sandbox_failure_shows_members_no_host_details() {
+        let o = Outcome { status: Status::SandboxFailure, pdf: None, log: "could not start the sandbox: No such file or directory (os error 2): /var/lib/scribyra/cgroup/job-1".into(), cpu_ms: 0, passes: 0 };
+        let f = Finished::from_outcome(o, "h".into());
+        assert_eq!((f.outcome.as_str(), f.error), ("sandbox_failure", Some("the compile sandbox failed")));
+        assert_eq!(f.log.as_deref(), Some(SANDBOX_FAILED));
+        // Other outcomes keep TeX's log.
+        let o = Outcome { status: Status::TexError, pdf: None, log: "! Undefined control sequence.".into(), cpu_ms: 5, passes: 1 };
+        assert_eq!(Finished::from_outcome(o, "h".into()).log.as_deref(), Some("! Undefined control sequence."));
     }
 }

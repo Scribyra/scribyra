@@ -175,7 +175,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
 | `providers` | required | 1–16 OpenID Connect providers ([Sign-in](#single-sign-on-oidc)) |
 | `quotas` | 100 GiB / 1 GiB / 10 GiB | `deployment_bytes`, `project_bytes`, `member_bytes` (server-readable mode) |
 | `audit_retention_days` | 400 | 30–3650 |
-| `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour` ([Server compile](#server-compile)) |
+| `compile_limits` | design section 6 | `cpu_seconds`, `wall_seconds`, `memory_mib`, `scratch_mib`, `output_mib`, `passes` (each job, [sandbox](#server-compile-sandbox)); `concurrency` (jobs per worker), `queue` (waiting jobs), `per_member_per_hour`, `per_project_per_minute`, `active_per_member`, `active_per_owner`, `retention_days` ([Server compile](#server-compile)) |
 | `texlive` | none | A TeX Live tree, for server compile |
 
 The organisation's ID is random, made at first start and recorded with the mode (a database that
@@ -710,30 +710,48 @@ the effective mode as `compile` (`"browser"` or `"server"`).
 
 | Route | Body → answer |
 | --- | --- |
-| `POST /v1/sr/projects/{p}/compile` | `{seq?}` (owner, editors; reviewers and viewers `403`). Materialises the project at `seq` (default: the head) with its main file (`meta.mainFile`, else a top-level `main.tex`; none: `400`), engine (`meta.engine`: `pdflatex` (default), `xelatex`, `lualatex`) and bibliography tool (Biber when a file loads BibLaTeX without `backend=bibtex`, else BibTeX when the `.aux` asks). → `202 {job, state: "queued", replaced}` (`replaced`: it took the place of this project's queued job); `200 {job, state, cached: true}` when a stored PDF has the same files, engine and TeX Live; `200 {job, state}` when the same files are already queued or running. `409` with `compile: "both"` and the project set to `browser`; `400` for `seq` past the head, `410` below the floor; `429` (`Retry-After: 60`) after `per_member_per_hour` requests in the last hour; `503` (`Retry-After: 60`) when `queue` jobs wait already |
+| `POST /v1/sr/projects/{p}/compile` | `{seq?}` (owner, editors; reviewers and viewers `403`). Materialises the project at `seq` (default: the head) with its main file (`meta.mainFile`, else a top-level `main.tex`; none: `400`), engine (`meta.engine`: `pdflatex` (default), `xelatex`, `lualatex`) and bibliography tool (Biber when a file loads BibLaTeX without `backend=bibtex`, else BibTeX when the `.aux` asks). → `202 {job, state: "queued", replaced}` (`replaced`: it took the place of this project's queued job); `200 {job, state, cached: true}` when a stored PDF has the same files, engine and TeX Live; `200 {job, state}` when the same files are already queued or running. `409` with `compile: "both"` and the project set to `browser`; `400` for `seq` past the head, `410` below the floor; `429` (`Retry-After: 60`) after `per_member_per_hour` requests by the caller in the last hour or `per_project_per_minute` requests on the project in the last minute (checked before the project is materialised; every answer counts, refused ones do not), or while the caller has `active_per_member` jobs queued or running, or the project's owner `active_per_owner` on their projects; `503` (`Retry-After: 60`) when `queue` jobs wait already |
 | `GET /v1/sr/projects/{p}/compile` | Any member. → `200 {mode, head, texlive, job, pdf}`: `job` is the latest request `{id, state (queued, running, done, failed), seq, engine, requestedBy: {account, name}, queued, started, finished, outcome, error, cpuMs, log}` or `null`; `pdf` the latest successful PDF `{job, seq, engine, requestedBy, compiled, bytes, fromHead}` or `null` (`fromHead`: compiled at the current head) |
-| `GET /v1/sr/projects/{p}/compile/pdf` | Any member. → `200 application/pdf` with `Scribyra-Compile-Job` and `Scribyra-Compile-Seq`; `404 {"error":"no PDF yet"}` |
+| `GET /v1/sr/projects/{p}/compile/pdf?job=` | Any member. → `200 application/pdf` with `Scribyra-Compile-Job` and `Scribyra-Compile-Seq`: the latest successful PDF, or `job`'s (as a cached answer or the status names it) while it is kept; `404 {"error":"no PDF yet"}`, or `"that compile's PDF is not kept"` for a `job` |
 | `GET /v1/sr/projects/{p}/compile/log?job=` | Any member. → `200 text/plain`: the log of `job`, or of the latest finished job that kept one (a job that failed before TeX ran gives its error); `404` |
-| `PUT /v1/sr/projects/{p}/settings` | `{compile: "browser"\|"server"}` (owner, editors; else `403`) → `200 {compile}`; `409` unless the deployment's `compile` is `"both"` |
+| `PUT /v1/sr/projects/{p}/settings` | `{compile: "browser"\|"server"}` (owner, editors who are not guests, as for sharing; else `403`) → `200 {compile}`; `409` unless the deployment's `compile` is `"both"` |
 
 Outcomes (`job.outcome`): `success`; `tex_error`; `limit_cpu`, `limit_wall`, `limit_memory`,
 `limit_output`, `limit_scratch`, `limit_processes`; `rejected` (paths, sizes, a missing main file
 or asset, or a version compacted meanwhile); `sandbox_failure`; `lost` (the worker stopped
 heartbeating twice); `quota` (the PDF did not fit the project quota). `error` is a fixed text of
-the service's own; the details are in the log.
+the service's own; the details are in the log. A `sandbox_failure` log is a fixed text too (the
+host's error, which names paths of the machine, goes to the service's own log as
+`{"event":"compile_sandbox_failure","reason":…}`).
 
-**Queue.** Jobs are `compiles` rows (migration `0010`) in PostgreSQL, first in first out, taken
-by workers with `SELECT … FOR UPDATE SKIP LOCKED`. At most `compile_limits.queue` jobs wait; a
-project has at most one queued job (a newer request replaces it, even when the queue is full)
-and one running (its next job waits for it). A worker runs `compile_limits.concurrency` jobs at
-once, each in the sandbox below with the deployment's `compile_limits`, and reports each one
-alive every `compile_heartbeat_seconds`. A job without a report for
-`compile_heartbeat_timeout_seconds` is taken back by any worker or `serve` replica: requeued
-once, then failed (`lost`). Rows stay as the record of who compiled what and for how much CPU
-time; only blobs are removed.
+**Queue.** Jobs are `compiles` rows (migration `0010`) in PostgreSQL, taken by workers with
+`SELECT … FOR UPDATE SKIP LOCKED`, round robin by requester: the requester with the fewest
+running jobs first, each requester's oldest job first. At most `compile_limits.queue` jobs wait;
+a project has at most one queued job (a newer request replaces it, even when the queue is full)
+and one running (its next job waits for it); a member has at most `active_per_member` jobs
+queued or running and an owner's projects at most `active_per_owner` (both default 2). Requests
+are recorded (`compile_requests`, migration `0020`, kept an hour) and limited before the
+project is replayed. A worker runs `compile_limits.concurrency` jobs at once, each in the
+sandbox below with the deployment's `compile_limits` (input files checked against the sandbox's
+128 MiB from the assets' recorded sizes before any is read), and reports each one alive every
+`compile_heartbeat_seconds` while it prepares, runs and stores it. Each claim has its own token:
+a job taken back and claimed again, even by the same process, cannot be stored twice, and a lost
+claim's late result is discarded with only its own blobs. A worker whose heartbeats fail or hang
+for `compile_heartbeat_timeout_seconds` less one interval stops the job. A job without a report
+for `compile_heartbeat_timeout_seconds` is taken back by any worker or `serve` replica: requeued
+once, then failed (`lost`).
+
+**Retention and metering.** Rows record who compiled what, when, with the files' digest and CPU
+time. Every ten minutes the reaping processes delete finished, failed and replaced rows older than
+`compile_limits.retention_days` (default 90; migration `0021` indexes them), except those holding
+the newest PDF or log and each project's latest job. CPU metering from `compiles` therefore covers
+only the retention window: a host that bills per period must read the rows (for example into its
+own billing store) more often than `retention_days`.
 
 **Results.** The PDF and the log are sealed under the project's data key (associated data
-`scribyra-sr/1\n<project>\n<pdf|log>\n<job>`), stored as blobs under `sr/<project>/c/`, and
+`scribyra-sr/1\n<project>\n<pdf|log>\n<job>-<claim>`, where `<claim>` is 16 hex digits of the
+claim's token; results stored before claims had tokens use `<job>`), stored as blobs under
+`sr/<project>/c/<job>-<claim>-<pdf|log>`, and
 count against the project, owner and deployment quotas. Only the newest successful PDF and log
 and the newest failed log are kept; older ones are queued for removal. Every queued, started and
 finished job `NOTIFY`s the project, so members' heads polls wake (their entry has
@@ -759,7 +777,7 @@ work then); SIGTERM gives its jobs back the same way.
 Series: `scribyra_compile_queue_length` (queued plus running jobs, read from the database at each
 scrape; scales the workers), `scribyra_compile_jobs{state}`, `scribyra_http_requests_total{route,
 status}` (route templates such as `/v1/sr/projects/{project}/compile`), `scribyra_compile_requests_total{result}`
-(`queued`, `replaced`, `existing`, `cached`, `rate_limited`, `queue_full`, `refused`),
+(`queued`, `replaced`, `existing`, `cached`, `rate_limited`, `busy`, `queue_full`, `refused`),
 `scribyra_compile_jobs_total{outcome}` (this process's finished jobs, plus `requeued` and
 `lost`), `scribyra_compile_seconds_total`, `scribyra_compile_cpu_seconds_total` and
 `scribyra_compile_running`. No label holds a project, account, name, path or content.

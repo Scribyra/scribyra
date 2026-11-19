@@ -246,6 +246,11 @@ fn unchanged_content_reuses_the_stored_pdf() {
     // The same files, engine and TeX Live: the stored PDF, no new job.
     let again = ana.compile(&p, None);
     assert_eq!((again.status, again.json()["job"].as_str(), again.json()["cached"].as_bool()), (200, Some(first.as_str()), Some(true)));
+    // Review L5: the PDF route serves exactly the job a cached answer names, or 404.
+    let named = ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={first}"), None);
+    assert_eq!((named.status, named.header("scribyra-compile-job")), (200, Some(first.as_str())));
+    let other = ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={}", random_hex(32)), None);
+    assert_eq!((other.status, other.json()["error"].as_str()), (404, Some("that compile's PDF is not kept")));
     // An entry that does not change the files (a name change) still hits the cache.
     assert_eq!(ana.append(&p, "a", 3, &doc.set_meta("name", "Renamed")).status, 201);
     assert_eq!(ana.compile(&p, None).json()["cached"], true);
@@ -259,6 +264,8 @@ fn unchanged_content_reuses_the_stored_pdf() {
     assert_eq!((status["job"]["state"].as_str(), status["pdf"]["engine"].as_str()), (Some("done"), Some("xelatex")), "{status}: {}", String::from_utf8_lossy(&ana.call("GET", &format!("/v1/sr/projects/{p}/compile/log"), None).body));
     // Only the newest successful PDF and log are kept; the first job's blobs are removed.
     assert_eq!(postgres().psql(&sr.db(), &format!("SELECT pdf_blob IS NULL AND log_blob IS NULL FROM compiles WHERE job = '{first}'")), "t");
+    assert_eq!(ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={first}"), None).status, 404);
+    assert_eq!(ana.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf?job={xe}"), None).header("scribyra-compile-job"), Some(xe.as_str()));
     eventually("blob removal", || postgres().psql(&sr.db(), "SELECT count(*) FROM sr_garbage") == "0");
     // So going back to pdflatex compiles again.
     assert_eq!(ana.append(&p, "a", 5, &doc.set_meta("engine", "pdflatex")).status, 201);
@@ -310,7 +317,7 @@ fn status_of(url: &str) -> u16 {
 #[test]
 fn the_queue_is_bounded_a_newer_request_replaces_a_queued_one_and_members_are_rate_limited() {
     // No worker: jobs stay queued.
-    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"queue": 2, "per_member_per_hour": 5}));
+    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"queue": 2, "per_member_per_hour": 7}));
     let ana = sr.api(&sr.login("alice"));
     let ((p1, d1), (p2, _), (p3, _)) = (paper(&ana, "One", &hello("1")), paper(&ana, "Two", &hello("2")), paper(&ana, "Three", &hello("3")));
     let a = ana.compile(&p1, None).json()["job"].as_str().unwrap().to_owned();
@@ -335,7 +342,8 @@ fn the_queue_is_bounded_a_newer_request_replaces_a_queued_one_and_members_are_ra
     // Replacing does not grow the queue, so it is still allowed.
     edit(&ana);
     assert_eq!(ana.compile(&p1, None).status, 202);
-    // Five requests this hour (a, b, two, the latest one, and this one); the sixth is refused.
+    // Seven requests this hour (every answer counts: a, the same again, b, two, three, the
+    // latest one, and this one); the eighth is refused.
     edit(&ana);
     assert_eq!(ana.compile(&p1, None).status, 202);
     edit(&ana);
@@ -347,7 +355,7 @@ fn the_queue_is_bounded_a_newer_request_replaces_a_queued_one_and_members_are_ra
     assert_eq!(ben.compile(&p1, None).status, 202);
     assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compiles WHERE state = 'queued'"), "2");
     // A version past the head or before the floor is refused.
-    assert_eq!(ana.compile(&p2, Some(99)).status, 400);
+    assert_eq!(ben.compile(&p1, Some(99)).status, 400);
 }
 
 #[test]
@@ -413,4 +421,285 @@ fn metrics_expose_the_queue_length_and_requests_without_content() {
     }
     // The API listener does not serve them.
     assert_eq!(status_of(&format!("{}/metrics", sr.url())), 404);
+}
+
+/// The library side of `sr`'s deployment (its service stopped first, so no maintenance races the
+/// test): a runtime and the queue, for steps HTTP cannot time (claims, reaps, late finishes).
+fn library(sr: &mut Sr) -> (tokio::runtime::Runtime, std::sync::Arc<scribyra_sync::compiles::Compiles>) {
+    let config: scribyra_sync::config::Config = serde_json::from_value(sr.env.service.config.clone()).unwrap();
+    sr.env.service.stop();
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let compiles = runtime.block_on(async {
+        let store = std::sync::Arc::new(scribyra_sync::store::Store::open(config).await.unwrap());
+        let projects = scribyra_sync::server_projects::Projects::new(store).unwrap().unwrap();
+        scribyra_sync::compiles::Compiles::new(projects).unwrap()
+    });
+    (runtime, compiles)
+}
+fn finished(pdf: &[u8]) -> scribyra_sync::compiles::Finished {
+    scribyra_sync::compiles::Finished { outcome: "success".into(), error: None, content_hash: None, cpu_ms: 1, passes: 1, pdf: Some(pdf.to_vec()), log: Some("log".into()) }
+}
+
+#[test]
+fn a_lost_claims_late_finish_never_touches_the_result_of_the_claim_that_took_over() {
+    // Review H1: blob names were fixed per job, so worker A (lost) overwrote and then deleted the
+    // PDF of worker B, which had taken the job over: the status listed a PDF the route could not
+    // serve. And one process reclaiming its own lost job could heartbeat and finish both runs.
+    for blobs in BOTH {
+        let mut sr = start(blobs, "server", false, json!({}), json!({}));
+        let ana = sr.api(&sr.login("alice"));
+        let (p, _) = paper(&ana, "Taken over", &hello("x"));
+        let job = ana.compile(&p, None).json()["job"].as_str().unwrap().to_owned();
+        let db = sr.db();
+        let (runtime, compiles) = library(&mut sr);
+        runtime.block_on(async {
+            let a = compiles.claim().await.unwrap().unwrap();
+            assert_eq!(a.job, job);
+            postgres().psql(&db, "UPDATE compiles SET heartbeat = now() - interval '1 hour'");
+            assert_eq!(compiles.reap().await.unwrap(), 1);
+            let b = compiles.claim().await.unwrap().unwrap();
+            assert_eq!(b.job, job);
+            assert!(!compiles.heartbeat(&a).await.unwrap(), "{blobs:?}: the lost claim still heartbeats");
+            assert!(compiles.heartbeat(&b).await.unwrap());
+            assert_eq!(compiles.finish(&b, finished(b"%PDF-B")).await.unwrap(), Some("done"));
+            // A finishes late: discarded, and B's PDF and log are still served.
+            assert_eq!(compiles.finish(&a, finished(b"%PDF-A")).await.unwrap(), None);
+            assert!(!compiles.requeue(&a).await.unwrap());
+            let (served, _, pdf) = compiles.artefact(&p, "pdf", None).await.unwrap().unwrap();
+            assert_eq!((served.as_str(), pdf.as_slice()), (job.as_str(), b"%PDF-B".as_slice()), "{blobs:?}");
+            assert_eq!(compiles.artefact(&p, "log", None).await.unwrap().unwrap().2, b"log");
+        });
+        // Only B's two blobs exist: A's were removed once its result was refused.
+        let names = postgres().psql(&db, "SELECT pdf_blob || ' ' || log_blob FROM compiles");
+        assert!(names.contains(&format!("{job}-")), "{names}");
+        if blobs == Blobs::Fs {
+            let files: Vec<_> = walk(&sr.env.service.dir.join("data")).into_iter().filter(|f| f.to_string_lossy().contains("/c/")).collect();
+            assert_eq!(files.len(), 2, "{blobs:?}: {files:?}");
+        }
+    }
+}
+
+/// A runner that compiles nothing: it waits to be cancelled (up to a minute), counting runs.
+struct Waiting {
+    runs: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+}
+impl scribyra_compile::Runner for Waiting {
+    fn run(&self, _: &scribyra_compile::Job, _: &scribyra_compile::Limits, cancel: &scribyra_compile::Cancel) -> scribyra_compile::Outcome {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.runs.fetch_add(1, SeqCst);
+        let deadline = Instant::now() + Duration::from_secs(60);
+        while !cancel.is_cancelled() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        if cancel.is_cancelled() {
+            self.cancelled.fetch_add(1, SeqCst);
+        }
+        scribyra_compile::Outcome { status: scribyra_compile::Status::Cancelled, pdf: None, log: String::new(), cpu_ms: 0, passes: 0 }
+    }
+    fn texlive_id(&self) -> &str {
+        "waiting"
+    }
+}
+
+#[test]
+fn a_worker_whose_heartbeats_keep_failing_stops_the_job() {
+    // Review H1: heartbeat errors were ignored, so a worker cut off from the database compiled on
+    // while the job could be handed to another worker. Here every heartbeat (and the reaper's
+    // take-back) fails; the worker must cancel the sandbox once no heartbeat went through for
+    // the heartbeat timeout less one interval (2 s here).
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let (p, _) = paper(&ana, "Cut off", &hello("x"));
+    assert_eq!(ana.compile(&p, None).status, 202);
+    let db = sr.db();
+    let (runtime, compiles) = library(&mut sr);
+    postgres().psql(
+        &db,
+        "CREATE FUNCTION scribyra_test_down() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'unreachable'; END $$;
+         CREATE TRIGGER scribyra_test_down BEFORE UPDATE ON compiles FOR EACH ROW WHEN (OLD.state = 'running' AND NEW.state IN ('running', 'queued')) EXECUTE FUNCTION scribyra_test_down();",
+    );
+    let (runs, cancelled) = (std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)), std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)));
+    let runner = std::sync::Arc::new(Waiting { runs: runs.clone(), cancelled: cancelled.clone() });
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let worker = runtime.spawn(scribyra_sync::compiles::Worker::new(compiles, runner).run(shutdown, Duration::from_secs(1)));
+    eventually("the job running", || runs.load(std::sync::atomic::Ordering::SeqCst) == 1);
+    let t = Instant::now();
+    while cancelled.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+        assert!(t.elapsed() < Duration::from_secs(10), "the sandbox kept running without heartbeats");
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert!(t.elapsed() >= Duration::from_millis(1500), "stopped before the timeout: {:?}", t.elapsed());
+    // Nothing was stored for the abandoned run.
+    assert_eq!(postgres().psql(&db, "SELECT count(*) FROM compiles WHERE outcome IS NOT NULL"), "0");
+    stop.send_replace(true);
+    runtime.block_on(worker).unwrap();
+}
+
+#[test]
+fn one_member_or_owner_cannot_monopolise_the_queue_and_workers_take_requesters_in_turn() {
+    // Review M1: one member could fill the whole queue, and workers took it first in first out.
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({"active_per_member": 2, "active_per_owner": 2}));
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    let ((p1, _), (p2, _), (p3, _)) = (paper(&ana, "One", &hello("1")), paper(&ana, "Two", &hello("2")), paper(&ana, "Three", &hello("3")));
+    let (q1, _) = paper(&ben, "Ben's", &hello("b"));
+    let j1 = ana.compile(&p1, None).json()["job"].as_str().unwrap().to_owned();
+    let j2 = ana.compile(&p2, None).json()["job"].as_str().unwrap().to_owned();
+    // Two of Ana's jobs wait: her third request is refused, though the queue has room.
+    let busy = ana.compile(&p3, None);
+    assert_eq!((busy.status, busy.header("retry-after")), (429, Some("60")), "{}", String::from_utf8_lossy(&busy.body));
+    // Ben, editing a project Ana owns, is refused too: her projects have two jobs waiting.
+    assert_eq!(ana.invite(&p3, "ben@example.org", "editor").status, 201);
+    assert_eq!(ben.compile(&p3, None).status, 429);
+    // His own project is his own count.
+    let k1 = ben.compile(&q1, None);
+    assert_eq!(k1.status, 202);
+    let k1 = k1.json()["job"].as_str().unwrap().to_owned();
+    // Workers take Ana's oldest, then Ben's (queued after both of hers), then Ana's next.
+    let (runtime, compiles) = library(&mut sr);
+    let order: Vec<String> = runtime.block_on(async {
+        let mut order = Vec::new();
+        while let Some(c) = compiles.claim().await.unwrap() {
+            order.push(c.job);
+        }
+        order
+    });
+    assert_eq!(order, vec![j1, k1, j2]);
+}
+
+#[test]
+fn requests_are_counted_before_the_project_is_materialised_whatever_they_answer() {
+    // Review M2: every request replayed the whole project before any limit, and answers that
+    // queued nothing (cached, existing, errors) were never counted.
+    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"per_member_per_hour": 2, "per_project_per_minute": 3}));
+    let (ana, ben, cat, dan) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")), sr.api(&sr.login("cat")), sr.api(&sr.login("dan")));
+    let notes = ana.create("No main file");
+    assert_eq!(ana.append(&notes, "a", 1, &Project::new().add_text("f1", "notes.tex", None, "x")).status, 201);
+    assert_eq!(ana.compile(&notes, None).status, 400);
+    assert_eq!(ana.compile(&notes, None).status, 400);
+    let limited = ana.compile(&notes, None);
+    assert_eq!((limited.status, limited.header("retry-after")), (429, Some("60")));
+    // Per project, from all its members together: queued, then the same files twice.
+    let (p, _) = paper(&ben, "Busy", &hello("x"));
+    for who in ["cat", "dan"] {
+        assert_eq!(ben.invite(&p, &format!("{who}@example.org"), "editor").status, 201);
+    }
+    assert_eq!(ben.compile(&p, None).status, 202);
+    assert_eq!(ben.compile(&p, None).status, 200);
+    assert_eq!(cat.compile(&p, None).status, 200);
+    assert_eq!(dan.compile(&p, None).status, 429);
+    // Refused requests are not recorded.
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compile_requests"), "5");
+}
+
+#[test]
+fn asset_sizes_are_checked_before_any_asset_is_read() {
+    // Review M3: the worker read every asset into memory before the input size check. Here the
+    // asset's recorded size (200 MiB) is over the limit: the job is refused without reading it.
+    // Its blob is removed, so reading it first would fail differently.
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({}));
+    let ana = sr.api(&sr.login("alice"));
+    let (p, doc) = paper(&ana, "Huge figure", &hello("\\includegraphics{figure.png}"));
+    let figure = b"small figure bytes".to_vec();
+    assert_eq!(ana.put_object(&p, &figure).status, 201);
+    let update = {
+        use yrs::{Map, Transact};
+        let (files, assets) = (doc.doc.get_or_insert_map("files"), doc.doc.get_or_insert_map("assets"));
+        let mut txn = doc.doc.transact_mut();
+        let node = yrs::Any::from(std::collections::HashMap::from([("id".to_owned(), yrs::Any::from("a1")), ("name".to_owned(), yrs::Any::from("figure.png")), ("parentId".to_owned(), yrs::Any::Null), ("binary".to_owned(), yrs::Any::Bool(true)), ("folder".to_owned(), yrs::Any::Bool(false))]));
+        files.insert(&mut txn, "a1", node);
+        let record = yrs::Any::from(std::collections::HashMap::from([("hash".to_owned(), yrs::Any::from(sha256(&figure))), ("size".to_owned(), yrs::Any::Number((200u64 << 20) as f64))]));
+        assets.insert(&mut txn, "a1", record);
+        txn.encode_update_v1()
+    };
+    assert_eq!(ana.append(&p, "a", 3, &update).status, 201);
+    assert_eq!(ana.compile(&p, None).status, 202);
+    let db = sr.db();
+    let blob = postgres().psql(&db, &format!("SELECT blob FROM sr_objects WHERE project = '{p}'"));
+    let data = sr.env.service.dir.join("data");
+    let (runtime, compiles) = library(&mut sr);
+    std::fs::remove_file(data.join(&blob)).unwrap();
+    runtime.block_on(async {
+        let claimed = compiles.claim().await.unwrap().unwrap();
+        let refused = compiles.prepare(&claimed).await.err().expect("refused");
+        assert_eq!((refused.outcome.as_str(), refused.error), ("rejected", Some("the project's files are too large to compile on the server")));
+        // The recorded size (plus the main file) is what was refused.
+        assert!(refused.log.as_deref().unwrap().contains(&format!("at least {}", (200u64 << 20) / 100)), "{:?}", refused.log);
+    });
+}
+
+#[test]
+fn concurrent_requests_across_projects_never_pass_the_member_rate() {
+    // Review L1: the rate was counted and recorded without a lock, so requests on several
+    // projects at once could all pass it.
+    let sr = start(Blobs::Fs, "server", false, json!({}), json!({"per_member_per_hour": 3, "active_per_member": 100, "active_per_owner": 100, "queue": 100}));
+    let ana = sr.api(&sr.login("alice"));
+    let projects: Vec<String> = (0..12).map(|i| paper(&ana, &format!("P{i}"), &hello(&i.to_string())).0).collect();
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(projects.len()));
+    let statuses: Vec<u16> = std::thread::scope(|s| {
+        let handles: Vec<_> = projects
+            .iter()
+            .map(|p| {
+                let (ana, barrier) = (&ana, barrier.clone());
+                s.spawn(move || {
+                    barrier.wait();
+                    ana.compile(p, None).status
+                })
+            })
+            .collect();
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
+    });
+    assert_eq!(statuses.iter().filter(|s| **s != 429).count(), 3, "{statuses:?}");
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM compile_requests"), "3");
+}
+
+#[test]
+fn guests_cannot_change_where_a_project_compiles() {
+    // Review L2: a guest editor could switch the compile mode, though guests may not share.
+    let mut users = people();
+    users.as_array_mut().unwrap().push(json!({"sub": "sub-gus", "username": "gus", "password": "pw-gus", "email": "gus@partner.org", "email_verified": true, "name": "Gus", "claims": {"acct": "1"}}));
+    let mut d = deployment("both", json!({}));
+    d["guests"] = json!("shared");
+    d["provider"] = json!({"guest": {"claim": "acct", "equals": "1"}});
+    let sr = Sr::start(Blobs::Fs, users, json!({"compile_heartbeat_seconds": 1, "compile_heartbeat_timeout_seconds": 3}), d);
+    let (ana, gus) = (sr.api(&sr.login("alice")), sr.api(&sr.login("gus")));
+    let (p, _) = paper(&ana, "Guest edited", &hello("x"));
+    assert_eq!(ana.invite(&p, "gus@partner.org", "editor").status, 201);
+    assert_eq!(gus.append(&p, "g", 1, &Project::new().add_text("f2", "more.tex", None, "y")).status, 201);
+    let settings = format!("/v1/sr/projects/{p}/settings");
+    assert_eq!(gus.call("PUT", &settings, Some(json!({"compile": "server"}))).status, 403);
+    assert_eq!(ana.details(&p).json()["compile"], "browser");
+    assert_eq!(ana.call("PUT", &settings, Some(json!({"compile": "server"}))).status, 200);
+}
+
+#[test]
+fn finished_rows_are_removed_after_the_retention_period_except_the_ones_still_in_use() {
+    // Review L3: `compiles` rows (requester, times, digest) were kept until the project went.
+    let mut sr = start(Blobs::Fs, "server", false, json!({}), json!({"retention_days": 30}));
+    let ana = sr.api(&sr.login("alice"));
+    let ((p, _), (q, _)) = (paper(&ana, "Old jobs", &hello("p")), paper(&ana, "One old job", &hello("q")));
+    let me = account(&sr, "alice");
+    let row = |project: &str, state: &str, days: i64, pdf: bool| {
+        let job = random_hex(32);
+        postgres().psql(
+            &sr.db(),
+            &format!(
+                "INSERT INTO compiles (job, project, seq, content_hash, engine, texlive, requested_by, state, queued, finished, outcome, pdf_blob, pdf_size)
+                 VALUES ('{job}', '{project}', 1, '{}', 'pdflatex', 'tl', '{me}', '{state}', now() - interval '{days} days', now() - interval '{days} days', 'x', {}, {})",
+                random_hex(32),
+                if pdf { format!("'sr/{project}/c/{job}-pdf'") } else { "NULL".into() },
+                if pdf { "1" } else { "NULL" },
+            ),
+        );
+        job
+    };
+    let (gone, replaced, kept_pdf, recent) = (row(&p, "failed", 100, false), row(&p, "replaced", 99, false), row(&p, "done", 98, true), row(&p, "failed", 10, false));
+    let latest = row(&q, "failed", 200, false);
+    // The first maintenance after a start sweeps.
+    sr.env.service.stop();
+    sr.env.service.start().unwrap();
+    eventually("old rows removed", || postgres().psql(&sr.db(), &format!("SELECT count(*) FROM compiles WHERE job IN ('{gone}', '{replaced}')")) == "0");
+    for job in [kept_pdf, recent, latest] {
+        assert_eq!(postgres().psql(&sr.db(), &format!("SELECT count(*) FROM compiles WHERE job = '{job}'")), "1");
+    }
 }
