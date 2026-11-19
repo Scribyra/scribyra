@@ -49,7 +49,7 @@ export async function orgService({users=people(['ana','ben','cat','dan','eve','f
  let s;
  try{
   s=await service({bind:`127.0.0.1:${port}`,public_url:publicUrl,...overrides,
-   deployment:{name:'Acme Lab',encryption:'e2ee',providers:[{id:'acme',label:'Acme account',issuer:provider.issuer,client_id:CLIENT_ID,client_secret_file:provider.secretFile,claims:{roles:'$.roles'},roles:ROLES,...rules}],...deployment}});
+   deployment:{name:'Acme Lab',encryption:'e2ee',providers:[{id:'acme',label:'Acme account',issuer:provider.issuer,client_id:CLIENT_ID,client_secret_file:provider.secretFile,claims:{roles:'$.roles'},roles:{admin:[ROLES.admin],member:[ROLES.member],guest:[ROLES.guest]},...rules}],...deployment}});
  }catch(error){await provider.close();throw error;}
  const close=s.close;
  return Object.assign(s,{provider,async close(){await close();await provider.close();}});
