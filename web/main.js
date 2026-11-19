@@ -1,7 +1,7 @@
 import {directShare} from './direct-share.js';
 import {orgBackup,orgConnected,orgJoining} from './org-backup.js';
 import {orgDialog} from './org-dialog.js';
-import {orgServer,orgServerConnected,serverSignInPending,forgetServerSignIn} from './org-server.js';
+import {orgServer,orgServerConnected,serverSignInPending,forgetServerSignIn,compiledBadge} from './org-server.js';
 import {orgServerDialog} from './org-server-dialog.js';
 import {parseInvite,profileIdentity,requireDirectSupport,deleteProfileIdentity} from './direct-identity.js';
 import {identityAuthorId,earlierRecords} from './direct-provenance.js';
@@ -103,7 +103,7 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // providers stay reachable only behind this test-only switch; production never
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
-const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', remoteStatus: '', remoteDetail: '', editingPaused: '', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
+const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', remoteStatus: '', remoteDetail: '', editingPaused: '', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, compileServer: false, compileBlocked: false, serverPdf: '', storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
 const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
@@ -194,11 +194,86 @@ function remoteState(id){
 // A server-readable deployment's engine (web/org-server.js), made only once the person signs in there.
 function serverEngine(){
   srEngine??=orgServer({onChange:localId=>{if(localId===projectId&&state.current){remoteState(localId);emit();}refreshSoon();},
-    onRemote:localId=>{if(localId===projectId)void tabSession?.refresh({force:true});else if(!state.current)void refreshProjects().catch(()=>{});},
+    onRemote:localId=>{if(localId===projectId){void tabSession?.refresh({force:true});void serverBadge(localId);}else if(!state.current)void refreshProjects().catch(()=>{});},
     onAccount:refreshSoon,
+    onCompile:(localId,compile)=>{if(localId===projectId&&state.current)void serverCompileChanged(localId,compile).catch(()=>{});refreshSoon();},
     // Online-only: local copies are deleted; an open one is closed first (its unsent edits cannot be kept).
     beforeErase:async ids=>{if(state.current&&ids.includes(projectId)){await leaveProject({save:false});state.current=false;notice('Signed out. This organisation keeps projects online only, so they were removed from this device.');}}});
   return srEngine;
+}
+// Server compile (design section 6) for the open organisation project. Personal projects and
+// deployments that compile in the browser never get here (no engine, or no compile choice).
+let serverPdfJob=null,serverFailure=null,editedSinceServerPdf=false;
+/** The open copy's compile mode, a compile another member started or finished, or a new PDF. */
+async function serverCompileChanged(id,compile){
+  const choice=srEngine?.connected?await srEngine.compileChoice(id).catch(()=>null):null;
+  if(id!==projectId||!state.current)return;
+  const server=choice?.mode==='server';
+  state.compileServer=server;state.compileBlocked=server&&!choice.canCompile;
+  if(!choice){emit();return;}
+  const job=compile||{job:choice.job,state:choice.state};
+  if(!state.busy&&server&&(job.state==='queued'||job.state==='running'))state.status=job.state==='running'?'Compiling on server…':'Queued on server…';
+  emit();
+  if(state.busy)return;
+  if(job.state==='failed'&&job.job&&job.job!==serverFailure){
+    serverFailure=job.job;const failed=await srEngine.compileStatus(id).catch(()=>null);
+    if(id===projectId&&!state.busy&&failed?.state==='failed'){state.log=failed.log||failed.error||'';state.status=`Failed on server · ${failed.error||'see the log'} · open log`;emit();}
+  }
+  await showServerPdf(id,{refresh:job.state==='done'||compile===undefined});
+}
+// A server PDF replaces only another server PDF or nothing (a browser compile's PDF stays).
+const serverPdfWelcome=()=>!state.busy&&(!state.hasPdf||!!pdfBuild?.server);
+async function showServerPdf(id,{refresh=false}={}){
+  const held=await srEngine.serverPdf(id).catch(()=>null);
+  if(id!==projectId)return;
+  if(held&&held.job!==serverPdfJob&&serverPdfWelcome())await displayServerPdf(id,held);
+  if(!refresh)return;
+  const fresh=await srEngine.refreshPdf(id).catch(()=>null);
+  if(fresh&&id===projectId&&fresh.job!==serverPdfJob&&serverPdfWelcome()){await displayServerPdf(id,fresh);if(!state.busy&&state.compileServer){state.status=`Compiled on server · ${state.pdfPages} ${state.pdfPages===1?'page':'pages'}`;emit();}}
+}
+async function displayServerPdf(id,record){
+  const bytes=record.bytes.slice();navigation.clear();
+  const pages=await showPdf(bytes);
+  if(id!==projectId)return 0;
+  pdfBytes=bytes;pdfBuild={server:true,job:record.job,seq:record.seq,compiled:record.compiled,projectId:id};serverPdfJob=record.job;editedSinceServerPdf=false;state.hasPdf=true;
+  await serverBadge(id);
+  return pages;
+}
+/** "Compiled on server · <time> · from your latest changes" (or "from an older version"). */
+async function serverBadge(id){
+  if(!pdfBuild?.server||id!==projectId)return;
+  const shown=pdfBuild,latest=!editedSinceServerPdf&&await srEngine.pdfLatest(id).catch(()=>false)&&(await srEngine.serverPdf(id).catch(()=>null))?.job===shown.job;
+  if(pdfBuild!==shown)return;
+  state.serverPdf=compiledBadge(shown.compiled,latest&&!editedSinceServerPdf);state.stale=!latest||editedSinceServerPdf;emit();
+}
+/** Compile on the server: the outbox is sent first, then the job runs at that version. */
+async function runServerCompile({signal}={}){
+  signal?.throwIfAborted();
+  if(!doc||state.busy){if(signal)throw Object.assign(new Error('A build is already running or the project is closed.'),{code:'browser_busy'});return;}
+  if(state.compileBlocked)throw new Error('Your role on this project lets you read its PDF but not compile it.');
+  const id=projectId;autoPending=false;clearTimeout(autoTimer);
+  state.busy=true;state.status='Sending your changes to the server…';state.log='';state.buildIssues=[];state.showIssues=false;emit();
+  let result;
+  try{
+    await flushSave();
+    const outcome=await srEngine.compileOnServer(id,{signal,progress:text=>{if(id===projectId&&state.busy){state.status=text;emit();}}});
+    if(id!==projectId)return;
+    if(outcome.state==='done'){
+      serverPdfJob=null;const pages=await displayServerPdf(id,outcome.record);if(id!==projectId)return;
+      state.showLog=false;state.status=`Compiled on server · ${pages} ${pages===1?'page':'pages'}${outcome.cached?' · unchanged since the last compile':''}`;
+      result={success:true,server:true,job:outcome.record.job,seq:outcome.record.seq,bytes:outcome.record.bytes.length,projectId:id,project:state.name};
+    }else{
+      serverFailure=outcome.job;state.log=outcome.log||outcome.error;state.showLog=true;state.stale=state.hasPdf;
+      state.status=`Failed on server · ${outcome.error} · open log`;
+      result={success:false,server:true,job:outcome.job,outcome:outcome.outcome,diagnostic:outcome.error,log:state.log,projectId:id,project:state.name};
+    }
+  }catch(error){
+    if(id!==projectId)return;
+    state.log=error.message;state.status=error.name==='AbortError'?'Server compile no longer followed here':`Failed · ${error.message}`;
+    result={success:false,server:true,diagnostic:error.message,log:error.message,errorType:error.name,projectId:id,project:state.name};
+  }finally{if(id===projectId){state.busy=false;emit();scheduleAutoCompile();}}
+  window.scribyra.lastCompile=result;
+  return result;
 }
 function remoteBackup(){
   orgEngine??=orgBackup({onChange:localId=>{
@@ -257,7 +332,8 @@ function scheduleAutoCompile(){
 }
 function onUpdate(_update,origin,_doc,transaction) {
   const source=sourceAffecting(doc,transaction);
-  if(source){revision++;workspace.changed(changedTextFiles(doc,transaction));navigation.changed();state.stale=state.hasPdf;}
+  if(source){revision++;workspace.changed(changedTextFiles(doc,transaction));navigation.changed();state.stale=state.hasPdf;
+    if(pdfBuild?.server){if(transaction.local&&!isRemoteOrigin(origin)){editedSinceServerPdf=true;state.serverPdf=compiledBadge(pdfBuild.compiled,false);}else void serverBadge(projectId);}}
   if(origin!==LOCAL_DURABLE){localEdits++;state.saveStatus=transientProject?'In memory · accept TeX link to save':'Saving locally…';clearTimeout(saveTimer);if(!transientProject)saveTimer=setTimeout(()=>flushSave().catch(displayError),160);}
   refreshDoc(state.files.length===0);
   if(source&&state.auto&&transaction.local&&!isRemoteOrigin(origin)){autoPending=true;scheduleAutoCompile();}
@@ -336,7 +412,7 @@ async function leaveProject({save=true,directAttempt}={}) {
   for (const manager of undoManagers.values()) manager.destroy(); undoManagers.clear();
   collaboration?.close();collaboration=null;commands?.close();commands=null;
   if (doc) { doc.off('update', onUpdate); doc.destroy(); } doc = null; document.title=dashboardTitle;
-  await clearPdf(); pdfBytes = null; pdfBuild=null; state.hasPdf = false; state.stale = false; state.syncStatus = 'Local only'; state.peers = 0; state.tabSyncStatus='Local tabs';state.recoveryAvailable=false;
+  await clearPdf(); pdfBytes = null; pdfBuild=null; state.hasPdf = false; state.stale = false; serverPdfJob=null; serverFailure=null; editedSinceServerPdf=false; state.serverPdf=''; state.compileServer=false; state.compileBlocked=false; state.syncStatus = 'Local only'; state.peers = 0; state.tabSyncStatus='Local tabs';state.recoveryAvailable=false;
 }
 // The person's explicit choice to turn direct sessions on. Only now is a signing key made,
 // and the local author ID becomes the key-derived one; the earlier ID is kept as this
@@ -387,6 +463,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   if(previousEngine!=='lualatex'&&(!roleModes||roleModes.includes('editing'))) { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
   refreshDoc(); state.selected = state.active; emit();
   if(!transientProject)watchLocalProject(target,id);
+  if(!transientProject&&srEngine?.connected)void serverCompileChanged(id).catch(()=>{});
 }
 function watchLocalProject(target,id){
   tabSession=localTabs({doc:target,projectId:id,read:storage.readCommittedProject,preserve:storage.preserveRecoveryProject,onRecovery:()=>{if(doc===target)notice('A competing binary version was saved in a separate recovery project. Both versions are preserved.');},isActive:()=>doc===target&&!leavingProject,isComposing:composingSource,onStatus:message=>{if(doc===target&&state.tabSyncStatus!==message){state.tabSyncStatus=message;emit();}},onMissing:kind=>{if(doc!==target)return;disconnectProjectTools();state.upgradeAvailable=kind==='upgraded';state.recoveryAvailable=true;state.saveStatus='Not saved · export a backup';notice(kind==='upgraded'?'Reload to update Scribyra. Export your open copy or save a recovered copy first; it includes your unsaved source.':kind==='deleted'?'This project was deleted in another tab. Export your open copy or save a recovered copy.':'This project is missing from local storage. Export your open copy or save a recovered copy.');},onError:error=>{if(doc===target)notice(error.message+' Your open source is preserved.');}});
@@ -683,6 +760,7 @@ function wireDivider() {
   divider.onkeydown = e => { if(composingEvent(e))return; if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') { e.preventDefault(); set(width + (e.key === 'ArrowLeft' ? -2 : 2)); } };
 }
 async function runCompile({signal,telemetryParent}={}) {
+  if(state.compileServer&&srEngine)return runServerCompile({signal});
   signal?.throwIfAborted();
   texLinks.assertAllowed();
   if (!doc || state.busy) {if(signal)throw Object.assign(new Error('A build is already running or the project is closed.'),{code:'browser_busy'});return;}
@@ -711,7 +789,7 @@ async function runCompile({signal,telemetryParent}={}) {
     else if (revision !== startRevision) { state.status = `Compiled · pages unavailable${warningSummary} · source changed, compile again`; state.stale = true; }
     else {
       renderingPdf=true;navigation.clear();emit();const bytes = result.pdf.slice(); const pages = await observed('pdf_prepare',()=>showPdf(bytes,{signal:session.signal}),{parent:trace?.context,metrics:()=>[{name:'bytes',value:bytes.byteLength}]});
-      if(!session.current()||startProject!==projectId)return;session.check();pdfBytes=bytes;pdfBuild={jobId:session.id,projectId:session.projectId,sourceRevision:session.revision};
+      if(!session.current()||startProject!==projectId)return;session.check();pdfBytes=bytes;pdfBuild={jobId:session.id,projectId:session.projectId,sourceRevision:session.revision};serverPdfJob=null;state.serverPdf='';
       void navigation.install(result.synctex,{...manifest,pages},startRevision);
       state.hasPdf = true; state.stale = revision!==startRevision; state.status = `Compiled · ${(result.durationMs / 1000).toFixed(2)} s · ${pages} ${pages === 1 ? 'page' : 'pages'}${warningSummary}${packageSummary}${state.stale?' · source changed, compile again':''}`;
     }
@@ -854,9 +932,9 @@ async function action(name, value = '', detail = {}) {
       case 'engine': if (value==='lualatex') client.run({op:'project.configure',engine:value},expected); break;
       case 'main-file': if (state.files.some(f => f.id === value && f.path.toLowerCase().endsWith('.tex'))) client.run({op:'project.configure',mainFile:value},expected); break;
       case 'auto': state.auto = !state.auto; if(!state.auto){autoPending=false;clearTimeout(autoTimer);}persistWorkspace();emit(); break;
-      case 'compile': if (state.busy) { builds.cancel(); state.status = 'Cancelling compilation…'; emit(); } else if(collaboration?.review.state.preview)await collaboration.action('review-compile');else await runCompile(); break;
-      case 'compile-start': collaboration?.review.flush();if(collaboration?.review.state.preview)await collaboration.action('review-compile');else await runCompile(); break;
-      case 'compile-cancel': if(state.busy){builds.cancel();state.status='Cancelling compilation…';emit();} break;
+      case 'compile': if(state.compileServer){if(!state.busy)await runCompile();break;} if (state.busy) { builds.cancel(); state.status = 'Cancelling compilation…'; emit(); } else if(collaboration?.review.state.preview)await collaboration.action('review-compile');else await runCompile(); break;
+      case 'compile-start': collaboration?.review.flush();if(state.compileServer)await runCompile();else if(collaboration?.review.state.preview)await collaboration.action('review-compile');else await runCompile(); break;
+      case 'compile-cancel': if(state.busy&&!state.compileServer){builds.cancel();state.status='Cancelling compilation…';emit();} break;
       case 'issue-source': {
         const entry=state.buildIssues[Number(value)],file=state.files.find(file=>file.path===entry?.file&&!file.binary);
         if(!file)break;activateFile(file.id);

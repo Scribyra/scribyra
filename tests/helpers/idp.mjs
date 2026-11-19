@@ -82,3 +82,16 @@ export async function signIn(engine,s,user,provider='acme'){
  const url=await engine.ssoBegin({service:s.config.public_url,provider});
  return engine.ssoFinish(await authorize(url,user));
 }
+
+/**
+ * A server-readable deployment that compiles on the server (design section 6): `compile` (default
+ * `both`), TeX Live from the dev shell (`SCRIBYRA_TEXLIVE`; bwrap and the store closure come from
+ * `SCRIBYRA_BWRAP` and `SCRIBYRA_TEXLIVE_CLOSURE`, the cgroup from a systemd user scope) and one
+ * worker inside `serve`. Limits are generous for a loaded host; `limits` overrides some.
+ */
+export function compileService({compile='both',limits={},deployment={},...options}={}){
+ const texlive=process.env.SCRIBYRA_TEXLIVE;
+ if(!texlive)throw Error('SCRIBYRA_TEXLIVE is not set: run under `nix develop`.');
+ return serverService({compile_worker_in_process:true,compile_heartbeat_seconds:2,compile_heartbeat_timeout_seconds:60,...options,
+  deployment:{compile,texlive,compile_limits:{cpu_seconds:300,wall_seconds:600,memory_mib:2048,scratch_mib:512,output_mib:64,passes:4,concurrency:2,queue:32,per_member_per_hour:120,...limits},...deployment}});
+}

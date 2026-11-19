@@ -772,6 +772,22 @@ user scope; without either it refuses to start, `{"event":"compile_runner_unavai
 development, `compile_worker_in_process: true` runs one worker inside `serve` (filesystem blobs
 work then); SIGTERM gives its jobs back the same way.
 
+**In the app.** Members see where a project compiles: with `compile: "both"` the project's
+Share panel (Remote backup → Share) has a **Compile** choice, "Compile in the browser" or "Compile
+on server", which owners and editors who are not guests change (`PUT …/settings`); others see it
+read-only, and every member's app follows a change through the heads. For a project that compiles
+on the server the Compile button reads **Compile on server**: it sends what waits in the
+project's outbox, then asks for a compile at the highest entry this browser holds, and follows
+the job (queued, compiling) through the heads poll and `GET …/compile` (at least every 3 s);
+auto-compile uses the same path, and the in-browser compiler is not loaded. Reviewers and
+viewers see the PDF and the status, but the button is disabled. When a job finishes, each
+member's app with the project open (or on opening it) downloads the PDF and shows it with
+"Compiled on server · 18 Nov 14:02 · from your latest changes" or "· from an older version"
+(this browser holds newer entries or unsent edits); a failed job's log fills the compile log.
+The app keeps the latest PDF per project in its IndexedDB (`scribyra-org-server`, store `pdfs`),
+so it shows offline; online-only deployments delete it with the local copies. Personal projects,
+`compile: "browser"` deployments and end-to-end deployments compile in the browser as before.
+
 **Metrics.** With `metrics_bind` set, `serve` and `compile-worker` answer `GET /metrics`
 (Prometheus text) on that separate listener (pods: `0.0.0.0:9090`); never expose it publicly.
 Series: `scribyra_compile_queue_length` (queued plus running jobs, read from the database at each

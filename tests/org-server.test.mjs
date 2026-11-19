@@ -6,11 +6,11 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import * as Y from 'yjs';
 import {readFile} from 'node:fs/promises';
-import {serverService,ssoLogin,signIn} from './helpers/idp.mjs';
+import {serverService,compileService,ssoLogin,signIn} from './helpers/idp.mjs';
 import {srClient,APP_ORIGIN,pgDump} from './helpers/service.mjs';
 import * as storage from '../web/storage.js';
 import {addEntries,migrateProject} from '../web/model.js';
-import {orgServer,parseFrames,orgServerConnected} from '../web/org-server.js';
+import {orgServer,parseFrames,orgServerConnected,compiledTime,compiledBadge,compileChoice,compiledLatest} from '../web/org-server.js';
 import {openDB} from 'idb';
 
 // Node has no localStorage or Web Locks; the engine uses them as in a browser.
@@ -175,4 +175,78 @@ test('an online-only deployment keeps no local copy after sign-out and pauses ed
     assert.deepEqual(await engine.links(),[]);assert.equal((await storage.readCommittedProject(third.localId)).kind,'deleted');
     assert.deepEqual((await storage.listProjects()).filter(p=>p.name==='Online paper').map(p=>p.id),[id]);
   }finally{if(engine)await engine.forget().catch(()=>{});await s.close();}
+});
+
+test('server compile: the badge, the choice of where a project compiles, and when a PDF is the latest',()=>{
+  const at=new Date(2026,10,18,14,2).getTime();
+  assert.equal(compiledTime(at),'18 Nov 14:02');assert.equal(compiledTime(new Date(2026,0,5,9,7).getTime()),'5 Jan 09:07');
+  assert.equal(compiledBadge(at,true),'Compiled on server · 18 Nov 14:02 · from your latest changes');
+  assert.equal(compiledBadge(at,false),'Compiled on server · 18 Nov 14:02 · from an older version');
+  // A browser deployment (or one that does not say) changes nothing: today's compile.
+  for(const deployment of ['browser',undefined,null,'other'])assert.equal(compileChoice({deployment,mode:'server',role:'owner'}),null);
+  // `server`: every project, whatever its setting; only owners and editors compile; nobody switches.
+  assert.deepEqual(compileChoice({deployment:'server',mode:'browser',role:'owner'}),{mode:'server',canCompile:true,canSwitch:false});
+  for(const role of ['reviewer','viewer','admin'])assert.deepEqual(compileChoice({deployment:'server',mode:'server',role}),{mode:'server',canCompile:false,canSwitch:false});
+  // `both`: the project's switch, which owners and editors change, guests not.
+  assert.deepEqual(compileChoice({deployment:'both',mode:undefined,role:'editor'}),{mode:'browser',canCompile:true,canSwitch:true});
+  assert.deepEqual(compileChoice({deployment:'both',mode:'server',role:'editor',accountRole:'guest'}),{mode:'server',canCompile:true,canSwitch:false});
+  assert.deepEqual(compileChoice({deployment:'both',mode:'server',role:'viewer'}),{mode:'server',canCompile:false,canSwitch:false});
+  // The latest: compiled at or after everything this copy holds from the server, nothing unsent.
+  assert.equal(compiledLatest({seq:5,serverSeq:5,unsent:false}),true);
+  assert.equal(compiledLatest({seq:6,serverSeq:5,unsent:false}),true);
+  assert.equal(compiledLatest({seq:4,serverSeq:5,unsent:false}),false);
+  assert.equal(compiledLatest({seq:5,serverSeq:5,unsent:true}),false);
+  assert.equal(compiledLatest({seq:undefined,serverSeq:0,unsent:false}),false);
+});
+
+test('the engine compiles on the server at the version it uploaded, keeps the PDF, shows a TeX error’s log, and an online-only deployment deletes the PDF with the copy',async()=>{
+  const s=await compileService();let engine;
+  try{
+    const id=await personalProject('Compile paper','COMPILE_MARKER'),compiles=[];
+    engine=orgServer({appOrigin:APP_ORIGIN,fetchImpl:fetch,onCompile:(localId,compile)=>compiles.push([localId,compile.state])});
+    await signIn(engine,s,'ana');assert.equal(engine.info.compile,'both');
+    const added=await engine.add(id);await settled(engine,added.localId);
+    assert.equal(await engine.compileChoice(id),null,'a personal project compiles in the browser');
+    assert.deepEqual(await engine.compileChoice(added.localId),{mode:'browser',canCompile:true,canSwitch:true,project:added.project,job:null,state:null});
+    await assert.rejects(engine.compileOnServer(added.localId),/compiles in the browser/);
+    assert.equal(await engine.setCompileMode(added.project,'server'),'server');
+    assert.equal((await engine.compileChoice(added.localId)).mode,'server');
+    // An edit saved but not yet sent goes up before the compile, which runs at that version.
+    const doc=await storage.loadProject(added.localId),file=[...doc.share.keys()].find(k=>k.startsWith('text:'));
+    doc.getText(file).insert(0,'% SAVED_NOT_SENT\n');await storage.saveProject(added.localId,doc);
+    const steps=[],done=await engine.compileOnServer(added.localId,{progress:text=>steps.push(text)});
+    assert.equal(done.state,'done');assert.equal(steps[0],'Sending your changes to the server…');assert(steps.includes('Queued on server…'),steps.join());
+    const ana=srClient(s.url,(await ssoLogin(s,'ana')).token),status=(await ana.call('GET',`/v1/sr/projects/${added.project}/compile`)).body;
+    assert.equal(status.head,2);assert.equal(done.record.seq,2);assert.equal(status.pdf.job,done.record.job);assert.equal(status.pdf.fromHead,true);
+    assert.equal(Buffer.from(done.record.bytes.subarray(0,5)).toString(),'%PDF-');
+    assert.deepEqual((await engine.serverPdf(added.localId)).bytes,done.record.bytes);
+    assert.equal(await engine.pdfLatest(added.localId),true);
+    // The same files again: the server's cached PDF, which shows this version too.
+    const again=await engine.compileOnServer(added.localId);assert.equal(again.cached,true);assert.equal(again.record.job,done.record.job);
+    // A local edit makes the kept PDF one of an older version.
+    doc.getText(file).insert(0,'\\undefinedservermacro\n');await storage.saveProject(added.localId,doc);doc.destroy();
+    assert.equal(await engine.pdfLatest(added.localId),false);
+    const failed=await engine.compileOnServer(added.localId);
+    assert.equal(failed.state,'failed');assert.equal(failed.outcome,'tex_error');assert.match(failed.log,/Undefined control sequence/);
+    assert.equal((await engine.compileStatus(added.localId)).state,'failed');
+    assert.equal((await engine.serverPdf(added.localId)).job,done.record.job,'the last good PDF stays');
+    assert.equal((await engine.refreshPdf(added.localId)).job,done.record.job);
+    // The heads poll told the engine about the jobs (queued, running, finished).
+    for(let i=0;i<400&&!compiles.some(([l,state])=>l===added.localId&&state==='failed');i++)await new Promise(r=>setTimeout(r,25));
+    assert(compiles.some(([l,state])=>l===added.localId&&state==='failed'),JSON.stringify(compiles));
+  }finally{if(engine)await engine.forget().catch(()=>{});await s.close();}
+  // Online-only, compile `server`: every project compiles there, and sign-out deletes the PDF too.
+  const o=await compileService({compile:'server',deployment:{offline:false}});
+  try{
+    const id=await personalProject('Online compile','ONLINE_COMPILE');
+    engine=orgServer({appOrigin:APP_ORIGIN,fetchImpl:fetch});
+    await signIn(engine,o,'ana');
+    const added=await engine.add(id);await settled(engine,added.localId);
+    assert.deepEqual(await engine.compileChoice(added.localId),{mode:'server',canCompile:true,canSwitch:false,project:added.project,job:null,state:null});
+    assert.equal((await engine.compileOnServer(added.localId)).state,'done');
+    const db=await openDB('scribyra-org-server');assert.equal((await db.getAll('pdfs')).length,1);db.close();
+    await engine.signOut();
+    const after=await openDB('scribyra-org-server');assert.equal((await after.getAll('pdfs')).length,0);after.close();
+    assert.equal(await engine.serverPdf(added.localId),null);
+  }finally{if(engine)await engine.forget().catch(()=>{});await o.close();}
 });

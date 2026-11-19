@@ -79,6 +79,12 @@ struct State {
     build_issues: Vec<scribyra_core::diagnostics::Issue>,
     auto: bool,
     has_pdf: bool,
+    /// The open organisation project compiles on the server (design section 6).
+    compile_server: bool,
+    /// ... and this person's role reads its PDF but does not start compiles.
+    compile_blocked: bool,
+    /// The badge on a server-compiled PDF, or empty.
+    server_pdf: String,
     pdf_page: usize,
     pdf_pages: usize,
     #[serde(deserialize_with = "zoom_percent")]
@@ -354,9 +360,9 @@ fn App() -> impl IntoView {
                             <select aria-label="Main document" title="Main document" prop:value=move || s.get().main_file on:change=move |e| action("main-file", &event_target_value(&e))>
                                 <For each={move || s.get().files.into_iter().filter(|f| f.path.to_ascii_lowercase().ends_with(".tex")).collect::<Vec<_>>()} key=|f| (f.id.clone(), f.path.clone()) children=|f| view! { <option value=f.id>{f.path}</option> }/>
                             </select>
-                                <button class="button secondary compact compile-cancel" hidden=move || !s.get().busy on:click=move |_| action("compile-cancel", "")>"Cancel compilation"</button>
+                                <button class="button secondary compact compile-cancel" hidden=move || !s.get().busy || s.get().compile_server on:click=move |_| action("compile-cancel", "")>"Cancel compilation"</button>
                                 <div class="compile-split">
-                                    <button class="button primary compile-button" disabled=move || s.get().busy aria-busy=move || s.get().busy.to_string() data-state=move || if s.get().busy { "running" } else { "idle" } on:click=move |_| action("compile-start", "")><Icon name="play"/>"Compile"<kbd aria-hidden="true">{move || if s.get().mac_platform { "⌘ ↵" } else { "Ctrl ↵" }}</kbd></button>
+                                    <button class="button primary compile-button" disabled=move || s.get().busy || s.get().compile_blocked title=move || if s.get().compile_blocked { "Your role on this project lets you read its PDF but not compile it" } else { "" } aria-busy=move || s.get().busy.to_string() data-state=move || if s.get().busy { "running" } else { "idle" } on:click=move |_| action("compile-start", "")><Icon name="play"/>{move || if s.get().compile_server { "Compile on server" } else { "Compile" }}<kbd aria-hidden="true">{move || if s.get().mac_platform { "⌘ ↵" } else { "Ctrl ↵" }}</kbd></button>
                                     <CompileOptions auto=Signal::derive(move || s.get().auto) preview=Signal::derive(move || s.get().review_workspace.preview)/>
                                 </div>
                             </div>
@@ -381,7 +387,7 @@ fn App() -> impl IntoView {
                             </review_workspace::Panel>
                             <div id="pane-divider" class="pane-divider" role="separator" aria-label="Resize editor and preview" aria-orientation="vertical" tabindex="0"></div>
                             <section class="preview-pane" aria-label="PDF preview">
-                                <div class="preview-toolbar"><span>"PDF PREVIEW"</span><Show when=move || s.get().stale><span class="stale-badge">"Out of date"</span></Show><div class="header-spacer"></div>
+                                <div class="preview-toolbar"><span>"PDF PREVIEW"</span><Show when=move || s.get().stale && s.get().server_pdf.is_empty()><span class="stale-badge">"Out of date"</span></Show><Show when=move || !s.get().server_pdf.is_empty()><span class="server-pdf-badge" data-stale=move || s.get().stale.to_string() role="status" aria-label="Server PDF">{move || s.get().server_pdf}</span></Show><div class="header-spacer"></div>
                                     <button class="icon-button" aria-label="Show PDF location in source" title=move || format!("Show PDF location in source. {}", s.get().source_map_status) disabled=move || !s.get().source_map_ready||s.get().source_map_busy on:click=move |_| action("pdf-to-source","")><Icon name="to-source"/></button>
                                     <button class="icon-button" disabled=move || s.get().pdf_pages==0 aria-label="Search PDF" title="Search PDF" on:click=move |_| action("pdf-find","")><Icon name="search"/></button>
                                     <button class="icon-button" disabled=move || s.get().pdf_pages==0 aria-label="Fit PDF width" title="Fit width" on:click=move |_| action("pdf-fit-width","")><Icon name="fit-width"/></button>

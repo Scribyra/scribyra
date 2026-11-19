@@ -36,3 +36,4 @@
 .org-admin-notice{color:var(--text)}
 .org-dialog select:focus-visible,.org-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .org-dialog .button.danger{background:var(--danger,#b4323a);border-color:var(--danger,#b4323a);color:#fff}
+.org-compile{border:1px solid var(--border);border-radius:6px;padding:6px 10px;margin:8px 0;display:grid;gap:4px;font-size:12px}.org-compile legend{font-size:11px;color:var(--muted);padding:0 4px}.org-choice{display:flex;gap:6px;align-items:center}

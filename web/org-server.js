@@ -12,6 +12,11 @@
 // `Y.encodeStateAsUpdate(doc, serverVector)`, at most every two seconds while typing (at once in
 // an online-only deployment). Assets and named-version objects are uploaded before the update
 // that refers to them and fetched when a merged project needs them.
+//
+// Server compile (design section 6): where the deployment compiles on the server, a project whose
+// compile mode is `server` asks the service to compile the version this browser has uploaded
+// (the outbox drained first), follows the job through the heads poll and the status route, and
+// keeps the latest PDF per project in IndexedDB, so it shows offline and reaches every member.
 import * as Y from 'yjs';
 import {openDB,deleteDB} from 'idb';
 import * as storage from './storage.js';
@@ -38,12 +43,16 @@ export function serverSignInPending(){const flow=readSession(SSO_FLOW);return !!
 export function forgetServerSignIn(){writeSession(SSO_FLOW,null);}
 
 const DB='scribyra-org-server';
-const database=()=>openDB(DB,1,{upgrade(db){
- db.createObjectStore('connection');
- db.createObjectStore('links',{keyPath:'localId'});
- db.createObjectStore('outbox',{keyPath:['localId','clientSeq']});
- // Objects this browser uploaded to or fetched from the service, per project.
- db.createObjectStore('objects',{keyPath:['project','hash']});
+const database=()=>openDB(DB,2,{upgrade(db,old){
+ if(old<1){
+  db.createObjectStore('connection');
+  db.createObjectStore('links',{keyPath:'localId'});
+  db.createObjectStore('outbox',{keyPath:['localId','clientSeq']});
+  // Objects this browser uploaded to or fetched from the service, per project.
+  db.createObjectStore('objects',{keyPath:['project','hash']});
+ }
+ // The latest server-compiled PDF per project: {project, job, seq, compiled, requestedBy, bytes}.
+ if(old<2)db.createObjectStore('pdfs',{keyPath:'project'});
 }});
 
 export const STATUS_TEXT={
@@ -61,6 +70,26 @@ const THROTTLE_MS=2000;
 export const ONLINE_WINDOW_MS=30000;
 const QUOTA_TEXT='The organisation’s storage on the server is full. Your changes are saved on this device and sync when space is freed.';
 const isHash=value=>typeof value==='string'&&/^[0-9a-f]{64}$/.test(value);
+const MONTHS=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+/** "18 Nov 14:02" in the browser's time zone. */
+export const compiledTime=ms=>{const d=new Date(ms),two=n=>String(n).padStart(2,'0');return `${d.getDate()} ${MONTHS[d.getMonth()]} ${two(d.getHours())}:${two(d.getMinutes())}`;};
+/** The badge on a server-compiled PDF (design section 6, step 5). */
+export const compiledBadge=(compiled,latest)=>`Compiled on server · ${compiledTime(compiled)} · ${latest?'from your latest changes':'from an older version'}`;
+/**
+ * Where an organisation project compiles and what this person may do about it: the deployment's
+ * `compile` (`browser`, `server`, `both`), the project's effective mode from the heads or its
+ * details, the person's role on it and their deployment role. Null when nothing differs from
+ * compiling in the browser (a `browser` deployment, or one that did not say).
+ */
+export function compileChoice({deployment,mode,role,accountRole}){
+ if(deployment!=='server'&&deployment!=='both')return null;
+ const effective=deployment==='server'?'server':mode==='server'?'server':'browser',owns=role==='owner'||role==='editor';
+ return{mode:effective,canCompile:owns,canSwitch:deployment==='both'&&owns&&accountRole!=='guest'};
+}
+/** Whether a server PDF compiled at `seq` shows what this copy holds: nothing newer has come from
+ * the server (`serverSeq`, the highest entry this copy holds) and nothing local waits to be sent. */
+export const compiledLatest=({seq,serverSeq,unsent})=>Number.isSafeInteger(seq)&&seq>=serverSeq&&!unsent;
+const COMPILE_ERRORS={409:'This project compiles in the browser now. Compile again.'};
 const isId=isHash;
 const fault=message=>Object.assign(Error(message),{fatal:true});
 const writes=role=>role==='owner'||role==='editor';
@@ -140,6 +169,28 @@ export function srClient(service,{token,fetchImpl=globalThis.fetch.bind(globalTh
    const response=await request(`${p(project)}/objects/${hash}`,{allow:[404],timeout:Math.max(timeoutMs,120000)});
    return response.status===404?null:new Uint8Array(await response.arrayBuffer());
   },
+  /** Server compile (design section 6): request at `seq`, status, the PDF and the log. */
+  async compile(project,seq){
+   try{return await send('POST',p(project)+'/compile',{seq});}
+   catch(error){if(error instanceof ServiceError&&COMPILE_ERRORS[error.status])throw Object.assign(new ServiceError(error.status,COMPILE_ERRORS[error.status]),{detail:error.detail});throw error;}
+  },
+  compileStatus:project=>json(p(project)+'/compile'),
+  /** The latest PDF, or `job`'s: {job, seq, bytes}; null when the server keeps none. */
+  async compilePdf(project,job){
+   if(job!==undefined&&!isId(job))throw Error('Invalid compile job.');
+   const response=await request(`${p(project)}/compile/pdf${job?`?job=${job}`:''}`,{allow:[404],timeout:Math.max(timeoutMs,120000)});
+   if(response.status===404)return null;
+   const seq=Number(response.headers.get('scribyra-compile-seq')),id=response.headers.get('scribyra-compile-job');
+   if(!Number.isSafeInteger(seq)||!isId(id))throw new ServiceError(0,'The server sent a PDF without its compile.');
+   return{job:id,seq,bytes:new Uint8Array(await response.arrayBuffer())};
+  },
+  /** A compile's log as text, or '' when none is kept. */
+  async compileLog(project,job){
+   if(!isId(job))throw Error('Invalid compile job.');
+   const response=await request(`${p(project)}/compile/log?job=${job}`,{allow:[404]});
+   return response.status===404?'':response.text();
+  },
+  setCompile:(project,compile)=>send('PUT',p(project)+'/settings',{compile}),
   /** The admin area's routes (administrators only; design section 5). */
   admin:(()=>{
    const id=value=>{if(!isId(value))throw Error('Invalid ID.');return value;};
@@ -167,9 +218,9 @@ export function srClient(service,{token,fetchImpl=globalThis.fetch.bind(globalTh
  };
 }
 
-export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},beforeErase=async()=>{},fetchImpl,locks=globalThis.navigator?.locks,appOrigin=globalThis.location?.origin,now=()=>Date.now()}={}){
+export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},onCompile=()=>{},beforeErase=async()=>{},fetchImpl,locks=globalThis.navigator?.locks,appOrigin=globalThis.location?.origin,now=()=>Date.now()}={}){
  let db,connection=null,client=null,closed=false,unwatch=null,following=null,polling=null,hooks=null,ticker=0,lastOk=0,reachable=true,live=false,remote=null,version=null,kick=false,wake=null;
- const statuses=new Map(),timers=new Map(),attempts=new Map(),queues=new Map(),stalled=new Set();
+ const statuses=new Map(),timers=new Map(),attempts=new Map(),queues=new Map(),stalled=new Set(),compileWaiters=new Map();
  const setStatus=(localId,state,message='')=>{const old=statuses.get(localId);statuses.set(localId,{state,message,label:STATUS_TEXT[state]});if(old?.state!==state||old?.message!==message)onChange(localId);};
  async function open(){db??=await database();return db;}
  const signedIn=()=>!!connection?.token&&connection.expires*1000>now();
@@ -409,7 +460,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
    await fetchAssets(project,doc);
    validateRetainedState(doc);validateReplica(doc);
    const localId=crypto.randomUUID(),saved=await storage.saveProject(localId,doc);
-   const link={localId,project,name:doc.getMap('meta').get('name')||entry?.name||'Untitled project',role:entry?.role||'viewer',lineage,created:true,seq,vector:Y.encodeStateVector(doc),pushedSequence:saved.sequence,client:newClient(),clientSeq:0,mine:[]};
+   const link={localId,project,name:doc.getMap('meta').get('name')||entry?.name||'Untitled project',role:entry?.role||'viewer',compile:entry?.compile?.mode,lineage,created:true,seq,vector:Y.encodeStateVector(doc),pushedSequence:saved.sequence,client:newClient(),clientSeq:0,mine:[]};
    await db.put('links',link);
    await hydrateHistory(localId,project).catch(()=>{});
    setStatus(localId,writes(link.role)?'synced':link.role==='admin'?'admin':'read-only',link.role==='admin'?ADMIN_TEXT:'');
@@ -436,11 +487,14 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
      polling=new AbortController();
      const heads=await client.heads(since,since===undefined?0:onlineOnly()?20:25,polling.signal);
      if(closed)break;
-     failures=0;live=true;kick=false;const moved=heads.version!==since;since=heads.version;remote=heads.projects||{};
+     failures=0;live=true;kick=false;const moved=heads.version!==since,before=remote||{};since=heads.version;remote=heads.projects||{};
      for(const link of await db.getAll('links')){
       const r=remote[link.project];
       if(!r){if(link.created&&statuses.get(link.localId)?.state!=='removed')setStatus(link.localId,'removed','This project is no longer shared with you. It stays on this device.');continue;}
-      if(r.role!==link.role||r.name!==link.name){await db.put('links',{...link,role:r.role,name:r.name});onChange(link.localId);}
+      if(r.role!==link.role||r.name!==link.name||(r.compile&&r.compile.mode!==link.compile)){await db.put('links',{...link,role:r.role,name:r.name,compile:r.compile?.mode||link.compile});onChange(link.localId);}
+      // A compile was queued, started or finished, or the project's compile mode changed.
+      const was=before[link.project]?.compile,now=r.compile;
+      if(now&&(now.mode!==was?.mode||now.job!==was?.job||now.state!==was?.state)){for(const wake of compileWaiters.get(link.project)||[])wake();onCompile(link.localId,now);}
       if(r.head>link.seq||statuses.get(link.localId)?.state==='removed')schedule(link.localId,50);
      }
      if(moved&&version!==heads.version){version=heads.version;onAccount();}
@@ -475,8 +529,8 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   const links=await db.getAll('links'),ids=links.map(l=>l.localId);
   await beforeErase(ids);
   for(const id of ids){clearTimeout(timers.get(id)?.timer);timers.delete(id);await storage.deleteProject(id).catch(()=>{});statuses.delete(id);}
-  const tx=db.transaction(['links','outbox','objects'],'readwrite');
-  for(const store of ['links','outbox','objects'])await tx.objectStore(store).clear();
+  const tx=db.transaction(['links','outbox','objects','pdfs'],'readwrite');
+  for(const store of ['links','outbox','objects','pdfs'])await tx.objectStore(store).clear();
   await tx.done;stalled.clear();
   for(const id of ids)onChange(id);
   return ids.length;
@@ -496,8 +550,8 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   get signedIn(){return signedIn();},
   get info(){
    if(!connection)return null;
-   const {service,org,name,offline,providers,provider,label,account,email,accountName,role}=connection;
-   return{service,org,name,offline,providers,provider,label,account,email,accountName,role,signedIn:signedIn()};
+   const {service,org,name,offline,compile,providers,provider,label,account,email,accountName,role}=connection;
+   return{service,org,name,offline,compile:compile||'browser',providers,provider,label,account,email,accountName,role,signedIn:signedIn()};
   },
   status:localId=>statuses.get(localId),
   /** Online-only: the reason editing is paused now, or ''. */
@@ -508,6 +562,8 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
    await load();
    for(const link of await db.getAll('links'))setStatus(link.localId,'saved');
    await begin();
+   // The deployment's compile setting can change between visits (the projects' modes come with the heads).
+   void orgClient(connection.service,{fetchImpl}).deployment().then(async d=>{if(connection&&d.org===connection.org&&d.compile!==connection.compile){connection.compile=d.compile;await save();onAccount();for(const l of await db.getAll('links'))onCompile(l.localId,remote?.[l.project]?.compile||null);}}).catch(()=>{});
    return true;
   },
   /** What a deployment address offers before anyone signs in: name, mode, offline and providers. */
@@ -521,7 +577,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
    if(deployment.encryption!=='server')throw Error('This deployment is end-to-end encrypted. Connect to it with Remote backup.');
    if(!chosen)throw Error('This deployment does not offer that sign-in.');
    const verifier=randomBytes(32),{url}=await c.ssoStart(provider,appOrigin,sha256Hex(verifier)),checked=signInUrl(url);
-   writeSession(SSO_FLOW,{service,org:deployment.org,provider,label:chosen.label,name:deployment.name,offline:deployment.offline!==false,providers:deployment.providers,verifier:hex(verifier),started:now()});
+   writeSession(SSO_FLOW,{service,org:deployment.org,provider,label:chosen.label,name:deployment.name,offline:deployment.offline!==false,compile:deployment.compile||'browser',providers:deployment.providers,verifier:hex(verifier),started:now()});
    return checked;
   },
   /** Finishes signing in after the redirect back (`#scribyra-sso=…`) and starts syncing. */
@@ -534,7 +590,7 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
    const previous=connection||await db.get('connection','current');
    if(previous&&(previous.service!==flow.service||previous.account!==login.account)&&(await db.count('links')))
     throw Error(`This browser holds projects of ${previous.email||'another account'} at ${previous.name}. Forget that deployment first.`);
-   connection={service:flow.service,org:flow.org,name:flow.name,offline:flow.offline,providers:flow.providers,provider:flow.provider,label:flow.label,
+   connection={service:flow.service,org:flow.org,name:flow.name,offline:flow.offline,compile:flow.compile||'browser',providers:flow.providers,provider:flow.provider,label:flow.label,
     token:login.token,expires:login.expires,account:login.account,email:login.email||null,accountName:login.name||null,role:login.role,client:previous?.client||hex(randomBytes(8))};
    client=srClient(connection.service,{fetchImpl,token:()=>connection.token,onAnswer:answered});
    await save();markConnected(true);lastOk=now();reachable=true;closed=false;
@@ -613,6 +669,94 @@ export function orgServer({onChange=()=>{},onRemote=()=>{},onAccount=()=>{},befo
   async projectRole(localId){if(!connection)return null;await open();const link=await db.get('links',localId);return link?remote?.[link.project]?.role||link.role:null;},
   /** The editor modes a person's role allows (an owner edits). */
   async allowedModes(localId){const r=await api.projectRole(localId);return r?ROLE_MODES[r==='owner'?'editor':r]||['viewing']:null;},
+
+  // --- Server compile (design section 6)
+
+  /** Where an organisation copy compiles: {mode, canCompile, canSwitch, job, state}, or null for
+   * personal projects and deployments that compile in the browser. */
+  async compileChoice(localId){
+   if(!connection)return null;await open();const link=await db.get('links',localId);if(!link)return null;
+   const r=remote?.[link.project],choice=compileChoice({deployment:connection.compile,mode:r?.compile?.mode||link.compile,role:r?.role||link.role,accountRole:connection.role});
+   return choice&&{...choice,project:link.project,job:r?.compile?.job||null,state:r?.compile?.state||null};
+  },
+  /** The project switch (deployment `compile: both`; owner and editors, not guests). */
+  async setCompileMode(project,mode){
+   await load();if(!isId(project))throw Error('Unknown project.');
+   const {compile}=await client.setCompile(project,mode);
+   if(remote?.[project])remote={...remote,[project]:{...remote[project],compile:{...remote[project].compile,mode:compile}}};
+   const link=(await db.getAll('links')).find(l=>l.project===project);
+   if(link){await db.put('links',{...link,compile});onCompile(link.localId,remote?.[project]?.compile||{mode:compile});}
+   return compile;
+  },
+  /**
+   * Compiles this copy on the server at the version it has uploaded: sends what waits in the
+   * outbox and what was saved since, asks for a compile at the highest entry this copy holds,
+   * follows the job (the heads poll wakes the wait; the status is read at least every 3 s), and
+   * keeps the PDF. Resolves to {state:'done', record} or {state:'failed', outcome, error, log, job}.
+   */
+  async compileOnServer(localId,{signal,progress=()=>{}}={}){
+   await load();if(!signedIn())throw Error(`Sign in with ${connection.label||'your organisation'} to compile on the server.`);
+   let link=await db.get('links',localId);if(!link)throw Error('This project is not on the server.');
+   progress('Sending your changes to the server…');
+   for(let round=0;;round++){
+    signal?.throwIfAborted();
+    await sync(localId);link=await db.get('links',localId);
+    const read=await storage.readCommittedProject(localId),unsent=await db.count('outbox',IDBKeyRange.bound([localId,0],[localId,Infinity]));
+    if(!unsent&&read.kind==='updated'&&read.head.sequence===link.pushedSequence)break;
+    if(round>=4)throw Error('Your latest changes have not reached the server yet. Compile again in a moment.');
+   }
+   const seq=Math.max(link.seq,...(link.mine||[]));
+   progress('Queued on server…');
+   const asked=await client.compile(link.project,seq);let job=asked.job,status=null;
+   if(!isId(job))throw new ServiceError(0,'The server sent an invalid compile job.');
+   if(asked.state!=='done'){
+    const deadline=now()+30*60*1000;
+    for(;;){
+     signal?.throwIfAborted();
+     status=await client.compileStatus(link.project);const latest=status.job;
+     // A newer request (another member's) replaced or followed this one: its result is the one to show.
+     if(latest&&latest.id!==job)job=latest.id;
+     if(latest?.id===job&&(latest.state==='done'||latest.state==='failed'))break;
+     progress(latest?.id===job&&latest.state==='running'?'Compiling on server…':'Queued on server…');
+     if(now()>deadline)throw Error('The server compile is taking too long. Its result appears here when it finishes.');
+     await new Promise(resolve=>{const timer=setTimeout(done,3000),waiters=compileWaiters.get(link.project)||new Set();function done(){clearTimeout(timer);waiters.delete(done);signal?.removeEventListener('abort',done);resolve();}waiters.add(done);compileWaiters.set(link.project,waiters);signal?.addEventListener('abort',done,{once:true});});
+    }
+    if(status.job.state==='failed')return{state:'failed',job,outcome:status.job.outcome,error:status.job.error||'The server compile failed.',log:await client.compileLog(link.project,job).catch(()=>'')};
+   }
+   status??=await client.compileStatus(link.project);
+   const pdf=await client.compilePdf(link.project,job);
+   if(!pdf)throw Error('The server no longer keeps this compile’s PDF. Compile again.');
+   // A cached answer names an earlier compile of the same files, which therefore shows `seq` too.
+   const record={project:link.project,job,seq:Math.max(pdf.seq,seq),compiled:status.pdf?.job===job?status.pdf.compiled:status.job?.finished||now(),requestedBy:status.pdf?.job===job?status.pdf.requestedBy?.name||null:null,bytes:pdf.bytes};
+   const held=await db.get('pdfs',link.project);
+   if(!held||held.job!==job||held.seq<record.seq)await db.put('pdfs',record);
+   return{state:'done',record:await db.get('pdfs',link.project),cached:!!asked.cached};
+  },
+  /** The PDF this browser keeps for a copy (shown offline too), or null. */
+  async serverPdf(localId){if(!connection)return null;await open();const link=await db.get('links',localId);return link?await db.get('pdfs',link.project)||null:null;},
+  /** Fetches the project's latest server PDF when it is newer than the kept one; resolves to the kept record. */
+  async refreshPdf(localId){
+   await load();const link=await db.get('links',localId);if(!link)return null;
+   const held=await db.get('pdfs',link.project)||null;if(!signedIn())return held;
+   const status=await client.compileStatus(link.project);
+   if(!status.pdf||held?.job===status.pdf.job)return held;
+   const pdf=await client.compilePdf(link.project,status.pdf.job);if(!pdf)return held;
+   const record={project:link.project,job:pdf.job,seq:pdf.seq,compiled:status.pdf.compiled,requestedBy:status.pdf.requestedBy?.name||null,bytes:pdf.bytes};
+   await db.put('pdfs',record);return record;
+  },
+  /** The latest job's state and, for a failed one, its log: {job, state, outcome, error, log}. */
+  async compileStatus(localId){
+   await load();const link=await db.get('links',localId);if(!link||!signedIn())return null;
+   const job=(await client.compileStatus(link.project)).job;if(!job)return null;
+   return{...job,log:job.state==='failed'?await client.compileLog(link.project,job.id).catch(()=>''):''};
+  },
+  /** Whether the kept PDF shows what this copy holds (see `compiledLatest`). */
+  async pdfLatest(localId){
+   if(!connection)return false;await open();const link=await db.get('links',localId);if(!link)return false;
+   const record=await db.get('pdfs',link.project);if(!record)return false;
+   const read=await storage.readCommittedProject(localId),unsent=await db.count('outbox',IDBKeyRange.bound([localId,0],[localId,Infinity]));
+   return compiledLatest({seq:record.seq,serverSeq:Math.max(link.seq,...(link.mine||[])),unsent:unsent>0||read.kind!=='updated'||read.head.sequence!==link.pushedSequence});
+  },
   sync,
   close(){closed=true;stopFollowing();if(hooks){globalThis.removeEventListener?.('offline',hooks.offline);globalThis.removeEventListener?.('online',hooks.online);hooks=null;}clearInterval(ticker);ticker=0;unwatch?.();unwatch=null;for(const t of timers.values())clearTimeout(t.timer);timers.clear();db?.close();db=null;},
  };

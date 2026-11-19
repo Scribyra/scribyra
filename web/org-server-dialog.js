@@ -56,6 +56,17 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    people.append(row);
   }
   box.append(people);
+  // Deployment `compile: both`: the project switch (owner and editors who are not guests; design section 6).
+  if(engine.info.compile==='both'){
+   const choose=manage&&engine.info.role!=='guest',group=element('fieldset',null,'org-compile');group.append(element('legend','Compile'));
+   for(const [value,text] of [['browser','Compile in the browser'],['server','Compile on server']]){
+    const label=element('label',null,'org-choice'),radio=element('input');radio.type='radio';radio.name=`compile-${project.project}`;radio.value=value;radio.checked=details.compile===value;radio.disabled=!choose||busy;
+    radio.onchange=async()=>{if(!radio.checked)return;busy=true;render();try{await engine.setCompileMode(project.project,value);feedback=value==='server'?`${project.name} now compiles on ${engine.info.name}’s server.`:`${project.name} now compiles in the browser.`;}catch(e){feedback=e.message;}finally{busy=false;render();}};
+    label.append(radio,element('span',text));group.append(label);
+   }
+   if(!choose)group.append(element('p',`${details.compile==='server'?'This project compiles on the server.':'This project compiles in the browser.'} Its owner and editors choose.`,'org-help'));
+   box.append(group);
+  }
   for(const a of details.adminActivity||[])box.append(element('p',adminNotice(a),'org-help org-admin-notice'));
   if(details.invitations?.length){
    const pending=element('ul',null,'org-members');pending.setAttribute('aria-label','Pending invitations');
