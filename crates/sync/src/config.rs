@@ -564,6 +564,18 @@ pub enum Preset {
     /// `admin_subjects` (Google's tokens carry no roles).
     Google,
 }
+/// What a Zitadel role keyed by an organisation other than the project's owner (a project grant)
+/// makes of someone (review M5).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ZitadelForeign {
+    /// A guest of the owner organisation, the provider's only one (subject to `guests`).
+    #[default]
+    Guests,
+    /// A member of that organisation, which is its own isolated Scribyra organisation
+    /// (hosting several tenants from one Zitadel project).
+    Organisations,
+}
 /// A generic claims mapping: JSON paths into the ID token (see [`crate::claims::ClaimPath`]).
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -619,6 +631,13 @@ pub struct Provider {
     /// Zitadel: the project whose roles count (its roles claim and audience scope).
     #[serde(default)]
     pub zitadel_project_id: Option<String>,
+    /// Zitadel (required): the ID of the organisation that owns the project.
+    #[serde(default)]
+    pub zitadel_project_owner_org: Option<String>,
+    /// Zitadel: roles keyed by another organisation make guests of the owner organisation
+    /// (`guests`, default) or members of their own organisation (`organisations`).
+    #[serde(default)]
+    pub zitadel_foreign_organisations: ZitadelForeign,
     /// Keycloak 26 organisations: ask for and read the `organization` claim.
     #[serde(default)]
     pub keycloak_organizations: bool,
@@ -774,6 +793,12 @@ impl Provider {
         }
         if self.zitadel_project_id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_digit())) {
             return Err("deployment.providers[].zitadel_project_id must be a Zitadel project ID (digits)");
+        }
+        if (self.zitadel_project_owner_org.is_some() || self.zitadel_foreign_organisations != ZitadelForeign::Guests) && self.preset != Some(Preset::Zitadel) {
+            return Err("deployment.providers[].zitadel_project_owner_org and zitadel_foreign_organisations are for the zitadel preset only");
+        }
+        if self.preset == Some(Preset::Zitadel) && !self.zitadel_project_owner_org.as_ref().is_some_and(|id| !id.is_empty() && id.len() <= 32 && id.bytes().all(|b| b.is_ascii_digit())) {
+            return Err("deployment.providers[].zitadel_project_owner_org must be the ID (digits) of the organisation that owns the project");
         }
         if !self.hosted_domains.is_empty() && self.preset != Some(Preset::Google) {
             return Err("deployment.providers[].hosted_domains is for the google preset only");
@@ -994,7 +1019,7 @@ mod tests {
 
     #[test]
     fn the_primary_organisation_is_named_by_the_configuration() {
-        let zitadel = json!({"id": "z", "label": "Z", "issuer": "https://z.example", "client_id": "c", "client_secret_file": "s", "preset": "zitadel", "roles": {"member": ["m"]}});
+        let zitadel = json!({"id": "z", "label": "Z", "issuer": "https://z.example", "client_id": "c", "client_secret_file": "s", "preset": "zitadel", "roles": {"member": ["m"]}, "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations"});
         let primary = |d: serde_json::Value| config(d).map(|c| c.deployment.unwrap().primary().map(|(p, claim)| (p.id.clone(), claim)));
         // One provider with one organisation: that one.
         assert_eq!(primary(deployment(json!({}))).unwrap(), Some(("acme".into(), String::new())));
@@ -1052,13 +1077,22 @@ mod tests {
         assert!(refused(json!({"admin_subjects": ["1043"]})).contains("google preset only"));
         // Preset options belong to their preset.
         assert!(refused(json!({"zitadel_project_id": "1"})).contains("zitadel preset only"));
-        assert!(refused(json!({"preset": "zitadel", "zitadel_project_id": "abc"})).contains("(digits)"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "abc"})).contains("(digits)"));
+        // Review M5: Zitadel needs the project's owner organisation; foreign roles make guests.
+        assert!(refused(json!({"preset": "zitadel"})).contains("zitadel_project_owner_org"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_owner_org": "acme"})).contains("zitadel_project_owner_org"));
+        assert!(refused(json!({"zitadel_project_owner_org": "1"})).contains("zitadel preset only"));
+        assert!(refused(json!({"zitadel_foreign_organisations": "organisations"})).contains("zitadel preset only"));
+        assert!(refused(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_foreign_organisations": "members"})).contains("unknown variant"));
+        let zitadel = with(json!({"preset": "zitadel", "zitadel_project_owner_org": "1"})).unwrap().deployment.unwrap();
+        assert_eq!(zitadel.providers[0].zitadel_foreign_organisations, ZitadelForeign::Guests);
+        assert_eq!(zitadel.primary().map(|(_, claim)| claim), Some("1".into()), "with guests, the owner organisation is the provider's only one");
         assert!(refused(json!({"keycloak_organizations": true, "preset": "entra"})).contains("keycloak preset only"));
         assert!(refused(json!({"roles_apply_to_all_organisations": true})).contains("needs keycloak_organizations"));
         with(json!({"roles_apply_to_all_organisations": true, "keycloak_organizations": true})).unwrap();
         // Each preset asks for the scopes its claims need.
-        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_id": "273800000000000001"})), "openid email profile urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
-        assert_eq!(scope(json!({"preset": "zitadel"})), "openid email profile urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1", "zitadel_project_id": "273800000000000001"})), "openid email profile urn:zitadel:iam:org:project:id:273800000000000001:aud urn:zitadel:iam:org:projects:roles");
+        assert_eq!(scope(json!({"preset": "zitadel", "zitadel_project_owner_org": "1"})), "openid email profile urn:zitadel:iam:org:projects:roles");
         assert_eq!(scope(json!({"preset": "entra"})), "openid email profile offline_access");
         assert_eq!(scope(json!({"keycloak_organizations": true})), "openid email profile organization");
         assert_eq!(scope(json!({})), "openid email profile");

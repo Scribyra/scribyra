@@ -8,7 +8,7 @@
 //!
 //! | Preset | Organisation | Roles | Guest |
 //! | --- | --- | --- | --- |
-//! | `zitadel` | each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role granted by an organisation other than `urn:zitadel:iam:user:resourceowner:id`, or a role mapped to guest |
+//! | `zitadel` | `zitadel_project_owner_org`; with `zitadel_foreign_organisations: organisations` each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role keyed by another organisation than the owner (`guests`) or than `urn:zitadel:iam:user:resourceowner:id` (`organisations`), or a role mapped to guest |
 //! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles`, `groups`; with several organisations only `<alias>:<role>` names count (in that one), unless `roles_apply_to_all_organisations` | a role mapped to guest |
 //! | `entra` | `tid` | `roles` | `acct = 1`, or a role mapped to guest |
 //! | `google` | `hd` (refused without, and unless in `hosted_domains`, else `email_domains`) | everyone a member, `admin_subjects` administrators | never |
@@ -19,7 +19,7 @@
 //! are refused when the deployment admits none (`guest`), and a token without the organisation
 //! claim its mapping needs is refused (`no_organisation`).
 use crate::{
-    config::{Guests, Preset, Provider},
+    config::{Guests, Preset, Provider, ZitadelForeign},
     sso::Role,
 };
 use serde_json::{Map, Value};
@@ -190,12 +190,13 @@ fn grant(claim: String, name: Option<String>, role: Option<Role>, guest: bool) -
 /// The one organisation (its claim value) of a provider whose tokens never name one, so the
 /// configuration alone fixes it; `None` when tokens name organisations.
 pub fn fixed_organisation(provider: &Provider) -> Option<String> {
-    let single = match (provider.preset, &provider.claims) {
-        (Some(Preset::Keycloak), _) => !provider.keycloak_organizations,
-        (None, Some(rules)) => rules.organisation.is_none(),
-        _ => false,
-    };
-    single.then(String::new)
+    match (provider.preset, &provider.claims) {
+        (Some(Preset::Keycloak), _) if !provider.keycloak_organizations => Some(String::new()),
+        (None, Some(rules)) if rules.organisation.is_none() => Some(String::new()),
+        // With foreign roles making guests, the project's owner is Zitadel's only organisation.
+        (Some(Preset::Zitadel), _) if provider.zitadel_foreign_organisations == ZitadelForeign::Guests => provider.zitadel_project_owner_org.clone(),
+        _ => None,
+    }
 }
 /// The organisations, roles and guest marks this provider's token gives `subject`, after the
 /// deployment's guest policy; or why it gives none.
@@ -218,10 +219,26 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
                     }
                 }
             }
-            for (org, org_name, names) in orgs {
-                // A role granted by another organisation (a project grant) makes a guest there.
-                let foreign = owner.as_deref() != Some(org.as_str());
-                grants.extend(grant(org, org_name, mapped(provider, names), foreign));
+            match (provider.zitadel_foreign_organisations, &provider.zitadel_project_owner_org) {
+                // Review M5: one organisation, the project owner's. Only roles it keys make members
+                // and administrators; a role keyed by another organisation (a project grant, whose
+                // users that organisation manages) makes a guest of it.
+                (ZitadelForeign::Guests, Some(project_owner)) => {
+                    let (own, foreign): (Vec<_>, Vec<_>) = orgs.into_iter().partition(|(o, ..)| o == project_owner);
+                    let own = own.into_iter().next();
+                    let org_name = own.as_ref().and_then(|(_, n, _)| n.clone());
+                    let role = own.and_then(|(_, _, names)| mapped(provider, names));
+                    let guest = mapped(provider, foreign.into_iter().flat_map(|(_, _, names)| names));
+                    grants.extend(grant(project_owner.clone(), org_name.clone(), role, false).or_else(|| grant(project_owner.clone(), org_name, guest, true)));
+                }
+                // Each organisation keying a role is its own; a role granted by an organisation
+                // other than the person's own makes a guest there.
+                _ => {
+                    for (org, org_name, names) in orgs {
+                        let foreign = owner.as_deref() != Some(org.as_str());
+                        grants.extend(grant(org, org_name, mapped(provider, names), foreign));
+                    }
+                }
             }
         }
         (Some(Preset::Keycloak), _) => {
@@ -330,8 +347,27 @@ mod tests {
     }
 
     #[test]
+    fn zitadel_project_grants_make_guests_of_the_owner_organisation() {
+        // Review M5: with a project grant to organisation 200, its users got roles keyed by their
+        // own organisation and became members and administrators of a new organisation.
+        let p = provider(json!({"preset": "zitadel", "zitadel_project_owner_org": "100"}));
+        let partner = claims(json!({ZITADEL_OWNER: "200", ZITADEL_ROLES: {"scribyra:admin": {"200": "partner"}}}));
+        assert_eq!(map(&p, Guests::Shared, &partner, "u"), Ok(vec![g("100", None, Role::Guest, true)]));
+        assert_eq!(map(&p, Guests::Off, &partner, "u"), Err(Refusal::Guest));
+        // Roles the owner keys make members and administrators, whoever's user it is; foreign
+        // ones add nothing to them.
+        let home = claims(json!({ZITADEL_OWNER: "100", ZITADEL_ROLES: {"scribyra:member": {"100": "acme", "200": "partner"}, "scribyra:admin": {"200": "partner"}}}));
+        assert_eq!(map(&p, Guests::Off, &home, "u"), Ok(vec![g("100", Some("acme"), Role::Member, false)]));
+        let invited = claims(json!({ZITADEL_OWNER: "300", ZITADEL_ROLES: {"scribyra:admin": {"100": "acme"}}}));
+        assert_eq!(map(&p, Guests::Off, &invited, "u"), Ok(vec![g("100", Some("acme"), Role::Admin, false)]));
+        // An unmapped foreign role makes nothing.
+        assert_eq!(map(&p, Guests::Shared, &claims(json!({ZITADEL_OWNER: "200", ZITADEL_ROLES: {"x": {"200": "partner"}}})), "u"), Err(Refusal::NoRole));
+        assert_eq!(fixed_organisation(&p), Some("100".into()));
+    }
+
+    #[test]
     fn zitadel_organisations_roles_and_cross_organisation_guests() {
-        let p = provider(json!({"preset": "zitadel"}));
+        let p = provider(json!({"preset": "zitadel", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations"}));
         let token = claims(json!({
             ZITADEL_OWNER: "100",
             ZITADEL_ROLES: {"scribyra:admin": {"100": "acme.zitadel.cloud"}, "scribyra:member": {"100": "acme.zitadel.cloud", "200": "partner.zitadel.cloud"}, "unmapped": {"300": "other"}},
@@ -353,7 +389,7 @@ mod tests {
         // Without a resource owner every grant is foreign: never an administrator by accident.
         assert_eq!(map(&p, Guests::Off, &claims(json!({ZITADEL_ROLES: {"scribyra:admin": {"100": "acme"}}})), "u"), Err(Refusal::Guest));
         // With a project ID, that project's claim counts first.
-        let p = provider(json!({"preset": "zitadel", "zitadel_project_id": "42"}));
+        let p = provider(json!({"preset": "zitadel", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations", "zitadel_project_id": "42"}));
         let both = claims(json!({ZITADEL_OWNER: "100", "urn:zitadel:iam:org:project:42:roles": {"scribyra:member": {"100": "acme"}}, ZITADEL_ROLES: {"scribyra:admin": {"100": "acme"}}}));
         assert_eq!(map(&p, Guests::Off, &both, "u"), Ok(vec![g("100", Some("acme"), Role::Member, false)]));
     }

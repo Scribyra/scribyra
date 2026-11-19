@@ -38,8 +38,9 @@ fn zitadel_users() -> Value {
         zitadel("nob", "nob@a.test", "100", &[("other-app:admin", "100")], json!({})),
     ])
 }
+/// One Zitadel project serving organisations 100 and 200 as separate Scribyra organisations.
 fn zitadel_provider() -> Value {
-    json!({"claims": null, "preset": "zitadel", "zitadel_project_id": "42"})
+    json!({"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations"})
 }
 fn orgs(login: &Value) -> Vec<(String, String, bool)> {
     login["orgs"].as_array().unwrap().iter().map(|o| (o["id"].as_str().unwrap().to_owned(), o["role"].as_str().unwrap().to_owned(), o["guest"].as_bool().unwrap())).collect()
@@ -205,7 +206,7 @@ fn organisations_are_isolated_on_every_route_and_in_the_audit_log() {
 
 #[test]
 fn a_role_taken_away_at_a_refresh_cuts_access_at_once() {
-    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({"sso_recheck_tick_seconds": 1}), json!({"guests": "shared", "provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "offline_access": true, "recheck_minutes": 1}}));
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({"sso_recheck_tick_seconds": 1}), json!({"guests": "shared", "provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100", "zitadel_foreign_organisations": "organisations", "offline_access": true, "recheck_minutes": 1}}));
     let c = sr.env.client();
     let bea = sr.api(&token(&c.login("bea")));
     let cy_login = c.login("cy");
@@ -384,4 +385,27 @@ fn only_the_configured_primary_organisation_takes_the_deployments_id() {
     assert_eq!((bea["org"].clone(), bea["orgs"][0]["primary"].clone()), (json!(deployment), json!(false)));
     let ana = c.login("ana");
     assert_eq!((ana["orgs"][0]["id"].clone(), ana["orgs"][0]["primary"].clone()), (json!(deployment), json!(true)));
+}
+
+#[test]
+fn a_zitadel_project_grant_makes_guests_of_the_project_owner() {
+    // Review M5: by default (`zitadel_foreign_organisations: "guests"`) the project owner's
+    // organisation is the only one; a project grant's users (organisation 200, roles keyed by
+    // their own organisation) are its guests, never members or administrators of their own.
+    let provider = json!({"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100"});
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": provider}));
+    let c = sr.env.client();
+    let a = org_of(&sr, "100");
+    assert_eq!(fetch(&format!("{}/v1/deployment", sr.url()), None).json()["org"], json!(a), "the owner organisation is the provider's only one, and primary");
+    let bea = c.login("bea");
+    assert_eq!(orgs(&bea), [(a.clone(), "guest".into(), true)]);
+    assert_eq!(orgs(&c.login("ana")), [(a.clone(), "admin".into(), false)]);
+    assert_eq!(orgs(&c.login("cy")), [(a.clone(), "member".into(), false)]);
+    assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM organisations"), "1");
+    let bea = sr.api(&token(&bea));
+    assert_eq!(bea.call("GET", "/v1/admin/members", None).status, 403);
+    assert_eq!(bea.call("POST", "/v1/sr/projects", Some(json!({"name": "mine"}))).status, 403);
+    // Guests off: the grant's users are refused.
+    let off = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100"}}));
+    assert_eq!(off.env.client().sign_in("bea").0, Outcome::Error("guest".into()));
 }

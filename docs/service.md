@@ -158,7 +158,7 @@ JSON); every field is validated at start, and an inconsistent file refuses to st
   "providers": [
     {"id": "acme", "label": "Acme account", "issuer": "https://acme.zitadel.cloud",
      "client_id": "…", "client_secret_file": "/run/secrets/scribyra-oidc",
-     "preset": "zitadel", "zitadel_project_id": "273800000000000001",
+     "preset": "zitadel", "zitadel_project_id": "273800000000000001", "zitadel_project_owner_org": "273700000000000001",
      "roles": {"admin": ["scribyra:admin"], "member": ["scribyra:member"], "guest": ["scribyra:guest"]},
      "offline_access": true}
   ]
@@ -656,6 +656,8 @@ because the service only ever redirects back to a configured origin.
 | `claims` | | A generic mapping of JSON paths into the ID token: `{roles, organisation?, organisation_name?, guest?: {path, equals}}`. `roles` names a string or a list of strings; without `organisation` the provider has one organisation. A path is `$` followed by `.key` segments (letters, digits, `_`, `-`) or `["key"]` segments for names with other characters, for example `$["urn:zitadel:iam:org:project:roles"]` or `$.resource_access.scribyra.roles`; segments select object members only (no wildcards, indexes or evaluation) |
 | `roles` | `{}` | Provider role names for each deployment role: `{"admin": [...], "member": [...], "guest": [...]}`; the highest a person holds in an organisation wins. At least one `admin` or `member` name (except `google`, which takes none) |
 | `zitadel_project_id` | none | `zitadel` only: the project whose roles count (its own roles claim is read first) and whose audience scope is asked for |
+| `zitadel_project_owner_org` | required for `zitadel` | The ID of the Zitadel organisation that owns the project (digits) |
+| `zitadel_foreign_organisations` | `"guests"` | `zitadel` only. `"guests"`: the owner organisation is the provider's only organisation; roles it keys make members and administrators, and a role keyed by any other organisation (a project grant, whose users that organisation manages) makes the person a **guest** of the owner organisation (refused with `guests: "off"`). `"organisations"`: each organisation keying a role is its own isolated Scribyra organisation (hosting several tenants from one project); a role keyed by an organisation other than the person's own (`urn:zitadel:iam:user:resourceowner:id`) makes a guest there |
 | `keycloak_organizations` | `false` | `keycloak` only: ask for the `organization` scope and take organisations from that claim (Keycloak 26); without it the provider has one organisation |
 | `roles_apply_to_all_organisations` | `false` | `keycloak` with `keycloak_organizations` only: realm, client and group roles without an organisation prefix count in *every* organisation of someone in several. Off, they count only for someone in exactly one organisation, and someone in several needs roles named `<alias>:<role>` (below) |
 | `hosted_domains` | `[]` | `google` only: the Workspace domains (`hd`) admitted; another domain is refused with `domain`. A `google` provider needs this or `email_domains` (then those domains are the admitted `hd` values), or it refuses to start: without either, every Workspace domain in the world could sign in |
@@ -672,7 +674,7 @@ organisation:
 
 | Preset | Organisation | Roles | Guest | Scopes added |
 | --- | --- | --- | --- | --- |
-| `zitadel` | each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`); name: the map's value (the org's domain) | the role keys granted in that org | a role granted by an org other than `urn:zitadel:iam:user:resourceowner:id` (a project grant), or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
+| `zitadel` | `zitadel_project_owner_org` (with `"guests"`), or each org ID keying the maps of `urn:zitadel:iam:org:project:{zitadel_project_id}:roles` (else `urn:zitadel:iam:org:project:roles`) with `"organisations"`; name: the map's value (the org's domain) | the role keys the organisation keys | `"guests"`: a role keyed by an org other than the owner; `"organisations"`: a role keyed by an org other than `urn:zitadel:iam:user:resourceowner:id`; or a role mapped to `guest` | `urn:zitadel:iam:org:project:id:{id}:aud` (with a project ID), `urn:zitadel:iam:org:projects:roles` |
 | `keycloak` | `organization` (aliases, list or object) with `keycloak_organizations`, else one per provider | `realm_access.roles`, `resource_access.{client_id}.roles` (another client's roles do not count) and `groups` (a leading `/` dropped); with organisations, see below | a role mapped to `guest` | `organization` with `keycloak_organizations` |
 | `entra` | `tid` (name: "<label> (<tid>)") | `roles` (app roles) | `acct` = 1 (B2B), or a role mapped to `guest` | `offline_access` |
 | `google` | `hd` (accounts without it are refused, and so is a domain outside `hosted_domains`, else `email_domains`) | everyone a member; `admin_subjects` administrators | never | none |
@@ -832,10 +834,14 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
   with your tenant before relying on it. Use `preset: "entra"` with app roles (define them on
   the app registration and assign them); a multi-tenant app gets one organisation per tenant.
 - *Zitadel*: issuer `https://<instance>.zitadel.cloud`; `preset: "zitadel"` with the project's
-  ID. Create the roles (for example `scribyra:admin`, `scribyra:member`) in the project, grant
-  them to users of your organisation, and to other organisations through project grants (their
-  users are then guests here). Turn on "Assert roles on authentication" and "User roles inside ID
-  token".
+  ID and its owner organisation's ID (`zitadel_project_owner_org`). Create the roles (for example
+  `scribyra:admin`, `scribyra:member`) in the project and grant them to users of your
+  organisation. A project grant lets another organisation grant the roles to *its* users, keyed by
+  that organisation: by default they are only guests of yours (review M5: before, an administrator
+  of the granted organisation became an administrator of a new Scribyra organisation of their
+  own). Set `zitadel_foreign_organisations: "organisations"` only when one project deliberately
+  serves several separate tenants. Turn on "Assert roles on authentication" and "User roles inside
+  ID token".
 - *Google Workspace*: issuer `https://accounts.google.com`; `preset: "google"` with
   `hosted_domains` (your Workspace domains; required) and `admin_subjects`. The Workspace domain (`hd`) is the organisation; consumer accounts are
   refused. Google issues refresh tokens only for offline access requests, which this service
