@@ -255,6 +255,8 @@ pub struct Applied {
     pub active: Vec<String>,
     /// Organisations where it holds a role but an administrator disabled or removed it.
     pub stopped: Vec<(String, String)>,
+    /// Organisations of this provider where the token took the account's role away.
+    pub removed: Vec<String>,
     /// Whether any role changed (polls must check their access again).
     pub changed: bool,
 }
@@ -309,14 +311,20 @@ pub async fn apply_grants(tx: &mut sqlx::PgConnection, deployment: &Deployment, 
     .await?;
     for (org, from) in gone {
         crate::audit::record(&mut *tx, &org, &crate::audit::Actor::system(), "account.role_changed", Some(("account", account)), json!({"from": from, "to": null, "by": "provider"})).await?;
+        applied.removed.push(org);
         applied.changed = true;
     }
     Ok(applied)
 }
-/// The organisations an account has a membership in at a provider, with a role or one just taken
-/// away (for auditing what concerns them).
+/// The organisations (at a provider) where an account holds a role now and is not stopped: where
+/// its sign-outs and revocations are audited. An organisation it left, or where an administrator
+/// stopped it, does not see its later sessions (review: they used to reach every organisation it
+/// had ever been in).
 async fn account_orgs(conn: &mut sqlx::PgConnection, account: &str, provider: Option<&str>) -> Result<Vec<String>, sqlx::Error> {
-    sqlx::query_scalar("SELECT m.org FROM memberships m JOIN organisations o ON o.org = m.org WHERE m.account = $1 AND ($2::text IS NULL OR o.provider = $2) ORDER BY m.org")
+    sqlx::query_scalar(
+        "SELECT m.org FROM memberships m JOIN organisations o ON o.org = m.org
+         WHERE m.account = $1 AND m.role IS NOT NULL AND m.state = 'active' AND ($2::text IS NULL OR o.provider = $2) ORDER BY m.org",
+    )
         .bind(account)
         .bind(provider)
         .fetch_all(conn)
@@ -803,7 +811,10 @@ impl Sso {
                     Some(ip) => crate::audit::Actor::account(&account, ip),
                     None => crate::audit::Actor::system(),
                 };
-                let orgs = account_orgs(&mut tx, &account, provider.as_deref()).await?;
+                let mut orgs = account_orgs(&mut tx, &account, provider.as_deref()).await?;
+                orgs.extend(audit.also.iter().cloned());
+                orgs.sort();
+                orgs.dedup();
                 crate::audit::record_each(&mut tx, &orgs, &actor, audit.action, Some(("account", &account)), audit.detail.clone()).await?;
             }
         }
@@ -972,7 +983,8 @@ impl Sso {
                 };
                 if let Some(reason) = refused {
                     log("sso_refused", "recheck_rules");
-                    self.revoke_where(same_subject, &binds, false, Revoked::system("session.revoked", json!({"reason": reason, "provider": configured.id}))).await?;
+                    let revoked = Revoked { also: applied.removed.clone(), ..Revoked::system("session.revoked", json!({"reason": reason, "provider": configured.id})) };
+                    self.revoke_where(same_subject, &binds, false, revoked).await?;
                     return Ok(Recheck::Revoked);
                 }
                 Ok(Recheck::Kept)
@@ -1033,10 +1045,13 @@ struct Revoked<'a> {
     action: &'a str,
     detail: Value,
     by_self: Option<Option<std::net::IpAddr>>,
+    /// Organisations audited beside those where the account holds a role: the ones whose role
+    /// was just taken away, which caused the revocation.
+    also: Vec<String>,
 }
 impl<'a> Revoked<'a> {
     fn system(action: &'a str, detail: Value) -> Self {
-        Self { action, detail, by_self: None }
+        Self { action, detail, by_self: None, also: Vec::new() }
     }
 }
 enum Recheck {
@@ -1518,7 +1533,7 @@ async fn me(State(s): State<Shared>, headers: HeaderMap) -> Response {
 async fn logout(State(s): State<Shared>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap) -> Response {
     let Some(token) = bearer(&headers) else { return error(StatusCode::UNAUTHORIZED, "sign in required") };
     let hash = sha256_hex(token.as_bytes());
-    let signed_out = Revoked { action: "session.sign_out", detail: json!({}), by_self: Some(crate::audit::source(&source)) };
+    let signed_out = Revoked { action: "session.sign_out", detail: json!({}), by_self: Some(crate::audit::source(&source)), also: Vec::new() };
     match s
         .revoke_where("UPDATE sso_logins SET revoked = true WHERE token_hash = $1 AND NOT revoked AND expires > now() RETURNING issuer, subject, account, provider", &[Some(&hash)], false, signed_out)
         .await

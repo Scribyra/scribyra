@@ -403,6 +403,11 @@ exported heads outside the database.
 | `session.sign_in`, `session.sign_out` | A sign-in is redeemed; a session signs out | the account; `{provider, role}` |
 | `session.refused` | A sign-in in progress is refused (`reason`: a claim check, `no_role`, `guest`, `no_organisation`, `token_exchange`, `account_disabled`, `account_removed`, …) | `system` (or the account, when known); `{reason, provider}`; in the deployment chain, or in the organisations that stopped the account. Requests with an unknown `state` are not recorded |
 | `session.revoked`, `account.blocked` | Back-channel logout, a refused refresh token (`invalid_grant` blocks the account), a refresh that leaves no role (`reason`: `no_role`, `guest`, `no_organisation`, `no_access`) | `system`; `{reason, provider}` |
+
+Sign-ins, sign-outs, revocations and blocks are recorded in each organisation where the account
+holds a role and is not stopped at that moment (a revocation because a refresh took roles away
+also in the organisations that lost them); an organisation the person left, or where an
+administrator disabled or removed them, does not see their later sessions.
 | `account.created`, `account.role_changed` | An account's first sign-in into an organisation; a role the provider changed at a sign-in or refresh (`to: null` when it took the role away) | `{provider, role}`; `system`, `{from, to, by: "provider"}` |
 | `account.disabled`, `account.unblocked`, `account.removed` | Admin area; `account unblock` (`system`, `by: "cli"`) | `{from}`; removal `{transferredTo, projects, shares}` |
 | `project.created`, `project.renamed`, `project.deleted`, `project.transferred` | Owners, editors and administrators (`admin: true` when an administrator acted) | target the project |

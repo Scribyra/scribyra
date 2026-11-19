@@ -412,3 +412,28 @@ fn a_zitadel_project_grant_makes_guests_of_the_project_owner() {
     let off = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"provider": {"claims": null, "preset": "zitadel", "zitadel_project_id": "42", "zitadel_project_owner_org": "100"}}));
     assert_eq!(off.env.client().sign_in("bea").0, Outcome::Error("guest".into()));
 }
+
+#[test]
+fn sign_outs_are_audited_only_where_the_person_holds_a_role() {
+    // Review (low): sign-outs and revocations were audited in every organisation the account had
+    // ever been in, so an organisation that stopped someone, or that they left, kept seeing
+    // their sessions.
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": zitadel_provider()}));
+    let c = sr.env.client();
+    let bea = sr.api(&token(&c.login("bea")));
+    let cy = token(&c.login("cy"));
+    let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
+    let cy_id = account(&sr, "cy");
+    let sign_outs = |org: &str| postgres().psql(&sr.db(), &format!("SELECT count(*) FROM audit_log WHERE org = '{org}' AND action = 'session.sign_out' AND actor = '{cy_id}'"));
+    assert_eq!(c.logout(&cy).status, 200);
+    assert_eq!((sign_outs(&a), sign_outs(&b)), ("1".into(), "1".into()));
+    // Stopped in B: B does not see the next sign-out.
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/disable"), None).status, 200);
+    assert_eq!(c.logout(&token(&c.login("cy"))).status, 200);
+    assert_eq!((sign_outs(&a), sign_outs(&b)), ("2".into(), "1".into()));
+    // Left A (the provider took the role away): A does not see the next one either.
+    sr.env.idp.set("cy", json!({"zitadel": {"resourceowner": "100", "project_id": "42", "roles": {MEMBER: {"200": "b"}}}}));
+    assert_eq!(bea.call("POST", &format!("/v1/admin/members/{cy_id}/unblock"), None).status, 200);
+    assert_eq!(c.logout(&token(&c.login("cy"))).status, 200);
+    assert_eq!((sign_outs(&a), sign_outs(&b)), ("2".into(), "2".into()));
+}
