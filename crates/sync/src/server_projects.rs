@@ -778,7 +778,7 @@ pub async fn accept_invitations(pool: &PgPool, account: &str, provider: &str, ip
     let accepted: Vec<(String, String, Option<String>, String, String)> = sqlx::query_as(
         "UPDATE sr_invitations i SET state = 'accepted' FROM sr_projects p, memberships m, organisations o
          WHERE i.project = p.project AND p.deleted IS NULL AND p.owner <> $2 AND i.state = 'pending' AND i.email = $1 AND i.expires > now()
-           AND m.account = $2 AND m.org = p.org AND m.state = 'active' AND m.role IS NOT NULL AND o.org = p.org AND o.provider = $3
+           AND m.account = $2 AND m.org = p.org AND m.state = 'active' AND (m.role IN ('admin', 'member') OR (m.role = 'guest' AND i.guest)) AND o.org = p.org AND o.provider = $3
          RETURNING i.project, i.role, i.created_by, i.invitation, p.org",
     )
     .bind(&email)
@@ -1550,11 +1550,19 @@ fn valid_email(text: &str) -> bool {
 struct Invite {
     email: String,
     role: String,
+    /// Invite a guest of the organisation too (only when the deployment admits guests).
+    #[serde(default)]
+    guest: bool,
+    /// The account to share with, when several hold this email (from a `409 choose_account`).
+    #[serde(default)]
+    account: Option<String>,
 }
-/// Shares at once with every account of the project's organisation (a member or administrator,
-/// or a guest when the deployment admits guests) whose verified email this is (`200` when the
-/// share existed, `201` when new), or records a pending invitation that the first such sign-in in
-/// that organisation accepts (`201`, `status: "pending"`). Accounts of other organisations are
+/// Shares at once with the account of the project's organisation whose verified email this is: a
+/// member or administrator, or a guest only when the request says `guest: true` (and the
+/// deployment admits guests). `200` when the share existed, `201` when new. When several such
+/// accounts hold the email, the inviter chooses: `409 choose_account` lists them, and the request
+/// names one in `account`. Without any, records a pending invitation that the first such sign-in
+/// in that organisation accepts (`201`, `status: "pending"`). Accounts of other organisations are
 /// never matched, whatever their email.
 async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<axum::Extension<crate::service::Source>>, headers: HeaderMap, Json(request): Json<Invite>) -> Response {
     let (projects, caller) = match sr.caller(&headers).await {
@@ -1573,14 +1581,14 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
     if !valid_email(&email) || Access::share(&request.role).is_none() {
         return error(StatusCode::BAD_REQUEST, "invalid email or role");
     }
-    let guests = deployment.guests == crate::config::Guests::Shared;
+    let guests = deployment.guests == crate::config::Guests::Shared && request.guest;
     let days = projects.store.config.sr_invitation_days as f64;
     let actor = crate::audit::Actor::account(&caller.account, crate::audit::source(&source));
     let done = async {
         let mut tx = projects.store.pool.begin().await?;
         let owner: String = sqlx::query_scalar("SELECT owner FROM sr_projects WHERE project = $1 AND deleted IS NULL FOR UPDATE").bind(&p).fetch_one(&mut *tx).await?;
-        let accounts: Vec<String> = sqlx::query_scalar(
-            "SELECT a.account FROM accounts a JOIN memberships m ON m.account = a.account AND m.org = $2
+        let found: Vec<(String, Option<String>, String, String)> = sqlx::query_as(
+            "SELECT a.account, a.name, a.provider, m.role FROM accounts a JOIN memberships m ON m.account = a.account AND m.org = $2
              WHERE a.email = $1 AND a.email_verified AND a.state = 'active' AND m.state = 'active' AND (m.role IN ('admin', 'member') OR (m.role = 'guest' AND $3)) ORDER BY a.account",
         )
         .bind(&email)
@@ -1588,7 +1596,19 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
         .bind(guests)
         .fetch_all(&mut *tx)
         .await?;
-        let others: Vec<&String> = accounts.iter().filter(|a| **a != owner).collect();
+        let accounts: Vec<String> = found.iter().map(|(a, ..)| a.clone()).collect();
+        let mut others: Vec<&String> = accounts.iter().filter(|a| **a != owner).collect();
+        // Review (low): several accounts with one verified email are never all shared with; the
+        // inviter chooses one.
+        if let Some(chosen) = &request.account {
+            others.retain(|a| *a == chosen);
+            if others.is_empty() {
+                return Ok((StatusCode::NOT_FOUND, json!({"status": "unknown_account"})));
+            }
+        } else if others.len() > 1 {
+            let candidates: Vec<Value> = found.iter().filter(|(a, ..)| *a != owner).map(|(account, name, provider, role)| json!({"account": account, "name": name, "email": email, "provider": provider, "role": role})).collect();
+            return Ok((StatusCode::CONFLICT, json!({"status": "choose_account", "candidates": candidates})));
+        }
         let outcome = if !accounts.is_empty() {
             let mut fresh = false;
             for account in &others {
@@ -1610,8 +1630,8 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
             (if fresh { StatusCode::CREATED } else { StatusCode::OK }, json!({"status": if others.is_empty() { "owner" } else { "shared" }}))
         } else {
             let (id, expires): (String, i64) = sqlx::query_as(
-                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int))
-                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires
+                "INSERT INTO sr_invitations (invitation, project, email, role, created_by, expires, guest) VALUES ($1, $2, $3, $4, $5, now() + make_interval(days => $6::int), $7)
+                 ON CONFLICT (project, email) WHERE state = 'pending' DO UPDATE SET role = EXCLUDED.role, created_by = EXCLUDED.created_by, expires = EXCLUDED.expires, guest = EXCLUDED.guest
                  RETURNING invitation, (extract(epoch FROM expires) * 1000)::bigint",
             )
             .bind(random_hex())
@@ -1620,6 +1640,7 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
             .bind(&request.role)
             .bind(&caller.account)
             .bind(days as i32)
+            .bind(guests)
             .fetch_one(&mut *tx)
             .await?;
             // The invitee's email is not recorded: emails appear only as account details.
@@ -1636,6 +1657,13 @@ async fn invite(State(sr): State<Shared>, Path(p): Path<String>, source: Option<
     };
     if body["status"] == "owner" {
         return error(StatusCode::CONFLICT, "that is the project's owner");
+    }
+    if body["status"] == "unknown_account" {
+        return error(StatusCode::NOT_FOUND, "no account of this organisation with that email");
+    }
+    if body["status"] == "choose_account" {
+        let body = json!({"error": "several accounts have this email; choose one", "code": "choose_account", "candidates": body["candidates"]});
+        return ok_json(StatusCode::CONFLICT, body);
     }
     match sr.details(projects, &caller, &p, access).await {
         Ok(details) => {

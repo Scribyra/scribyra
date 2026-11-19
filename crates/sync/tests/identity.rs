@@ -31,6 +31,10 @@ fn zitadel_users() -> Value {
         // The same email in both organisations: two people as far as Scribyra knows.
         zitadel("dee", "dee@shared.test", "100", &[(MEMBER, "100")], json!({})),
         zitadel("dee-b", "dee@shared.test", "200", &[(MEMBER, "200")], json!({})),
+        // A guest of 200 (granted there, at home in 100) who signs in late.
+        zitadel("gia", "gia@a.test", "100", &[(MEMBER, "200")], json!({})),
+        // A second account of organisation 100 with dee's verified email.
+        zitadel("dee2", "dee@shared.test", "100", &[(MEMBER, "100")], json!({})),
         // A provider that does not say whether the email is verified.
         zitadel("ghost", "ghost@a.test", "100", &[(MEMBER, "100")], json!({"email_verified": null})),
         // A role keyed by an organisation that granted nothing mapped, and one with no mapped role.
@@ -141,7 +145,7 @@ fn organisations_are_isolated_on_every_route_and_in_the_audit_log() {
     assert_eq!(ana.invite(&pa, "dee@shared.test", "editor").json()["status"], "shared");
     assert_eq!((dee.details(&pa).status, dee_b.details(&pa).status), (200, 404));
     // A guest of B is shared with only inside B, and sees nothing of A from there.
-    assert_eq!(bea.invite(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "viewer").json()["status"], "shared");
     assert_eq!((ids(&cy_b), ids(&cy_a)), (vec![pb.clone()], vec![]));
     assert_eq!(cy_a.details(&pb).status, 404);
     assert_eq!(cy_b.call("POST", "/v1/sr/projects", Some(json!({"name": "mine"}))).status, 403);
@@ -213,7 +217,7 @@ fn a_role_taken_away_at_a_refresh_cuts_access_at_once() {
     let cy = sr.api(&token(&cy_login));
     let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
     let pb = bea.create("B paper");
-    assert_eq!(bea.invite(&pb, "cy@a.test", "editor").status, 201);
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "editor").status, 201);
     let cy_b = cy.in_org(&b);
     assert_eq!(cy_b.log(&pb, 0).status, 200);
     // A heads poll in B waits; the provider withdraws B's grant; the next refresh ends it.
@@ -448,7 +452,7 @@ fn an_administrator_stops_someone_only_in_their_own_organisation() {
     let (a, b) = (org_of(&sr, "100"), org_of(&sr, "200"));
     let (pa, pb) = (ana.create("A paper"), bea.create("B paper"));
     assert_eq!(ana.invite(&pa, "cy@a.test", "editor").json()["status"], "shared");
-    assert_eq!(bea.invite(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "viewer").json()["status"], "shared");
     let (cy_a, cy_b) = (cy.in_org(&a), cy.in_org(&b));
     let version = cy_b.heads(None, 0).json()["version"].as_str().unwrap().to_owned();
     let poll = {
@@ -470,4 +474,46 @@ fn an_administrator_stops_someone_only_in_their_own_organisation() {
     assert_eq!(cy_b.log(&pb, 0).status, 404);
     assert_eq!(c.me(&cy.token).json()["orgs"].as_array().unwrap().len(), 1);
     assert_eq!(sr.api(&token(&c.login("cy"))).in_org(&b).log(&pb, 0).status, 200);
+}
+
+#[test]
+fn invitations_pick_members_unless_a_guest_is_invited_and_ask_when_several_share_an_email() {
+    // Review (low): an invitation shared with every account of the organisation holding the
+    // email, guests included, whatever the inviter meant.
+    let sr = Sr::start(Blobs::Fs, zitadel_users(), json!({}), json!({"guests": "shared", "provider": zitadel_provider()}));
+    let c = sr.env.client();
+    let (ana, bea, cy) = (sr.api(&token(&c.login("ana"))), sr.api(&token(&c.login("bea"))), sr.api(&token(&c.login("cy"))));
+    let b = org_of(&sr, "200");
+    // cy is only a guest of B: a plain invitation does not share with her, and stays pending even
+    // through her next sign-in; an explicit guest invitation does.
+    let pb = bea.create("B paper");
+    assert_eq!(bea.invite(&pb, "cy@a.test", "viewer").json()["status"], "pending");
+    assert_eq!(cy.in_org(&b).details(&pb).status, 404);
+    let cy = sr.api(&token(&c.login("cy")));
+    assert_eq!(cy.in_org(&b).details(&pb).status, 404, "a guest's sign-in does not take a member invitation");
+    assert_eq!(bea.invite_guest(&pb, "cy@a.test", "viewer").json()["status"], "shared");
+    assert_eq!(cy.in_org(&b).details(&pb).status, 200);
+    // Pending invitations to someone who has not signed in yet: a guest's first sign-in takes
+    // only the one that invited a guest.
+    let (member_only, as_guest) = (bea.create("B second"), bea.create("B third"));
+    assert_eq!(bea.invite(&member_only, "gia@a.test", "viewer").json()["status"], "pending");
+    assert_eq!(bea.invite_guest(&as_guest, "gia@a.test", "viewer").json()["status"], "pending");
+    let gia = sr.api(&token(&c.login("gia")));
+    assert_eq!((gia.details(&member_only).status, gia.details(&as_guest).status), (404, 200));
+    // Two accounts of A with one verified email: the inviter chooses.
+    let (dee, dee2) = (sr.api(&token(&c.login("dee"))), sr.api(&token(&c.login("dee2"))));
+    let pa = ana.create("A paper");
+    let refused = ana.invite(&pa, "dee@shared.test", "editor");
+    assert_eq!((refused.status, refused.json()["code"].as_str()), (409, Some("choose_account")));
+    let mut candidates: Vec<String> = refused.json()["candidates"].as_array().unwrap().iter().map(|c| c["account"].as_str().unwrap().to_owned()).collect();
+    candidates.sort();
+    let mut both = vec![account(&sr, "dee"), account(&sr, "dee2")];
+    both.sort();
+    assert_eq!(candidates, both);
+    assert_eq!((dee.details(&pa).status, dee2.details(&pa).status), (404, 404), "nobody is shared with before the choice");
+    let chosen = ana.call("POST", &format!("/v1/sr/projects/{pa}/invitations"), Some(json!({"email": "dee@shared.test", "role": "editor", "account": account(&sr, "dee2")})));
+    assert_eq!(chosen.json()["status"], "shared");
+    assert_eq!((dee.details(&pa).status, dee2.details(&pa).status), (404, 200));
+    let unknown = ana.call("POST", &format!("/v1/sr/projects/{pa}/invitations"), Some(json!({"email": "dee@shared.test", "role": "editor", "account": account(&sr, "ana")})));
+    assert_eq!(unknown.status, 404);
 }

@@ -109,7 +109,8 @@ fn roles_decide_who_reads_writes_and_shares() {
     let doc = Project::new();
     assert_eq!(ana.append(&p, "a", 1, &doc.add_text("f1", "main.tex", None, "x")).status, 201);
     for (email, role) in [("ben@example.org", "editor"), ("cat@example.org", "reviewer"), ("dan@example.org", "viewer"), ("gus@partner.org", "viewer")] {
-        let reply = ana.invite(&p, email, role);
+        // gus is a guest: invited as one.
+        let reply = if email == "gus@partner.org" { ana.invite_guest(&p, email, role) } else { ana.invite(&p, email, role) };
         assert_eq!((reply.status, reply.json()["status"].as_str()), (201, Some("shared")), "{email}");
     }
     // Editors write updates and objects; reviewers and viewers read but are refused writes.
