@@ -201,9 +201,11 @@ export function addedPermissions(granted,requested){
 const privateOrigin=origin=>{const host=new URL(origin).hostname.replace(/^\[|\]$/g,'');return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd]|fe80:)/i.test(host)||host.endsWith('.local');};
 const list=items=>items.length<=1?items.join(''):`${items.slice(0,-1).join(', ')} and ${items.at(-1)}`;
 /** Plain words for the consent dialog and the manager, one line per permission. */
+// Most consequential first: what it reads and changes, where it sends, what it keeps.
+const ORDER=['project.read','project.write','network','secrets','bibliography','completion','ui.dialog','ui.command','ui.fileAction'];
 export function describePermissions(permissions){
   const lines=[];
-  for(const [key,grant]of Object.entries(permissions)){
+  for(const [key,grant]of Object.entries(permissions).sort(([a],[b])=>ORDER.indexOf(a)-ORDER.indexOf(b))){
     switch(key){
       case 'project.read':lines.push({key,text:`Read files in the open project matching ${list(grant.files)}`,detail:'Only the project you have open, never your other projects, history or comments.'});break;
       case 'project.write':lines.push({key,text:[grant.create.length?`Create ${list(grant.create)} files and change the files it created`:'',grant.pick?'Change files you pick for it':''].filter(Boolean).join('; '),detail:'In Reviewing its changes become suggestions; in Viewing it cannot change anything.'});break;

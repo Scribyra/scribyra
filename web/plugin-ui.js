@@ -14,6 +14,8 @@ function el(tag,props={},...children){
   for(const child of children.flat())if(child!==null&&child!==undefined&&child!==false)node.append(child);
   return node;
 }
+// replaceChildren would turn a skipped (null) part into the text “null”.
+const present=(...nodes)=>nodes.filter(node=>node!==null&&node!==undefined&&node!==false);
 const button=(text,onclick,{primary=false,danger=false,...props}={})=>el('button',{type:'button',className:`button ${primary?'primary':'secondary'}${danger?' danger':''}`,text,onclick,...props});
 const sourceText=(source,url)=>source==='official'?'From the official Scribyra plugin registry. Its signature and checksum were verified.':`From ${url||'a URL'} in developer mode.`;
 
@@ -33,7 +35,7 @@ export function consentDialog({manifest,source,sourceUrl,sha256,existing=null,ad
     const title=regrant?`Allow ${manifest.name} again?`:update?`Update ${manifest.name} to ${manifest.version}?`:`Install ${manifest.name}?`;
     const dialog=el('dialog',{className:'modal plugin-consent','aria-label':title});restoreDialogFocus(dialog);
     const finish=value=>{dialog.close();dialog.remove();resolve(value);};
-    dialog.append(
+    dialog.append(...present(
       el('h2',{text:title}),
       el('p',{className:'plugin-meta',text:`${manifest.name} ${manifest.version} · by ${manifest.publisher}${update&&!regrant?` · now ${existing.version}`:''}`}),
       manifest.description?el('p',{text:manifest.description}):null,
@@ -44,7 +46,7 @@ export function consentDialog({manifest,source,sourceUrl,sha256,existing=null,ad
       el('h3',{text:regrant?'It will be able to:':newOnly?'This version asks for more:':update?'It asks for nothing new.':'It will be able to:'}),
       newOnly||!update?permissionList(newOnly?added:manifest.permissions,{label:newOnly?'New permissions':'Permissions'}):null,
       el('p',{className:'plugin-text tone-muted',text:'It runs in a sandbox: it cannot see your other projects, this browser’s storage, other plugins’ data, or any address not listed. You can revoke permissions, disable or uninstall it anytime in More tools → Plugins.'}),
-      el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button(regrant?'Allow':update?'Update':'Install',()=>finish(true),{primary:true})));
+      el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button(regrant?'Allow':update?'Update':'Install',()=>finish(true),{primary:true}))));
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
     document.body.append(dialog);dialog.showModal();dialog.querySelector('.button.primary').focus();
   });
@@ -68,10 +70,10 @@ export function pickFileDialog({plugin,title,files,signal}){
     const name=`plugin-pick-${Math.random().toString(36).slice(2)}`;
     const finish=value=>{dialog.close();dialog.remove();resolve(value);};
     const choices=files.map(file=>el('label',{className:'plugin-choice'},el('input',{type:'radio',name,value:file.id}),el('span',{text:file.path})));
-    dialog.append(el('h2',{text:title}),
+    dialog.append(...present(el('h2',{text:title}),
       el('p',{text:`${plugin.name} asks you to choose a file. It will be able to read and change the file you choose; nothing else changes.`}),
       files.length?el('div',{className:'plugin-choices vertical',role:'radiogroup','aria-label':'Files'},choices):el('p',{className:'plugin-text tone-muted',text:'No file in this project fits.'}),
-      el('div',{className:'modal-actions'},button('Cancel',()=>finish(null)),button('Choose file',()=>{const id=dialog.querySelector('input:checked')?.value;finish(files.find(file=>file.id===id)||null);},{primary:true})));
+      el('div',{className:'modal-actions'},button('Cancel',()=>finish(null)),button('Choose file',()=>{const id=dialog.querySelector('input:checked')?.value;finish(files.find(file=>file.id===id)||null);},{primary:true}))));
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish(null);});
     // The plugin stopped (disabled, revoked, uninstalled): its picker goes with it.
     signal?.addEventListener('abort',()=>{if(dialog.isConnected)finish(null);},{once:true});
@@ -138,8 +140,8 @@ export function pluginManager({system,catalog,fetchPackage,policy,notify}){
               await system.uninstall(record.id);say(`${name} was uninstalled and its data and secrets were removed from this device.`);}),{danger:true,'aria-label':`Uninstall ${name}`,'data-focus':`uninstall:${record.id}`,disabled:busy})));
       }):[el('li',{className:'plugin-empty',text:'No plugins are installed in this browser.'})]));
       // Official registry: nothing is fetched until Browse.
-      if(!registry)official.replaceChildren(el('p',{className:'plugin-text',text:'Browse the plugins Scribyra publishes. Each is signed and checked before it is offered.'}),browseError?el('p',{className:'plugin-text tone-warning',text:browseError}):null,
-        button('Browse official plugins',()=>void work(async()=>{browseError='';const {officialRegistry}=await catalog();try{registry=await officialRegistry();}catch(error){browseError=error.message;throw error;}say(`${registry.plugins.length} official ${registry.plugins.length===1?'plugin':'plugins'} available.`);}),{primary:!records.length,'data-focus':'browse',disabled:busy}));
+      if(!registry)official.replaceChildren(...present(el('p',{className:'plugin-text',text:'Browse the plugins Scribyra publishes. Each is signed and checked before it is offered.'}),browseError?el('p',{className:'plugin-text tone-warning',text:browseError}):null,
+        button('Browse official plugins',()=>void work(async()=>{browseError='';const {officialRegistry}=await catalog();try{registry=await officialRegistry();}catch(error){browseError=error.message;throw error;}say(`${registry.plugins.length} official ${registry.plugins.length===1?'plugin':'plugins'} available.`);}),{primary:!records.length,'data-focus':'browse',disabled:busy})));
       else official.replaceChildren(el('ul',{className:'plugin-cards','aria-label':'Official plugins'},registry.plugins.map(plugin=>{
         const latest=[...plugin.versions].filter(version=>version.compatible).sort((a,b)=>system.compare(b.version,a.version))[0],installed=records.find(record=>record.id===plugin.id);
         const reason=latest?system.policyReason({id:plugin.id,version:latest.version,sha256:latest.sha256,source:'official',action:installed?'update':'install'}):'This plugin needs a newer Scribyra.';
@@ -150,7 +152,7 @@ export function pluginManager({system,catalog,fetchPackage,policy,notify}){
           el('div',{className:'plugin-card-actions'},installed?el('span',{className:'plugin-badge tone-neutral',text:`Installed · ${installed.version}`}):button(`Install ${plugin.name}`,()=>void work(()=>installOfficial(plugin,latest)),{primary:true,disabled:busy||!!reason,'data-focus':`install:${plugin.id}`})));
       })));
       const devOn=developerMode()&&policy.developerMode;
-      developer.replaceChildren(
+      developer.replaceChildren(...present(
         policy.developerMode?el('label',{className:'plugin-switch'},el('input',{type:'checkbox',role:'switch',checked:devOn,'data-focus':'developer',disabled:busy,onchange:event=>{const on=event.target.checked;void work(async()=>{setDeveloperMode(on);await system.refresh();say(on?'Developer mode is on. Only install plugins you trust.':'Developer mode is off. Plugins installed from a URL are stopped.');});}}),el('span',{text:'Developer mode'})):el('p',{className:'plugin-text tone-muted',text:'Your organisation does not allow developer mode.'}),
         devOn?el('div',{className:'plugin-warning',role:'note'},el('strong',{text:'Developer mode installs unreviewed code.'}),el('p',{text:'Plugins from a URL are not signed or reviewed by Scribyra. Anyone can publish one. Install only plugins you are developing or whose code you have read.'})):null,
         devOn?el('div',{className:'plugin-url'},el('label',{for:'plugin-url-input',text:'Plugin package URL'}),el('input',{id:'plugin-url-input',className:'input',type:'url',placeholder:'https://example.org/my-plugin-1.0.0.scribyra-plugin.json',autocomplete:'off',spellcheck:'false','data-focus':'url'}),
@@ -159,19 +161,19 @@ export function pluginManager({system,catalog,fetchPackage,policy,notify}){
             if(url.protocol!=='https:'&&!/^(127\.0\.0\.1|localhost)$/.test(url.hostname))throw new Error('Use an https:// address (or http://localhost while developing).');
             say(`Reading ${url.href}…`);const bytes=await fetchPackage(url.href);
             await install(await system.prepare(bytes,{source:'developer',sourceUrl:url.href}),bytes);
-          }),{'data-focus':'install-url',disabled:busy})):null);
+          }),{'data-focus':'install-url',disabled:busy})):null));
       refocus(focusKey);
     }
     const finish=()=>{if(closed)return;closed=true;dialog.close();dialog.remove();resolve();};
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish();});
     const restricted=policy.allow||!policy.userInstall;
-    dialog.append(el('h2',{text:'Plugins'}),
+    dialog.append(...present(el('h2',{text:'Plugins'}),
       el('p',{text:'Plugins add features to Scribyra. Each one runs in a sandbox, apart from your projects and this browser’s storage, and can do only what you allow when you install it.'}),
       restricted?el('p',{className:'plugin-text tone-note',role:'note',text:'Your organisation chooses which plugins can be installed here.'}):null,
       el('section',{'aria-labelledby':'plugins-installed'},el('h3',{id:'plugins-installed',text:'Installed'}),installedList),
       el('section',{'aria-labelledby':'plugins-official'},el('h3',{id:'plugins-official',text:'Official plugins'}),official),
       el('section',{'aria-labelledby':'plugins-developer'},el('h3',{id:'plugins-developer',text:'Developer'}),developer),
-      status,el('div',{className:'modal-actions'},button('Close',finish,{className:'button secondary plugin-manager-close'})));
+      status,el('div',{className:'modal-actions'},button('Close',finish,{className:'button secondary plugin-manager-close'}))));
     document.body.append(dialog);dialog.showModal();
     void draw().then(()=>{if(!closed)(dialog.querySelector('.plugin-cards input[role=switch]')||dialog.querySelector('[data-focus="browse"]')||dialog.querySelector('.plugin-manager-close')).focus();});
   });

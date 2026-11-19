@@ -76,7 +76,7 @@ test('updates: only new or widened permissions need consent again',()=>{
 
 test('permissions are described in plain words',()=>{
   const lines=describePermissions(validateManifest(ZOTERO).permissions);
-  assert.deepEqual(lines.map(line=>line.text),['Suggest citations while you type','Contact https://api.zotero.org','Read files in the open project matching *.bib, *.ltx and *.tex','Create *.bib files and change the files it created','Keep secrets such as API keys on this device','Add items to More tools','Show dialogs','Add actions to the file tree and a bar above its files']);
+  assert.deepEqual(lines.map(line=>line.text),['Read files in the open project matching *.bib, *.ltx and *.tex','Create *.bib files and change the files it created','Contact https://api.zotero.org','Keep secrets such as API keys on this device','Suggest citations while you type','Show dialogs','Add items to More tools','Add actions to the file tree and a bar above its files']);
   assert.match(lines.find(line=>line.key==='network').detail,/can send what it reads/);
 });
 

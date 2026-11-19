@@ -48,6 +48,7 @@ test('nothing is fetched or run before the person installs; consent shows permis
   await expect(card.getByRole('switch',{name:'Enable Zotero'})).toBeChecked();
   await expect(card).toContainText('Official');
   await expect(page.locator(`iframe.plugin-sandbox[data-plugin="${ZOTERO_ID}"]`)).toHaveCount(1);
+  await expect(manager).not.toContainText('null');await expect(manager).not.toContainText('undefined');
   await shoot(page,'plugins-manager',manager);
   const axe=await new AxeBuilder({page}).include('.plugin-manager').analyze();expect(axe.violations.map(v=>v.id)).toEqual([]);
   await manager.getByRole('button',{name:'Close',exact:true}).click();
