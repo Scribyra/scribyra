@@ -51,7 +51,7 @@ test('separate presentation and root app hosts compile online and offline',async
 test('site pages may be indexed, with a sitemap, and every page they link to in the release exists',async({page})=>{
  const robots=await readFile(resolve(directory,'robots.txt'),'utf8');expect(robots).toContain('Allow: /');expect(robots).not.toMatch(/^Disallow: \/$/m);expect(robots).toContain('Sitemap: https://scribyra.com/sitemap.xml');
  expect((await page.request.get(new URL('sitemap.xml',presentation).href)).ok()).toBe(true);
- for(const name of ['','privacy.html','licenses.html','telemetry.html']){
+ for(const name of ['','privacy.html','licenses.html','telemetry.html','open.html']){
   await page.goto(new URL(name,presentation).href);await expect(page.locator('meta[name=robots]')).toHaveCount(0);
   const hrefs=await page.locator('a[href]').evaluateAll(links=>links.map(link=>link.getAttribute('href')));expect(hrefs.filter(href=>/gitlab\.com\/urundead-labs/.test(href)),`${name||'index'} links to the GitLab repository`).toEqual([]);
   if(name!=='telemetry.html'){const github=page.getByRole('banner').getByRole('link',{name:'Source code on GitHub',exact:true});await expect(github).toBeVisible();await expect(github).toHaveAttribute('href','https://github.com/Scribyra/scribyra');await expect(github).toContainText('GitHub');await expect(page.getByRole('contentinfo').getByRole('link',{name:'Source ↗',exact:true})).toHaveAttribute('href','https://github.com/Scribyra/scribyra');}
@@ -61,10 +61,14 @@ test('site pages may be indexed, with a sitemap, and every page they link to in 
   }
  }
  for(const notice of ['LICENSE.txt','COPYRIGHT.txt','THIRD_PARTY.txt','LICENSE.TL.txt','LICENSE.CTAN.txt','release-texlive.txt','tex-support-NOTICE.txt','tex-catalog-NOTICE.txt'])expect((await page.request.get(new URL(`licenses/${notice}`,presentation).href)).ok(),notice).toBe(true);
- await page.goto(new URL('privacy.html',presentation).href);await expect(page.getByRole('link',{name:'tlnet.yihui.org',exact:true})).toBeVisible();await expect(page.getByRole('link',{name:'api.zotero.org',exact:true})).toBeVisible();await expect(page.locator('main')).not.toContainText(/end-to-end encrypt/i);
+ // The link generator and its badges ship with the presentation site.
+ for(const badge of ['badge.svg','badge-dark.svg','badges/flat.svg','badges/flat-square.svg','badges/for-the-badge.svg']){const response=await page.request.get(new URL(badge,presentation).href);expect(response.ok(),badge).toBe(true);expect(response.headers()['content-type']).toContain('image/svg+xml');expect(await response.text()).toContain('<title>Open in Scribyra</title>');}
+ await page.goto(new URL('open.html',presentation).href);await page.getByLabel('Repository or ZIP address').fill('https://gitlab.com/group/paper/-/tree/main/tex');
+ await expect(page.getByLabel('Link',{exact:true})).toHaveValue('https://app.scribyra.com/#open?repo=gitlab.com/group/paper&ref=main&path=tex');
+ await page.goto(new URL('privacy.html',presentation).href);await expect(page.getByRole('link',{name:'tlnet.yihui.org',exact:true})).toBeVisible();await expect(page.locator('main')).toContainText('Open in Scribyra links, only after you confirm.');await expect(page.getByRole('link',{name:'api.zotero.org',exact:true})).toBeVisible();await expect(page.locator('main')).not.toContainText(/end-to-end encrypt/i);
  await expect(page.getByRole('link',{name:'What telemetry contains',exact:true})).toHaveAttribute('href','telemetry.html');await expect(page.locator('main')).toContainText('Grafana Cloud, a third-party service');
  await expect(page.locator('main')).toContainText('URUNDEAD LABS S.R.L. operates Scribyra. It is the data controller');await expect(page.locator('#who + p')).toContainText('EUID ROONRC.J2026034271001');await expect(page.getByRole('link',{name:'dataprotection.ro',exact:true})).toHaveAttribute('href','https://www.dataprotection.ro/');
- for(const name of ['','privacy.html','licenses.html','telemetry.html']){await page.goto(new URL(name,presentation).href);await expect(page.getByRole('contentinfo')).toContainText('© 2026 URUNDEAD LABS S.R.L. · Reg. Com. J2026034271001 · CUI 54762154 · VAT RO55538423 · Strada Pitar Moș 27, et. 5, ap. 17, 010452 București, Romania');}
+ for(const name of ['','privacy.html','licenses.html','telemetry.html','open.html']){await page.goto(new URL(name,presentation).href);await expect(page.getByRole('contentinfo')).toContainText('© 2026 URUNDEAD LABS S.R.L. · Reg. Com. J2026034271001 · CUI 54762154 · VAT RO55538423 · Strada Pitar Moș 27, et. 5, ap. 17, 010452 București, Romania');}
  expect(await(await page.request.get(new URL('licenses/COPYRIGHT.txt',presentation).href)).text()).toContain('Copyright (C) 2026 URUNDEAD LABS S.R.L.');
 });
 

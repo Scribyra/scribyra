@@ -2,7 +2,32 @@
 
 Milestone 9 starts with references. A person can import a `.bib` file from any
 reference manager, or link a project file to a Zotero library and refresh it later.
-Plugins come after this; Zotero is the first bibliography source.
+
+**Since November 19, 2026, Zotero is a plugin** (`plugins/zotero`, [plugins.md](plugins.md)).
+Install it from **More tools** → **Plugins** → **Browse official plugins**. Its
+behaviour is unchanged. It runs in the plugin sandbox and holds only the permissions
+its manifest lists:
+
+- read `*.bib`, `*.tex` and `*.ltx` in the open project;
+- create `*.bib` files and change only those it created;
+- contact `https://api.zotero.org` only;
+- device-only secrets;
+- dialogs, a More tools item, tree actions and the bar above linked files;
+- citation suggestions.
+
+**Import bibliography…** stays built in (`web/bibliography-import.js`). Checking and
+importing a `.bib` file is ordinary file import: it works with any reference manager,
+offline, contacts nobody and needs no secret, so it is core and not a plugin.
+
+When someone who used the built-in Zotero updates, `web/plugin-migration.js` acts on
+start, and only if the old `scribyra-zotero` database exists:
+
+1. It installs the official Zotero plugin from the bundled, signed registry.
+2. It moves the keys into the plugin's secrets, the links into its per-project data,
+   and the linked files into its ownership.
+3. It deletes the old database and says so in a notice.
+
+The links keep working. The browser tests check that with data in the old format.
 
 ## Import a bibliography
 
@@ -25,7 +50,7 @@ tree, or uploading one, runs the same check.
 
 ## Link to Zotero
 
-**Link to Zotero…** (tree menu, or **More tools** → **Zotero**) creates a new `.bib`
+**Link to Zotero…** (tree menu, or **More tools** → **Zotero**, both added by the plugin) creates a new `.bib`
 file filled from a Zotero library:
 
 1. The person enters their Zotero user ID or username and an API key. The dialog
@@ -53,19 +78,23 @@ and shows author, year, title and file.
 
 ### Where the key lives
 
-Keys and links are kept in their own IndexedDB database, `scribyra-zotero`
-(`web/zotero-store.js`), separate from projects (`scribyra-v1`):
+Keys and links are kept by Scribyra for the Zotero plugin only, apart from projects
+(`scribyra-v1`); the plugin itself has no storage of its own (`plugins/zotero/src/store.js`):
 
-| Store | Contents |
+| Where | Contents |
 | --- | --- |
-| `keys` | Zotero user ID, username, the API key, whether it can write |
-| `links` | Project and file ID, library, collection, format, library version, and per Zotero item the citation key, entry and version last written |
+| `scribyra-plugin-secrets`, secret `key-<userID>` | the API key |
+| `scribyra-plugins`, plugin storage `accounts` | Zotero user ID, username, whether the key can write |
+| `scribyra-plugins`, project data `link:<fileId>` | library, collection, format, library version, and per Zotero item the citation key, entry and version last written |
 
+No other plugin can read them: the host keys them by the plugin's id from its own
+record.
 A link record refuses to hold a key. Nothing here is part of a project, so the key
 never reaches project storage, history, `.scribyra-backup` files, source ZIPs,
 direct sessions, diagnostics or telemetry. **More tools** → **Zotero** lists linked
 files (**Refresh**, **Unlink**) and saved keys (**Remove key**). Deleting a project
-removes its links on this device; clearing site data removes everything.
+removes its links on this device. Uninstalling the plugin removes its keys and links.
+Clearing site data removes everything.
 
 Because links are device-local, a linked file exported, restored or opened on
 another device is an ordinary `.bib` file there until it is linked again.
@@ -73,8 +102,9 @@ another device is an ordinary `.bib` file there until it is linked again.
 ### Where requests go
 
 Only `https://api.zotero.org`, from the browser, when the person links or refreshes
-(`web/zotero-api.js`). The origin is a constant; a pagination link to any other host
-stops the fetch. Requests send `Zotero-API-Version: 3` and `Zotero-API-Key`, omit
+(`plugins/zotero/src/api.js`). The origin is a constant in the plugin, and a pagination
+link to any other host stops the fetch. The host's fetch proxy also refuses any other
+origin, and the sandbox has no network access of its own. Requests send `Zotero-API-Version: 3` and `Zotero-API-Key`, omit
 cookies and the referrer, refuse redirects and are not cached. The service worker
 ignores cross-origin requests. `Backoff` and `Retry-After` are honoured, and 403,
 404, 429 and 503 are explained in plain words. The privacy page lists Zotero under
@@ -82,7 +112,7 @@ things only the person can start.
 
 ## Refresh from Zotero
 
-Refresh is a three-way merge by Zotero item key (`web/zotero-sync.js`). The base is
+Refresh is a three-way merge by Zotero item key (`plugins/zotero/src/sync.js`). The base is
 what Scribyra last wrote for each item.
 
 1. `GET …/items/top?format=versions&itemType=-attachment` with
@@ -131,14 +161,16 @@ Reviewing records suggestions that someone accepts line by line. An import creat
 a file, which the tree already refuses in Reviewing, and a refresh replaces many
 entries at once after its own per-entry review; turning it into a set of suggestions
 would ask a reviewer to re-decide choices the person already made in the diff.
-So both are editor-only, the menu items are disabled with the reason, and the
-command layer refuses them if reached another way. Unlinking and removing a key
+So both are editor-only. The menu items and the bar button are disabled with the
+reason. The plugin refuses them with the same messages if they are reached another way,
+and the host independently refuses plugin writes in Viewing and plugin-created files in
+Reviewing. Unlinking and removing a key
 change only this device.
 
 ## Telemetry
 
-Zotero adds no telemetry operation. The Zotero modules never call the recorder
-(`tests/telemetry-consent.test.mjs`). The file changes a refresh makes go through
+Zotero adds no telemetry operation. The Zotero plugin sources, its built package and
+the plugin host never call the recorder (`tests/telemetry-consent.test.mjs`). The file changes a refresh makes go through
 the local-only `command` and `storage_commit` operations like any edit.
 
 ## Verification
@@ -169,11 +201,22 @@ completion; refresh with a conflicting local edit, a cited key that Zotero renam
 an addition and a cited removal, choose per entry, refresh again (304), cancel, and
 keep all; refresh without edits, offline and rate-limited; refuse in Viewing and
 Reviewing; remove the key and unlink; import malformed and clean `.bib` files by
-menu and by drop. They search every IndexedDB database except `scribyra-zotero`,
-`localStorage`, `sessionStorage`, the source ZIP, the complete backup and
-Diagnostics for the key, and check that only requests to the fake carried it.
+menu and by drop.
 
-Results on November 17, 2026: unit tests 18/18; the six Zotero browser tests pass in all three engines, and with `workspace`, `editor`, `accessibility`, `menus` and `pages-domains` 40/40 per engine. Screenshots of the link dialog, the refresh diff, the linked file and the import report in light and dark were reviewed during development.
+Since the plugin port, each test first installs the official plugin through the Plugins
+manager and its consent dialog. The import test installs nothing, because import is
+built in. Two more tests cover the update:
+
+- data in the built-in format moves into the plugin and keeps refreshing;
+- a browser that never used Zotero installs and fetches nothing.
+
+The tests search every IndexedDB database except `scribyra-plugin-secrets`, plus
+`localStorage`, `sessionStorage`, the source ZIP, the complete backup and Diagnostics,
+for the key. They also check that only requests to the fake carried it.
+
+Results on November 17, 2026 (built in): unit tests 18/18; the six Zotero browser tests pass in all three engines, and with `workspace`, `editor`, `accessibility`, `menus` and `pages-domains` 40/40 per engine. Screenshots of the link dialog, the refresh diff, the linked file and the import report in light and dark were reviewed during development.
+
+Results as a plugin, November 19, 2026: the eight Zotero browser tests pass in all three engines. See [plugins.md](plugins.md#verification-results) for the full counts.
 
 Not covered: the real api.zotero.org from a browser (the shapes come from the
 documentation and one header probe), very large libraries beyond the 10,000-entry

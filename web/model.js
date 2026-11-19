@@ -42,6 +42,14 @@ export function projectNodes(doc) {
 }
 export function projectNode(doc, id) { return projectNodes(doc).find(n => n.id === id); }
 export function projectFiles(doc) { return projectNodes(doc).filter(n => !n.folder); }
+/** A free path like refs.bib, refs-2.bib, … (case-insensitive, as the tree compares). */
+export function freePath(doc,path){
+  const taken=new Set(projectFiles(doc).map(file=>file.path.toLowerCase()));
+  if(!taken.has(path.toLowerCase()))return path;
+  const slash=path.lastIndexOf('/'),dot=path.lastIndexOf('.'),stem=dot>slash?path.slice(0,dot):path,ext=dot>slash?path.slice(dot):'';
+  for(let n=2;n<1000;n++){const next=`${stem}-${n}${ext}`;if(!taken.has(next.toLowerCase()))return next;}
+  throw new Error('Choose another file name.');
+}
 export const MAX_RETAINED_BYTES=96*1024*1024;
 export function validateRetainedState(doc){
   if(doc.share.size>4096)throw new Error('Peer state has too many retained roots.');

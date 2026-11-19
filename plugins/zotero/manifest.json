@@ -1,0 +1,31 @@
+{
+  "manifestVersion": 1,
+  "id": "com.scribyra.zotero",
+  "name": "Zotero",
+  "version": "1.0.0",
+  "publisher": "Scribyra",
+  "description": "Link a .bib file in your project to a Zotero library or collection, and refresh it with a reviewable diff. The API key stays on this device and goes only to api.zotero.org.",
+  "homepage": "https://scribyra.com/privacy.html",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "project.read": {"files": ["*.bib", "*.tex", "*.ltx"]},
+    "project.write": {"create": ["*.bib"]},
+    "network": ["https://api.zotero.org"],
+    "secrets": true,
+    "ui.dialog": true,
+    "ui.command": true,
+    "ui.fileAction": true,
+    "bibliography": true
+  },
+  "contributes": {
+    "commands": [
+      {"id": "open", "label": "Zotero", "hint": "Link a library, refresh, keys"}
+    ],
+    "fileActions": [
+      {"id": "link", "label": "Link to Zotero…", "hint": "Creates a .bib you can refresh", "icon": "link", "when": {"target": "folder"}, "modes": ["editing"]},
+      {"id": "refresh", "label": "Refresh from Zotero", "icon": "restore", "when": {"target": "file", "tag": "linked"}, "modes": ["editing"]},
+      {"id": "links", "label": "Zotero links…", "icon": "link", "when": {"target": "file", "tag": "linked"}}
+    ]
+  }
+}

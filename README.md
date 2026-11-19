@@ -28,6 +28,11 @@
   <a href="https://scribyra.com/"><img src="https://img.shields.io/badge/Website-eeebfc?style=for-the-badge" alt="Website" height="36"></a>
 </p>
 
+<p align="center">
+  <a href="https://app.scribyra.com/#open?repo=github.com/Scribyra/scribyra&path=fixtures/article&name=Scribyra%20sample%20article"><img src="https://scribyra.com/badge.svg" alt="Open in Scribyra" height="28"></a>
+  <br><sub>Opens the sample article in <code>fixtures/article</code>. <a href="https://scribyra.com/open.html">Make a badge for your own repository</a> · <a href="docs/open-links.md">link format</a></sub>
+</p>
+
 <br>
 
 <p align="center">
@@ -149,7 +154,7 @@ Everything else, including setup without Nix, tests, measurements, self-hosting 
 
 ## Roadmap
 
-- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, comments, reviews and history, and bibliographies imported from `.bib` files or linked to a Zotero library.
+- ✅ **Available today:** the everyday workspace, TeX downloaded as you need it, comments, reviews and history, bibliographies imported from `.bib` files, and sandboxed plugins such as Zotero for linking a library.
 - 🧪 **Experimental:** an AI working in your tab, and direct sessions on a shared network (off by default).
 - 🗺️ **Planned:** remote and local Git, plugins, remote backup, sync and collaboration, end-to-end encryption, and managed hosting.
 
