@@ -127,13 +127,17 @@ test('the admin area: every project, open as administrator, transfer, remove, de
   await memberRow(admin,'ben@acme.test').getByRole('button',{name:'Confirm removing ben@acme.test'}).click();
   await expect(admin.getByRole('status')).toContainText('ben@acme.test was removed; 2 projects moved.');
   await expect(memberRow(admin,'ben@acme.test')).toHaveCount(0);
+  // To the chosen heir: a redraw between choosing and confirming used to put back the default
+  // (this administrator), and Cat never got Ben's projects.
+  await admin.getByRole('tab',{name:'Projects'}).click();
+  await expect(projectRow(admin,'Ben thesis')).toContainText('cat@acme.test');
+  await expect(projectRow(admin,'Cat notes')).toContainText('cat@acme.test');
   await expect(remoteStatus(ben.page)).toHaveText('Saved on this device',{timeout:60000});
   await home(cat.page);await reopen(cat.page);
   await expect(orgRow(cat.page,'Ben thesis')).toContainText('Not on this device',{timeout:30000});
   await expect(orgRow(cat.page,'Cat notes')).not.toContainText('Editor');
 
   // Delete Cat's notes: gone for its members.
-  await admin.getByRole('tab',{name:'Projects'}).click();
   await projectRow(admin,'Cat notes').getByRole('button',{name:'Delete Cat notes'}).click();
   await projectRow(admin,'Cat notes').getByRole('button',{name:'Delete Cat notes permanently'}).click();
   await expect(admin.getByRole('status')).toContainText('Cat notes was deleted.');

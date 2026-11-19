@@ -80,11 +80,28 @@ test('an organisation admits a reviewer, adds a second device, and syncs edits l
   if(!(await dialog.isVisible()))await ana.page.evaluate(()=>window.scribyra.action('remote-backup'));
   const request=dialog.locator('.org-request');
   await expect(request).toBeVisible({timeout:30000});
-  // A wrong code is refused: the service alone cannot add a device.
-  await request.getByRole('textbox',{name:'Code shown on the new browser'}).fill('0000-0000-0000');
+  // A redraw while the code is being typed (sync status, the long poll and `online` redraw the
+  // dialog) keeps the field, its focus and its caret: it used to drop the keys typed next.
+  const typing=request.getByRole('textbox',{name:'Code shown on the new browser'});
+  const redrawn=async()=>{
+   const drawn=await request.locator('p').first().elementHandle();
+   await ana.page.evaluate(()=>window.dispatchEvent(new Event('online')));
+   await expect.poll(()=>drawn.evaluate(p=>p.isConnected),{timeout:30000}).toBe(false);
+  };
+  await typing.click();await ana.page.keyboard.type(code.slice(0,7));
+  await redrawn();
+  await expect(typing).toBeFocused();
+  await ana.page.keyboard.type(code.slice(7));
+  await expect(typing).toHaveValue(code);
+  // A wrong code is refused: the service alone cannot add a device. It is cleared, and no redraw
+  // brings it back (it used to replace the right code typed next).
+  await typing.fill('0000-0000-0000');
   await request.getByRole('button',{name:'Add this device'}).click();
   await expect(dialog.getByRole('status')).toContainText('does not match');
-  await request.getByRole('textbox',{name:'Code shown on the new browser'}).fill(code);
+  await expect(typing).toHaveValue('');
+  await redrawn();
+  await expect(typing).toHaveValue('');
+  await typing.fill(code);
   await request.getByRole('button',{name:'Add this device'}).click();
   const onLaptop=laptopDialog.getByRole('listitem').filter({hasText:'Shared paper'});
   await expect(onLaptop.getByRole('button',{name:'Download'})).toBeVisible({timeout:30000});

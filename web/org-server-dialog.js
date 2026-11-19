@@ -39,8 +39,20 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
  const x=element('button','×','icon-button');x.type='button';x.setAttribute('aria-label','Close remote backup');x.onclick=close;heading.append(x);
  const body=element('div',null,'org-body'),status=element('p',null,'org-status');status.setAttribute('role','status');
  dialog.append(heading,body,status);
- // What is typed in the invitation form survives redraws (the long poll redraws the dialog).
- const typed={email:'',role:'editor'};
+ // What someone types or chooses survives redraws (the long poll, sync status): the view, rebuilt
+ // on each, reuses the same controls (made once per key) instead of copying values into new ones,
+ // and the control being typed in gets its focus and caret back after the move (moving a node
+ // drops them; keys typed meanwhile would go nowhere).
+ const kept=new Map();let used=new Set(),refocus=null;
+ function keep(key,make){
+  let made=kept.get(key);if(!made)kept.set(key,made=make());
+  else if(!refocus)for(const control of Object.values(made))if(control?.input===document.activeElement)refocus=caret(control.input);
+  used.add(key);return made;
+ }
+ function caret(input){
+  let start=null,end=null,direction;try{({selectionStart:start,selectionEnd:end,selectionDirection:direction}=input);}catch{}
+  return()=>{if(!input.isConnected||document.activeElement===input)return;input.focus({preventScroll:true});if(start!==null)try{input.setSelectionRange(start,end,direction);}catch{}};
+ }
 
  async function shareBox(project){
   const details=await engine.details(project.project),box=element('div',null,'org-share'),manage=['owner','editor'].includes(details.role);
@@ -79,11 +91,10 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    box.append(pending);
   }
   if(manage){
-   const email=field('Email',typed.email,'email'),role=select('Role',ROLES,typed.role);
-   email.input.oninput=()=>{typed.email=email.input.value;};role.input.onchange=()=>{typed.role=role.input.value;};
+   const {email,role}=keep('invite:'+project.project,()=>({email:field('Email','','email'),role:select('Role',ROLES,'editor')}));
    box.append(email.row,role.row,actions(button('Invite',async()=>{
-    const address=typed.email.trim(),result=await engine.invite(project.project,address,typed.role);
-    typed.email='';
+    const address=email.input.value.trim(),result=await engine.invite(project.project,address,role.input.value);
+    email.input.value='';
     feedback=result.status==='pending'?`Invited ${address}. Ask them to sign in to ${engine.info.name}’s Scribyra; the project then appears in their list.`:`Shared with ${address}.`;
    },'primary')));
   }
@@ -91,7 +102,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
  }
 
  async function connected(){
-  const info=engine.info,parts=[];
+  const info=engine.info,parts=[],drawn=used=new Set();
   parts.push(element('p',`${info.name} · ${host(info.service)}`,'org-service'),element('p',MODE_TEXT(info.name),'org-help org-mode'));
   if(info.offline===false)parts.push(element('p',`${info.name} keeps projects online only: you edit while connected, and projects leave this device when you sign out.`,'org-help'));
   if(!info.signedIn){
@@ -135,6 +146,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    if(!personal.length)add.append(element('li','No other projects on this device.','org-help'));
    parts.push(section(`Add to ${info.name}`,element('p',`Adds a copy: its source, files, comments, history and trash go to ${info.name}’s server, which can read them. The project on this device stays as it is.`,'org-help'),add));
   }
+  for(const key of kept.keys())if(!drawn.has(key))kept.delete(key);
   return parts;
  }
 
@@ -144,9 +156,8 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
   if(!engine.connected){body.replaceChildren(element('p',busy?'Signing in…':'Not signed in to a deployment.','org-help'));}
   else if(drawing)redraw=true;
   else drawing=connected().then(parts=>{if(dialog&&engine.connected){
-   const active=document.activeElement?.getAttribute('aria-label')==='Email';
-   body.replaceChildren(...parts);dialog.scrollTop=scroll;if(active)body.querySelector('input[aria-label="Email"]')?.focus();keepFocus();
-  }}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;if(redraw){redraw=false;render();}});
+   body.replaceChildren(...parts);dialog.scrollTop=scroll;refocus?.();keepFocus();
+  }}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;refocus=null;if(redraw){redraw=false;render();}});
   status.textContent=busy?'Working…':feedback;
   keepFocus();
  };

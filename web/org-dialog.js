@@ -13,7 +13,7 @@ const ROLE_LABEL={owner:'Owner',admin:'Admin',member:'Member',editor:'Editor',re
 const POLL_MS=3000;
 
 export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestored=()=>{},onChanged=()=>{}}){
- const codes=new Map();let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,drawing=null,redraw=false,offered=null,about=null,providers=null;
+ let dialog,session,busy=false,feedback='',kit='',remaining=0,render=()=>{},poll=0,shown=null,drawing=null,redraw=false,offered=null,about=null,providers=null;
  const close=()=>session?.close('now');
  function button(label,fn,cls='secondary'){
   const b=element('button',label,'button compact '+cls);b.type='button';
@@ -35,6 +35,23 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
   for(const [v,text] of options){const o=element('option',text);o.value=v;input.append(o);}if(value)input.value=value;
   row.append(element('span',label),input);return{row,input};
  }
+ // What someone types or chooses survives redraws (sync status, the long poll, `online`): the
+ // connected view, rebuilt on each, reuses the same controls (made once per key) instead of copying
+ // values into new ones, and the control being typed in gets its focus and caret back after the
+ // move (moving a node drops them; keys typed meanwhile would go nowhere).
+ const kept=new Map();let used=new Set(),refocus=null;
+ function keep(key,make){
+  let made=kept.get(key);if(!made)kept.set(key,made=make());
+  else if(!refocus)for(const control of Object.values(made))if(control?.input===document.activeElement)refocus=caret(control.input);
+  used.add(key);return made;
+ }
+ /** Puts the focus and selection back in `input` once it is in the page again. */
+ function caret(input){
+  let start=null,end=null,direction;try{({selectionStart:start,selectionEnd:end,selectionDirection:direction}=input);}catch{}
+  return()=>{if(!input.isConnected||document.activeElement===input)return;input.focus({preventScroll:true});if(start!==null)try{input.setSelectionRange(start,end,direction);}catch{}};
+ }
+ /** The same, for the field being typed in now (if any) before the body is redrawn at once. */
+ function typing(){const active=document.activeElement;return body.contains(active)&&active.matches('input,textarea,select')?caret(active):()=>{};}
  function check(label,checked=false){const row=element('label',null,'org-check'),box=element('input');box.type='checkbox';box.checked=checked;row.append(box,element('span',label));return{row,box};}
  function actions(...buttons){const a=element('div',null,'org-actions');a.append(...buttons);return a;}
  function section(title,...nodes){const s=element('section',null,'org-section');s.append(element('h3',title),...nodes);return s;}
@@ -121,7 +138,7 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
  }
 
  async function connected(){
-  const info=engine.info,[name,members,orgProjects,local,links,devices,requests]=await Promise.all([
+  const info=engine.info,drawn=used=new Set(),[name,members,orgProjects,local,links,devices,requests]=await Promise.all([
    engine.orgName(),engine.members(),engine.projects(),listProjects(),engine.links(),engine.devices(),engine.deviceRequests().catch(()=>[])]);
   const linked=new Map(links.map(l=>[l.localId,l])),admin=['owner','admin'].includes(info.role),parts=[];
   parts.push(element('p',`${name||info.name||'Organisation'} · ${info.service}`,'org-service'),element('p',MODE_TEXT.e2ee,'org-help org-mode'));
@@ -177,29 +194,31 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
   for(const d of devices){const row=element('li',null,'org-device');row.append(element('span',d.me?`This browser (${d.short})`:`Device ${d.short}`,'org-name'));if(!d.me)row.append(button('Remove',()=>engine.removeDevice(d.key)));own.append(row);}
   const deviceParts=[own,element('p','To add another browser, sign in there and choose “Ask one of my devices”; it then appears here.','org-help')];
   for(const r of requests){
-   // The service only says who signed in; the code typed here proves which browser it is.
-   // A redraw (the long poll, a membership change) rebuilds this row: what was typed stays.
-   const row=element('div',null,'org-request'),typed=field('Code shown on the new browser',codes.get(r.link)||'');
-   typed.input.oninput=()=>codes.set(r.link,typed.input.value);
-   row.append(element('p',`A browser that signed in with your organisation (the service says: ${r.email||'you'}) asks to be added.`,'org-help'),typed.row,actions(button('Add this device',()=>engine.approveDevice(r,{code:typed.input.value}),'primary')));
+   // The service only says who signed in; the code typed here proves which browser it is. A
+   // refused code is cleared, as someone retypes it: no redraw brings it back.
+   const row=element('div',null,'org-request'),{typed}=keep('code:'+r.link,()=>({typed:field('Code shown on the new browser')}));
+   row.append(element('p',`A browser that signed in with your organisation (the service says: ${r.email||'you'}) asks to be added.`,'org-help'),typed.row,actions(button('Add this device',async()=>{
+    try{await engine.approveDevice(r,{code:typed.input.value});}catch(error){typed.input.value='';throw error;}
+   },'primary')));
    deviceParts.push(row);
   }
   parts.push(section('Your devices',...deviceParts));
   parts.push(actions(button('New recovery kit',async()=>{kit=await engine.replaceRecoveryKit();saved.box.checked=false;}),button('Forget service',async()=>{await engine.forget();remaining=0;onChanged();feedback='This browser no longer backs up. Your local projects and the service’s copies are unchanged.';})));
+  for(const key of kept.keys())if(!drawn.has(key))kept.delete(key);
   return parts;
  }
  function shareForm(project,members){
   const others=members.filter(m=>!m.me&&m.state==='active'&&!project.members.some(x=>x.person===m.person));
   const box=element('div',null,'org-share');
   if(!others.length){box.append(element('p','Everyone in the organisation already has access. New people sign in and ask to join first.','org-help'));return box;}
-  const who=select('Share with',others.map(m=>[m.person,m.name])),role=select('Role',[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']],'editor');
+  const {who,role}=keep(`share:${project.project}:${others.map(m=>m.person).join()}`,()=>({who:select('Share with',others.map(m=>[m.person,m.name])),role:select('Role',[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']],'editor')}));
   box.append(who.row,role.row,actions(button('Share project',async()=>{await engine.grant(project.project,who.input.value,role.input.value);shown=null;feedback='Shared.';},'primary')));
   return box;
  }
 
  render=()=>{
   if(!dialog)return;
-  const scroll=dialog.scrollTop;
+  const scroll=dialog.scrollTop,back=kit||!engine.connected?typing():()=>{};
   // The connected view is built asynchronously and replaces the body when it is ready; the others
   // are drawn at once.
   if(kit||!engine.connected)body.replaceChildren();
@@ -211,9 +230,9 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
   }else if(!engine.connected)notConnected();
   else if(drawing)redraw=true;
   // One query of the service at a time; changes that arrive meanwhile redraw once afterwards.
-  else drawing=connected().then(parts=>{if(dialog&&engine.connected&&!kit){body.replaceChildren(...parts);dialog.scrollTop=scroll;keepFocus();}}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;if(redraw){redraw=false;render();}});
+  else drawing=connected().then(parts=>{if(dialog&&engine.connected&&!kit){body.replaceChildren(...parts);dialog.scrollTop=scroll;refocus?.();keepFocus();}}).catch(error=>{feedback=error.message;status.textContent=feedback;}).finally(()=>{drawing=null;refocus=null;if(redraw){redraw=false;render();}});
   status.textContent=busy?'Working…':feedback;
-  keepFocus();
+  back();keepFocus();
  };
  // Redrawing removes the focused control; keep focus in the dialog so the keyboard (Escape,
  // Tab) still works.
