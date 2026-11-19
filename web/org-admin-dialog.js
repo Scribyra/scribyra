@@ -41,6 +41,22 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
   row.append(element('span',label),input);return{row,input};
  }
  const actions=(...nodes)=>{const a=element('div',null,'org-actions');a.append(...nodes);return a;};
+ // What someone types or chooses survives redraws (each action redraws twice: busy, then done): a
+ // section, rebuilt on each, reuses the same controls (made once per key, the key naming their
+ // options) instead of making new ones with their defaults, and the control being typed in gets
+ // its focus and caret back after the move. A new owner chosen just before a redraw used to snap
+ // back to the default (this administrator) and the projects went to the wrong person.
+ const kept=new Map();let used=new Set(),refocus=null;
+ function keep(key,make){
+  let made=kept.get(key);if(!made)kept.set(key,made=make());
+  else if(!refocus)for(const control of Object.values(made))if(control?.input===document.activeElement)refocus=caret(control.input);
+  used.add(key);return made;
+ }
+ function caret(input){
+  let start=null,end=null,direction;try{({selectionStart:start,selectionEnd:end,selectionDirection:direction}=input);}catch{}
+  return()=>{if(!input.isConnected||document.activeElement===input)return;input.focus({preventScroll:true});if(start!==null)try{input.setSelectionRange(start,end,direction);}catch{}};
+ }
+ const choices=options=>options.map(([v])=>v).join();
 
  dialog=element('dialog',null,'ui-popup org-dialog org-admin');dialog.setAttribute('aria-label','Admin');dialog.tabIndex=-1;
  const heading=element('div',null,'org-heading');heading.append(element('h2',`Admin · ${info?.name||''}`,'ui-prompt-title'));
@@ -76,7 +92,8 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
    }
    if(confirming==='m:'+m.account){
     const box=element('div',null,'org-share');
-    const heir=select(`New owner of ${name}’s projects`,heirs.filter(h=>h.account!==m.account).map(h=>[h.account,h.account===info.account?`${who(h)} (you)`:who(h)]),info.account);
+    const options=heirs.filter(h=>h.account!==m.account).map(h=>[h.account,h.account===info.account?`${who(h)} (you)`:who(h)]);
+    const {heir}=keep(`heir:${m.account}:${choices(options)}`,()=>({heir:select(`New owner of ${name}’s projects`,options,info.account)}));
     box.append(element('p',`Removing ${name} ends their sessions, removes their access to every project, and gives the projects they own to the person you choose.`,'org-help'),heir.row,
      actions(button(`Remove ${name}`,async()=>{const r=await admin.remove(m.account,heir.input.value);confirming=null;feedback=`${name} was removed; ${r.projects} project${r.projects===1?'':'s'} moved.`;onChanged();},'danger',`Confirm removing ${name}`),
       button('Cancel',async()=>{confirming=null;})));
@@ -97,7 +114,8 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
    li.append(button('Transfer',async()=>{confirming=confirming==='t:'+p.id?null:'t:'+p.id;},'secondary',`Transfer ${p.name}`));
    li.append(button('Delete',async()=>{confirming=confirming==='d:'+p.id?null:'d:'+p.id;},'secondary',`Delete ${p.name}`));
    if(confirming==='t:'+p.id){
-    const heir=select(`New owner of ${p.name}`,people.filter(m=>m.state==='active'&&m.role!=='guest'&&m.account!==p.owner.account).map(m=>[m.account,who(m)]));
+    const options=people.filter(m=>m.state==='active'&&m.role!=='guest'&&m.account!==p.owner.account).map(m=>[m.account,who(m)]);
+    const {heir}=keep(`transfer:${p.id}:${choices(options)}`,()=>({heir:select(`New owner of ${p.name}`,options)}));
     li.append(heir.row,actions(button(`Transfer ${p.name}`,async()=>{await admin.transfer(p.id,heir.input.value);confirming=null;feedback=`${p.name} now belongs to ${heir.input.selectedOptions[0]?.textContent}. ${who(p.owner)} keeps editing it.`;},'primary',`Confirm transferring ${p.name}`),button('Cancel',async()=>{confirming=null;})));
    }
    if(confirming==='d:'+p.id){
@@ -126,9 +144,10 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
   if(!head)await loadEvents(admin);
   const names=new Map(people.map(m=>[m.account,who(m)]));
   const form=element('div',null,'org-filters');
-  const actor=select('Actor',[['','Anyone'],['system','The service'],...people.map(m=>[m.account,who(m)])],filters.actor||'');
-  const action=select('Action',[['','Any action'],['session','Sign-ins'],['account','Accounts'],['project','Projects'],['share','Sharing'],['invitation','Invitations'],['export','Exports'],['audit','Audit log'],...Object.entries(ACTION_TEXT)],filters.action||'');
-  const target=field('Target ID',filters.target||''),from=field('From',filters.from||'','date'),to=field('To',filters.to||'','date');
+  const actors=[['','Anyone'],['system','The service'],...people.map(m=>[m.account,who(m)])];
+  const {actor}=keep('actor:'+choices(actors),()=>({actor:select('Actor',actors,filters.actor||'')}));
+  const {action,target,from,to}=keep('filters',()=>({action:select('Action',[['','Any action'],['session','Sign-ins'],['account','Accounts'],['project','Projects'],['share','Sharing'],['invitation','Invitations'],['export','Exports'],['audit','Audit log'],...Object.entries(ACTION_TEXT)],filters.action||''),
+   target:field('Target ID',filters.target||''),from:field('From',filters.from||'','date'),to:field('To',filters.to||'','date')}));
   form.append(actor.row,action.row,target.row,from.row,to.row);
   const apply=button('Apply filters',async()=>{filters={actor:actor.input.value,action:action.input.value,target:target.input.value.trim(),from:from.input.value,to:to.input.value};await loadEvents(admin);},'primary');
   const exports=[['jsonl','Export JSON lines'],['csv','Export CSV']].map(([format,label])=>button(label,async()=>{const file=await admin.download('/audit/export',{...query(),format});save(file);feedback=`Exported the audit log (head ${file.head}).`;}));
@@ -170,8 +189,11 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
   status.textContent=busy&&!feedback?'Working…':feedback;
   if(drawing){redraw=true;return;}
   const scroll=dialog.scrollTop;
-  drawing=engine.admin().then(admin=>SECTIONS[tab](admin)).then(parts=>{if(dialog){panel.replaceChildren(...parts);dialog.scrollTop=scroll;for(const b of panel.querySelectorAll('button,select,input'))b.disabled=busy;}})
-   .catch(error=>{feedback=error?.message||String(error);status.textContent=feedback;}).finally(()=>{drawing=null;if(redraw){redraw=false;render();}});
+  let drawn;
+  drawing=engine.admin().then(admin=>{drawn=used=new Set();return SECTIONS[tab](admin);}).then(parts=>{
+   for(const key of kept.keys())if(!drawn.has(key))kept.delete(key);
+   if(dialog){panel.replaceChildren(...parts);dialog.scrollTop=scroll;for(const b of panel.querySelectorAll('button,select,input'))b.disabled=busy;refocus?.();}
+  }).catch(error=>{feedback=error?.message||String(error);status.textContent=feedback;}).finally(()=>{drawing=null;refocus=null;if(redraw){redraw=false;render();}});
  };
  session=openDialog(dialog,{anchor,onClose(){dialog.remove();dialog=null;}});
  render();dialog.focus({preventScroll:true});
