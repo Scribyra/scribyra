@@ -1,0 +1,90 @@
+/* Plugins: the sandbox frames, the bar a plugin shows above a file, declarative plugin
+   dialogs, the Plugins manager and consent, and the built-in bibliography report. */
+.plugin-sandbox{position:absolute;width:0;height:0;border:0;visibility:hidden;pointer-events:none}
+
+.linked-file-bar{display:flex;align-items:center;gap:10px;padding:6px 12px;border-bottom:1px solid var(--border);background:var(--accent-soft);color:var(--text);font-size:12px;min-height:36px}
+.linked-file-summary{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.linked-file-bar .button{flex:none}
+
+.modal.plugin-dialog,.modal.plugin-manager,.modal.plugin-consent,.modal.plugin-pick,.modal.bibliography-dialog{width:min(640px,94vw);max-height:90vh;overflow:auto}
+.modal.plugin-dialog.wide,.modal.plugin-manager{width:min(760px,94vw)}
+.plugin-dialog h3,.plugin-manager h3,.plugin-consent h3,.bibliography-dialog h3{font-size:13px;font-weight:600;margin:18px 0 8px}
+.plugin-manager h4{font-size:14px;font-weight:600;margin:0}
+.plugin-dialog a,.plugin-consent a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.plugin-dialog-origin{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-6px 0 4px}
+.plugin-chip{font-size:11px;font-weight:600;color:var(--muted);letter-spacing:.02em}
+.plugin-dismiss{width:28px;height:28px;font-size:18px;line-height:1}
+.plugin-group{border:1px solid var(--border);border-radius:8px;margin:14px 0;padding:12px 14px;display:grid;gap:12px;min-width:0}
+.plugin-group:disabled{opacity:.6}
+.plugin-group legend{font-size:13px;font-weight:600;padding:0 4px}
+.plugin-group legend code{font-size:13px;font-weight:600}
+.plugin-group.is-conflict{border-color:var(--log-warning);border-left-width:4px}
+.plugin-group .modal-actions{margin-top:0}
+.plugin-section{display:grid;gap:10px;margin-top:8px}
+.plugin-section .plugin-group{margin:0;gap:6px;padding:10px 14px 12px}
+.plugin-field{display:grid;gap:6px;font-size:13px}
+.plugin-field label{font-weight:500}
+.plugin-field.checkbox{display:flex;align-items:center;gap:8px}
+.plugin-dialog .plugin-field .input,.plugin-manager .plugin-url .input{width:100%;box-sizing:border-box;margin:0;border:1px solid var(--border);border-radius:6px;padding:9px 10px;background:var(--bg);color:var(--text);font-size:13px}
+.plugin-help{color:var(--muted);font-size:12px;line-height:1.6}
+.plugin-text{margin:6px 0}
+.plugin-text.tone-privacy{margin:0;padding:8px 10px;border-radius:6px;background:var(--subtle);color:var(--text)}
+.plugin-text.tone-blocked,.plugin-text.tone-warning{color:var(--log-warning);font-weight:500}
+.plugin-text.tone-muted,.plugin-text.tone-empty{color:var(--muted)}
+.plugin-text.tone-note{color:var(--text)}
+.plugin-text.tone-source{margin:-6px 0 4px;color:var(--text);font-weight:500}
+.plugin-text.tone-summary{margin:2px 0 6px;color:var(--text)}
+.plugin-status{min-height:1.8em;margin:4px 0 0;color:var(--text)}
+.plugin-badges{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 6px}
+.plugin-badge,.bibliography-badge{display:inline-block;font-size:11px;font-weight:600;line-height:1.5;padding:0 6px;border-radius:999px;background:var(--subtle);color:var(--text);border:1px solid var(--border);vertical-align:middle}
+.plugin-badge.tone-added{border-color:var(--syntax-variable);color:var(--syntax-variable)}
+.plugin-badge.tone-changed{border-color:var(--syntax-special);color:var(--syntax-special)}
+.plugin-badge.tone-removed,.plugin-badge.tone-conflict,.plugin-badge.tone-cited,.plugin-badge.tone-warning{border-color:var(--log-warning);color:var(--log-warning)}
+.plugin-badge.tone-error{border-color:var(--log-error);color:var(--log-error)}
+.plugin-table{width:100%;border-collapse:collapse;font-size:12px;margin:4px 0 8px;table-layout:fixed}
+.plugin-table th,.plugin-table td{border-top:1px solid var(--border);padding:5px 6px;text-align:left;vertical-align:top;overflow-wrap:anywhere}
+.plugin-table thead th{color:var(--muted);font-weight:500;border-top:0}
+.plugin-table th[scope=row]{width:18%;font-weight:600}
+.plugin-table .tone-before{color:var(--syntax-string)}
+.plugin-table .tone-after{color:var(--syntax-variable)}
+.plugin-details{font-size:12px;margin-bottom:8px}
+.plugin-details summary{cursor:pointer;color:var(--muted)}
+.plugin-details pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:220px;overflow:auto;background:var(--subtle);border-radius:6px;padding:8px;margin:6px 0 0}
+.plugin-choices{display:flex;flex-wrap:wrap;gap:6px 18px}
+.plugin-choices.vertical{flex-direction:column;max-height:50vh;overflow:auto}
+.plugin-choice{display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer}
+.plugin-choice input,.plugin-checkbox,.plugin-switch input{width:auto;height:auto;margin:0;padding:0;border:0;flex:none;accent-color:var(--accent)}
+
+.plugin-list,.plugin-cards,.plugin-permissions,.bibliography-problems{list-style:none;padding:0;margin:0;display:grid;gap:6px}
+.plugin-list li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px}
+.plugin-list-text{display:grid;gap:2px;min-width:0}
+.plugin-list small{color:var(--muted)}
+.plugin-list-actions,.plugin-card-actions{display:flex;flex-wrap:wrap;gap:6px;flex:none}
+.plugin-list li.plugin-empty,.plugin-cards li.plugin-empty{color:var(--muted);border:1px dashed var(--border);border-radius:8px;padding:8px 10px;font-size:13px}
+
+.plugin-cards{gap:10px}
+.plugin-card{border:1px solid var(--border);border-radius:10px;padding:12px 14px;display:grid;gap:8px;font-size:13px}
+.plugin-card-head{display:flex;flex-wrap:wrap;align-items:baseline;gap:8px}
+.plugin-meta{color:var(--muted);font-size:12px}
+.plugin-switch{display:inline-flex;align-items:center;gap:8px;font-size:13px;font-weight:500;cursor:pointer}
+.plugin-permissions li{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 10px;border-radius:6px;background:var(--subtle)}
+.plugin-permissions li>span:first-child{display:grid;gap:2px}
+.plugin-permissions li[data-granted=false]>span:first-child{text-decoration:line-through;color:var(--muted)}
+.plugin-consent .plugin-permissions li{display:grid;gap:2px;justify-content:stretch}
+.plugin-permissions small{color:var(--muted);font-size:12px}
+.plugin-revoked{display:flex;align-items:center;gap:8px}
+.plugin-warning{border:1px solid var(--log-error);border-left-width:4px;border-radius:8px;padding:10px 12px;margin:10px 0;color:var(--text);background:var(--subtle)}
+.plugin-warning strong{color:var(--log-error)}
+.plugin-warning p{margin:6px 0 0}
+.plugin-hash code{overflow-wrap:anywhere;font-size:11px}
+.plugin-url{display:grid;gap:6px;margin-top:10px;font-size:13px}
+.plugin-url .button{justify-self:start}
+.button.danger{color:var(--danger)}
+.button.primary.danger{color:#fff;background:var(--danger);border-color:var(--danger)}
+
+.bibliography-file h3{overflow-wrap:anywhere}
+.bibliography-problems{max-height:40vh;overflow:auto;font-size:12px;line-height:1.6}
+.bibliography-problems li{display:flex;gap:6px;align-items:baseline}
+.bibliography-problems li[data-severity=error] .bibliography-badge{border-color:var(--log-error);color:var(--log-error)}
+.bibliography-problems li[data-severity=warning] .bibliography-badge{border-color:var(--log-warning);color:var(--log-warning)}
+@media (max-width:560px){.plugin-list li,.plugin-permissions li{flex-direction:column;align-items:stretch}.linked-file-bar{flex-wrap:wrap}.linked-file-summary{white-space:normal}}

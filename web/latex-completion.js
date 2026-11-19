@@ -157,12 +157,12 @@ function projectCommandItems(index,catalog){
   return index.commands.filter(c=>!catalog.builtins.has(c.name)).map(c=>{
     const args=c.optional?['[${optional}]',...Array.from({length:Math.max(0,c.args-1)},(_,i)=>`{\${arg${i+1}}}`)]:Array.from({length:c.args},(_,i)=>`{\${arg${i+1}}}`);
     const template=args.join('');
-    return {label:'\\'+c.name,match:c.name,name:c.name,template,detail:shapeOf(template),description:`${c.operator?'Math operator':'Command'} defined in ${c.path}:${c.line}`,source:'this project',rank:50,usageKey:'\\'+c.name};
+    return {label:'\\'+c.name,match:c.name,name:c.name,template,detail:shapeOf(template),description:c.plugin?`Command from the ${c.plugin} plugin`:`${c.operator?'Math operator':'Command'} defined in ${c.path}:${c.line}`,source:c.plugin?`${c.plugin} plugin`:'this project',rank:50,usageKey:'\\'+c.name};
   });
 }
 function projectEnvironmentItems(index,catalog){
   const known=new Set(catalog.environments.map(e=>e.name));
-  return index.environments.filter(e=>!known.has(e.name)).map(e=>({label:e.name,name:e.name,args:Array.from({length:Math.max(0,e.args)},(_,i)=>`{\${arg${i+1}}}`).join(''),body:'',description:`${e.theorem?'Theorem-like environment':'Environment'} defined in ${e.path}:${e.line}`,source:'this project',rank:50}));
+  return index.environments.filter(e=>!known.has(e.name)).map(e=>({label:e.name,name:e.name,args:Array.from({length:Math.max(0,e.args)},(_,i)=>`{\${arg${i+1}}}`).join(''),body:'',description:e.plugin?`Environment from the ${e.plugin} plugin`:`${e.theorem?'Theorem-like environment':'Environment'} defined in ${e.path}:${e.line}`,source:e.plugin?`${e.plugin} plugin`:'this project',rank:50}));
 }
 const relativeTex=path=>path.replace(/\.tex$/i,'');
 

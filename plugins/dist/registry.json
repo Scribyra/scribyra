@@ -1,0 +1,52 @@
+{
+ "signed": {
+  "registryVersion": 1,
+  "name": "Scribyra plugins",
+  "keyId": "scribyra-plugins-dev-2026-11",
+  "plugins": [
+   {
+    "id": "com.scribyra.zotero",
+    "name": "Zotero",
+    "publisher": "Scribyra",
+    "description": "Link a .bib file in your project to a Zotero library or collection, and refresh it with a reviewable diff. The API key stays on this device and goes only to api.zotero.org.",
+    "versions": [
+     {
+      "version": "1.0.0",
+      "api": 1,
+      "package": "com.scribyra.zotero-1.0.0.scribyra-plugin.json",
+      "sha256": "71106b9a539c614e5589fbfaebb1728c6149c1cf846f2674e99a717b40e2b273",
+      "size": 68465,
+      "permissions": {
+       "bibliography": true,
+       "network": [
+        "https://api.zotero.org"
+       ],
+       "project.read": {
+        "files": [
+         "*.bib",
+         "*.ltx",
+         "*.tex"
+        ]
+       },
+       "project.write": {
+        "create": [
+         "*.bib"
+        ],
+        "pick": false
+       },
+       "secrets": true,
+       "ui.command": true,
+       "ui.dialog": true,
+       "ui.fileAction": true
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "signature": {
+  "alg": "ECDSA-P256-SHA256",
+  "keyId": "scribyra-plugins-dev-2026-11",
+  "value": "hqyYEg/FAsmJIJLZteNLq2OgHQ5VxFRXsszu/f2GKaAHR9r/B8Ic0CVh2KwJhkP0MP4O6wYM1ggEEKbz8mFiyg=="
+ }
+}

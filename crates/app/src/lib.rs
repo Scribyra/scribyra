@@ -102,14 +102,34 @@ struct State {
     download_loaded: f64,
     download_total: f64,
     filter: String,
-    zotero: ZoteroBar,
+    /// The bar a plugin shows above the active file (docs/plugins.md), drawn here.
+    file_bar: Option<FileBar>,
+    /// More tools items contributed by enabled plugins.
+    plugin_commands: Vec<PluginCommand>,
 }
-/// The bar above a linked .bib file; web/zotero.js owns the link itself.
-#[derive(Clone, Default, Deserialize)]
+#[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(default)]
-struct ZoteroBar {
-    linked: bool,
-    summary: String,
+struct FileBar {
+    label: String,
+    text: String,
+    actions: Vec<BarAction>,
+}
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct BarAction {
+    plugin: String,
+    id: String,
+    label: String,
+    title: String,
+    disabled: bool,
+}
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct PluginCommand {
+    plugin: String,
+    id: String,
+    label: String,
+    hint: String,
 }
 #[derive(Clone, Default, Deserialize)]
 struct SearchHit {
@@ -298,7 +318,12 @@ fn App() -> impl IntoView {
                             <hr/>
                             <button aria-label="Share project" aria-haspopup="dialog" on:click=move |_| action("direct-share", "")><Icon name="share"/><span class="tools-item-text">"Share project"<small>{move || if s.get().direct_active { "Experimental · in a direct session" } else if s.get().direct_enabled { "Experimental · direct sessions on" } else { "Experimental · off" }}</small></span></button>
                             <hr/>
-                            <button aria-label="Zotero" aria-haspopup="dialog" on:click=move |_| action("zotero", "")><Icon name="book"/><span class="tools-item-text">"Zotero"<small>"Link a library, refresh, keys"</small></span></button>
+                            <button aria-label="Plugins" aria-haspopup="dialog" on:click=move |_| action("plugins", "")><Icon name="plug"/><span class="tools-item-text">"Plugins"<small>"Install, permissions, updates"</small></span></button>
+                            // Items from enabled plugins; each runs in its plugin's sandbox (docs/plugins.md).
+                            <For each=move || s.get().plugin_commands key=|c| (c.plugin.clone(), c.id.clone(), c.label.clone(), c.hint.clone()) children=move |c| {
+                                let value = format!("{}:{}", c.plugin, c.id);
+                                view! { <button aria-label=c.label.clone() aria-haspopup="dialog" data-plugin=c.plugin.clone() on:click=move |_| action("plugin-command", &value)><Icon name="book"/><span class="tools-item-text">{c.label.clone()}<small>{c.hint.clone()}</small></span></button> }
+                            }/>
                             <button aria-label="MCP providers" on:click=move |_| action("providers", "")><Icon name="servers"/><span>"MCP providers"</span></button>
                             // The Rust companion is discontinued (November 8, 2026). Its item exists only behind
                             // the test-only localStorage switch scribyra-companion-dev; see web/main.js.
@@ -379,7 +404,11 @@ fn App() -> impl IntoView {
                                         <review_workspace::ReviewToggle state=Signal::derive(move || s.get().review_workspace)/>
                                     </div>
                                 </div>
-                                <Show when=move || s.get().zotero.linked><div class="linked-file-bar" role="group" aria-label="Zotero link"><span class="linked-file-summary">{move || s.get().zotero.summary}</span><button class="button secondary compact" disabled=move || matches!(s.get().review_workspace.mode.as_str(), "viewing" | "reviewing") title=move || if !matches!(s.get().review_workspace.mode.as_str(), "viewing" | "reviewing") { "Fetch changes from Zotero; asks before changing entries you edited" } else { "Switch to Editing to refresh from Zotero" } on:click=move |_| action("zotero-refresh", "")>"Refresh from Zotero"</button></div></Show>
+                                {move || s.get().file_bar.map(|bar| view! {
+                                    <div class="linked-file-bar" role="group" aria-label=bar.label.clone()><span class="linked-file-summary">{bar.text.clone()}</span>
+                                        {bar.actions.into_iter().map(|a| { let value = format!("{}:{}", a.plugin, a.id); view! { <button class="button secondary compact" disabled=a.disabled title=a.title.clone() on:click=move |_| action("plugin-bar", &value)>{a.label.clone()}</button> } }).collect::<Vec<_>>()}
+                                    </div>
+                                })}
                                 <div id="code-editor" role="tabpanel" aria-label="Source editor" aria-labelledby=move || if s.get().active.is_empty(){None}else{Some(dom_id("tab",&s.get().active))}></div>
                             </section>
                             <review_workspace::Panel state=Signal::derive(move || s.get().review_workspace) comments=Signal::derive(move || s.get().comments)>
