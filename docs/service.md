@@ -897,7 +897,17 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
   of the granted organisation became an administrator of a new Scribyra organisation of their
   own). Set `zitadel_foreign_organisations: "organisations"` only when one project deliberately
   serves several separate tenants. Turn on "Assert roles on authentication" and "User roles inside
-  ID token".
+  ID token". Create a **Web** application with the code flow, authentication method *Basic*
+  (client secret; the service also sends PKCE), the refresh token grant, and the redirect URI
+  `<public_url>/v1/sso/callback/<id>`; "User Info inside ID Token" is not needed (the service
+  reads the email from userinfo). Checked against Zitadel 2.71 (below): Zitadel puts the user's
+  own organisation (`urn:zitadel:iam:user:resourceowner:id`) in tokens only for the scope
+  `urn:zitadel:iam:user:resourceowner`, which the preset asks for (before it did not, and with
+  `"organisations"` everyone became a guest); and an owner organisation may grant its project's
+  roles directly to a user of another organisation: such a role is keyed by the owner, so with
+  `"guests"` it makes that user a member (it is the owner's own grant), with `"organisations"` a
+  guest of the owner. Zitadel keeps its own login session, so after a role is taken away a new
+  sign-in passes Zitadel without its form and is refused here (`no_role`).
 - *Google Workspace*: issuer `https://accounts.google.com`; `preset: "google"` with
   `hosted_domains` (your Workspace domains; required) and `admin_subjects`. The Workspace domain (`hd`) is the organisation; consumer accounts are
   refused. Google issues refresh tokens only for offline access requests, which this service
@@ -916,6 +926,25 @@ For local trials and the tests there is a minimal provider,
 at the top of `crates/sync/examples/test-idp.rs` (it issues Zitadel-, Keycloak-, Entra- and
 Google-shaped tokens, serves userinfo, and lets tests change a user's roles and organisations
 between refreshes). It is not for production use.
+
+**Testing with a real Zitadel** (opt-in, not part of `npm test`): `scripts/zitadel-e2e.sh
+[chromium|firefox|webkit …]` (after `npm run build`) builds Zitadel from the flake's nixpkgs
+(2.71) and runs `tests/browser/org-zitadel.spec.js` with `SCRIBYRA_ZITADEL_E2E=1`
+(`tests/helpers/zitadel.mjs`). Zitadel and its own PostgreSQL run in a temporary directory under
+`tmp/` on free loopback ports (Zitadel itself listens on all interfaces; there is no option to
+narrow it), initialised non-interactively (`start-from-init` with a first instance whose machine
+user gets a personal access token), then set up through Zitadel's admin and management APIs: no
+MFA prompt at login, an owner organisation "Acme" with the project "Scribyra" (roles asserted at
+authentication; roles `scribyra:admin`, `scribyra:member`, `scribyra:guest`), a web application
+as above (development mode, for `http` redirect URIs), and an organisation "Partner" with a
+project grant. Real sign-ins go through the app and Zitadel's login UI: an administrator and a
+member get their roles, an account without a Scribyra role is refused, a Partner user granted
+through the project grant is a guest of Acme (sees only what is shared with her, cannot add or
+share), the admin area shows roles read-only, a role removed in Zitadel ends access at the next
+recheck (a real refresh at Zitadel), and with `zitadel_foreign_organisations: "organisations"`
+a Partner user is a member of Partner and a guest of Acme, switches between them, and loses Acme
+when Acme revokes its grant. `SCRIBYRA_ZITADEL_KEEP=1` keeps the temporary directory with
+Zitadel's and PostgreSQL's logs.
 
 **Migration `0032`** (this branch had no production data): accounts, sessions and server-readable
 projects made before it are removed (their blobs are queued for removal) and everyone signs in
