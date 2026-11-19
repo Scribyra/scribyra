@@ -338,3 +338,58 @@ test('without the CORS headers api.zotero.org sends, the browser blocks the resp
     const traces=await projectTraces(page);for(const text of Object.values(traces.databases))expect(text).not.toContain(KEY);
   }finally{await server.close();}
 });
+
+test('links and keys saved by the former built-in Zotero keep working after the update: they move into the plugin',async({page})=>{
+  const fake=seed(),{server}=await start(page,fake);
+  try{
+    // Make a real link, then rewrite this browser's data in the format the built-in Zotero
+    // used (IndexedDB scribyra-zotero: keys and links), as a person updating would have it.
+    await open(page);await link(page);
+    const text=await source(page,'zotero.bib');
+    const {projectId}=await page.evaluate(()=>window.scribyra.agent.describe());
+    const records=await page.evaluate(async()=>{
+      const all=(name,store)=>new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onsuccess=()=>{const db=request.result;const get=db.transaction(store).objectStore(store).getAll();get.onsuccess=()=>{db.close();resolve(get.result);};get.onerror=()=>reject(get.error);};});
+      return {data:await all('scribyra-plugins','data'),secrets:await all('scribyra-plugin-secrets','secrets')};
+    });
+    const linked=records.data.find(item=>item.key.startsWith('link:')).value,account=Object.values(records.data.find(item=>item.key==='accounts').value)[0];
+    const apiKey=records.secrets.find(item=>item.name===`key-${account.userId}`).value;expect(apiKey).toBe(KEY);
+    await expect(page.locator('.save-indicator')).toHaveText('Saved locally');
+    // Leave the app so its databases close; agent.md is a same-origin page without the app.
+    await page.goto('/agent.md');
+    await page.evaluate(async({legacy,key})=>{
+      const drop=name=>new Promise((resolve,reject)=>{const request=indexedDB.deleteDatabase(name);request.onsuccess=resolve;request.onerror=()=>reject(request.error);request.onblocked=()=>reject(Error('blocked'));});
+      await drop('scribyra-plugins');await drop('scribyra-plugin-secrets');
+      await new Promise((resolve,reject)=>{const request=indexedDB.open('scribyra-zotero',1);request.onupgradeneeded=()=>{const db=request.result;db.createObjectStore('keys');db.createObjectStore('links').createIndex('project','projectId');};
+        request.onsuccess=()=>{const db=request.result,tx=db.transaction(['keys','links'],'readwrite');tx.objectStore('keys').put(key,key.userId);tx.objectStore('links').put(legacy,`${legacy.projectId}/${legacy.fileId}`);tx.oncomplete=()=>{db.close();resolve();};tx.onerror=()=>reject(tx.error);};request.onerror=()=>reject(request.error);});
+    },{legacy:{...linked,projectId},key:{userId:account.userId,username:account.username,apiKey,write:account.write,savedAt:account.savedAt}});
+    // The update: the app moves the data into the official Zotero plugin and says so.
+    await page.goto('/');
+    await expect(notice(page)).toContainText('Zotero is now a plugin. Your 1 Zotero link and 1 key moved into it on this device; see More tools → Plugins.');
+    expect(await page.evaluate(async()=>(await indexedDB.databases()).map(entry=>entry.name))).not.toContain('scribyra-zotero');
+    await page.locator('.card-open').first().click();await expect(page.locator('.cm-content')).toBeVisible();
+    await page.getByRole('treeitem',{name:'zotero.bib',exact:true}).click();
+    const bar=page.getByRole('group',{name:'Zotero link'});await expect(bar).toContainText('Linked to Zotero · My Library › Thesis');
+    // Refresh still knows the library version, the key and the file's base: nothing changed.
+    const requests=fake.requests.length;
+    await bar.getByRole('button',{name:'Refresh from Zotero'}).click();
+    await expect(notice(page)).toContainText(`zotero.bib is up to date with Zotero (library version ${fake.version(`users/${USER}`)}).`);
+    const gets=fake.requests.slice(requests).filter(request=>request.method==='GET');expect(gets.length).toBeGreaterThan(0);expect(gets.every(request=>request.key===KEY)).toBe(true);
+    // A change in Zotero still applies as before, with the stored base.
+    fake.write(`users/${USER}`,[{key:'TURI0003',data:{title:'On Computable Numbers, with an Application'}}]);
+    await bar.getByRole('button',{name:'Refresh from Zotero'}).click();
+    await expect(notice(page)).toContainText('Refreshed zotero.bib from Zotero: 0 added, 1 changed, 0 removed.');
+    expect(await source(page,'zotero.bib')).toBe(text.replace('On Computable Numbers}','On Computable Numbers, with an Application}'));
+    const manager=page.getByRole('dialog',{name:'Plugins'});
+    await page.getByRole('button',{name:'More tools'}).click();await page.getByRole('button',{name:'Plugins',exact:true}).click();
+    await expect(manager.locator('[data-plugin="com.scribyra.zotero"]')).toContainText('Official');
+    await expect(manager.locator('[data-plugin="com.scribyra.zotero"]').getByRole('switch',{name:'Enable Zotero'})).toBeChecked();
+  }finally{await server.close();}
+});
+
+test('a browser that never used Zotero installs and fetches nothing on update',async({page})=>{
+  const requests=[];page.on('request',request=>requests.push(request.url()));
+  await open(page,undefined,{install:false});
+  expect(await page.evaluate(async()=>(await indexedDB.databases()).map(entry=>entry.name))).not.toContain('scribyra-zotero');
+  expect(await page.locator('iframe.plugin-sandbox').count()).toBe(0);
+  expect(requests.filter(url=>/scribyra-plugin[^/]*\.json|registry[^/]*\.json|^data:application\/json/.test(url))).toEqual([]);
+});
