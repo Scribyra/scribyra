@@ -151,3 +151,47 @@ Two findings are documented rather than changed:
 
 - **The shared cache tells a job which packages earlier jobs used.** Give each tenant its own cache volume where that matters.
 - **Node's permission model follows symlinks.** The runtime holds none: the assembler refuses them.
+
+## What operators change
+
+**Worker image.** Add:
+
+- Node 22 from nixpkgs, with its store closure and a bash. The closure is a `closureInfo` of `nodejs_22 bash coreutils`, given in `SCRIBYRA_NODE` and `SCRIBYRA_WASM_CLOSURE`, as the development shell sets them.
+- The compile runtime: `node scripts/wasm-compile-runtime.mjs /opt/scribyra/compile-runtime` from a built checkout, set as `compile_runtime`. Build it in the image, read-only. It copies files by default and must contain no symlinks.
+
+A TeX Live tree is no longer needed. Keep `texlive` only for `compile_engine: "native"`.
+
+**Package cache volume.** Mount a writable directory for the worker process as `compile_cache`:
+
+- A ReadWriteMany volume shared by the workers keeps it warm across pods.
+- An `emptyDir` works too, but is cold after a restart.
+- It grows to tens of MB in practice, bounded by the catalog's archives.
+- Give each tenant its own volume where the shared cache's side channel matters.
+
+**Network.** Workers need egress to `deployment.tex_mirror` (HTTPS) for packages outside the bundled set. With `tex_mirror: ""` they need none, but only bundled packages compile.
+
+**Limits.** The defaults are now `cpu_seconds` 300 and `wall_seconds` 600. Keep `memory_mib` at 1536 or more, and size worker pods at about 1 GiB per concurrent job.
+
+**Metrics.** Watch `scribyra_compile_package_requests_total{result}`. A rising `rejected` count means cache entries failed their checksum.
+
+## Tests
+
+- **`nix develop -c cargo test -p scribyra-compile --test wasm`**: the real sandbox, Node and runtime.
+  - compile success with cross-references
+  - diagnostics naming `chapters/bad.tex:2`
+  - a missing package fetched once through the cache from a fixture mirror on loopback, then warm
+  - a tampered cache entry refused and removed, and a mirror serving the wrong archive refused
+  - Biber
+  - cancellation with no leftovers
+  - CPU and wall limits
+  - the engine's memory ceiling, the job's memory limit, and a `\typeout` spoof
+  - TeX unable to reach host files or the runtime
+  - Node in the sandbox with no network (seccomp `EPERM`, no DNS) and reads only of its three trees (no writes, no child processes)
+- **`node --test tests/wasm-compile.test.mjs`**: the worker-shaped context, cross-realm messages, `importScripts` and fetch confinement, the cache host and the server log.
+- **`cargo test -p scribyra-sync --test compiles`**: the existing suite, pinned to `native`, plus a worker test of the default engine.
+  - Biber with a bundled package through the cache
+  - `pdf.engine` `lualatex`, `texlive` `wasm-…`
+  - diagnostics in the stored log
+  - a runaway document at the CPU limit with the worker still ready
+  - package-cache metrics without names
+- **Browser:** `org-compile.spec.js` runs with the WebAssembly engine in Chromium, Firefox and WebKit. Its new test compiles a multi-page document on the server and in the browser and expects the same page count and first-page text.
