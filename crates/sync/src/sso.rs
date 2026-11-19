@@ -186,6 +186,7 @@ fn refusal_message(code: &str, label: &str) -> String {
         "no_role" => format!("Your account has no Scribyra role. Ask your administrator to grant one in {label}."),
         "guest" => "Guest accounts can't use this deployment.".into(),
         "no_organisation" => format!("{label} did not say which organisation your account belongs to."),
+        "domain" => format!("Your {label} organisation can't use this deployment."),
         "account_disabled" => "An administrator disabled your account here.".into(),
         "account_removed" => "An administrator removed your account here.".into(),
         _ => "This account cannot sign in here.".into(),

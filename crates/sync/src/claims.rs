@@ -11,7 +11,7 @@
 //! | `zitadel` | each org ID keying the roles claim's maps (name: the map's value) | the role keys | a role granted by an organisation other than `urn:zitadel:iam:user:resourceowner:id`, or a role mapped to guest |
 //! | `keycloak` | `organization` (aliases) with `keycloak_organizations`, else the provider's one | `realm_access.roles`, `resource_access.{client_id}.roles` | a role mapped to guest |
 //! | `entra` | `tid` | `roles` | `acct = 1`, or a role mapped to guest |
-//! | `google` | `hd` (refused without) | everyone a member, `admin_subjects` administrators | never |
+//! | `google` | `hd` (refused without, and unless in `hosted_domains`, else `email_domains`) | everyone a member, `admin_subjects` administrators | never |
 //! | generic | `claims.organisation` (else the provider's one), `claims.organisation_name` | `claims.roles` | `claims.guest {path, equals}`, or a role mapped to guest |
 //!
 //! `roles` maps provider role names to deployment roles; the highest wins. A guest is never more
@@ -96,6 +96,9 @@ pub enum Refusal {
     /// The mapping needs an organisation claim the token lacks (Google without `hd`, Entra
     /// without `tid`, a configured organisation path or Keycloak organisations missing).
     NoOrganisation,
+    /// The organisation the token names is not one this provider admits (a Google Workspace
+    /// domain outside `hosted_domains`, or `email_domains` when that is not set).
+    Domain,
 }
 impl Refusal {
     pub fn code(self) -> &'static str {
@@ -103,6 +106,7 @@ impl Refusal {
             Self::NoRole => "no_role",
             Self::Guest => "guest",
             Self::NoOrganisation => "no_organisation",
+            Self::Domain => "domain",
         }
     }
 }
@@ -248,6 +252,11 @@ pub fn map(provider: &Provider, guests: Guests, claims: &Map<String, Value>, sub
         }
         (Some(Preset::Google), _) => {
             let domain = claims.get("hd").and_then(scalar).ok_or(Refusal::NoOrganisation)?;
+            // Only the Workspace domains the configuration names (review H2).
+            let allowed = if provider.hosted_domains.is_empty() { &provider.email_domains } else { &provider.hosted_domains };
+            if !allowed.contains(&domain) {
+                return Err(Refusal::Domain);
+            }
             let role = if provider.admin_subjects.iter().any(|s| s == subject) { Role::Admin } else { Role::Member };
             grants.extend(grant(domain.clone(), Some(domain), Some(role), false));
         }
@@ -366,9 +375,15 @@ mod tests {
 
     #[test]
     fn google_workspace_domains_and_admin_subjects() {
-        let mut p = provider(json!({"preset": "google"}));
+        let mut p = provider(json!({"preset": "google", "hosted_domains": ["acme.org"]}));
         p.roles = Default::default();
         p.admin_subjects = vec!["1001".into()];
+        // Review H2: another Workspace domain is refused, even for a listed subject.
+        assert_eq!(map(&p, Guests::Off, &claims(json!({"hd": "evil.example"})), "1001"), Err(Refusal::Domain));
+        let mut by_email = p.clone();
+        (by_email.hosted_domains, by_email.email_domains) = (vec![], vec!["acme.org".into()]);
+        assert_eq!(map(&by_email, Guests::Off, &claims(json!({"hd": "evil.example"})), "1002"), Err(Refusal::Domain));
+        assert_eq!(map(&by_email, Guests::Off, &claims(json!({"hd": "acme.org"})), "1002"), Ok(vec![g("acme.org", Some("acme.org"), Role::Member, false)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"hd": "acme.org"})), "1001"), Ok(vec![g("acme.org", Some("acme.org"), Role::Admin, false)]));
         assert_eq!(map(&p, Guests::Off, &claims(json!({"hd": "acme.org"})), "1002"), Ok(vec![g("acme.org", Some("acme.org"), Role::Member, false)]));
         // Consumer accounts (no hosted domain) are refused, even a listed subject.

@@ -591,6 +591,10 @@ pub struct Provider {
     /// When not empty, only verified emails in these domains sign in (a filter, never a role).
     #[serde(default)]
     pub email_domains: Vec<String>,
+    /// Google: the Workspace domains (`hd`) admitted. A `google` provider needs this or
+    /// `email_domains` (review H2: without either, every Workspace domain signed in).
+    #[serde(default)]
+    pub hosted_domains: Vec<String>,
     /// Exactly one of `preset` and `claims`.
     #[serde(default)]
     pub preset: Option<Preset>,
@@ -733,6 +737,9 @@ impl Provider {
             if !(r.admin.is_empty() && r.member.is_empty() && r.guest.is_empty()) {
                 return Err("deployment.providers[].roles: Google's tokens carry no roles; name administrators in admin_subjects");
             }
+            if self.hosted_domains.is_empty() && self.email_domains.is_empty() {
+                return Err("deployment.providers[] with preset google needs hosted_domains (or email_domains): the Workspace domains it admits");
+            }
         } else {
             if r.admin.is_empty() && r.member.is_empty() {
                 return Err("deployment.providers[].roles must map at least one provider role to admin or member");
@@ -749,6 +756,12 @@ impl Provider {
         }
         if self.zitadel_project_id.as_ref().is_some_and(|id| id.is_empty() || id.len() > 32 || !id.bytes().all(|b| b.is_ascii_digit())) {
             return Err("deployment.providers[].zitadel_project_id must be a Zitadel project ID (digits)");
+        }
+        if !self.hosted_domains.is_empty() && self.preset != Some(Preset::Google) {
+            return Err("deployment.providers[].hosted_domains is for the google preset only");
+        }
+        if self.hosted_domains.len() > 64 || !self.hosted_domains.iter().all(|d| domain_name(d)) {
+            return Err("deployment.providers[].hosted_domains must be lowercase domain names such as example.org");
         }
         if self.keycloak_organizations && self.preset != Some(Preset::Keycloak) {
             return Err("deployment.providers[].keycloak_organizations is for the keycloak preset only");
@@ -962,7 +975,13 @@ mod tests {
         assert!(refused(json!({"roles": {"admin": [""]}})).contains(".roles"));
         assert!(refused(json!({"roles": {"owner": ["x"]}})).contains("unknown field"));
         assert!(refused(json!({"preset": "google"})).contains("admin_subjects"));
-        with(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"]})).unwrap();
+        // Review H2: Google needs the Workspace domains it admits.
+        assert!(refused(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"]})).contains("needs hosted_domains"));
+        assert!(refused(json!({"preset": "google", "roles": null, "hosted_domains": []})).contains("needs hosted_domains"));
+        assert!(refused(json!({"preset": "google", "roles": null, "hosted_domains": ["Acme.org"]})).contains(".hosted_domains"));
+        assert!(refused(json!({"hosted_domains": ["acme.org"]})).contains("google preset only"));
+        with(json!({"preset": "google", "roles": null, "admin_subjects": ["1043"], "hosted_domains": ["acme.org"]})).unwrap();
+        with(json!({"preset": "google", "roles": null, "email_domains": ["acme.org"]})).unwrap();
         assert!(refused(json!({"admin_subjects": ["1043"]})).contains("google preset only"));
         // Preset options belong to their preset.
         assert!(refused(json!({"zitadel_project_id": "1"})).contains("zitadel preset only"));
@@ -974,7 +993,7 @@ mod tests {
         assert_eq!(scope(json!({"preset": "entra"})), "openid email profile offline_access");
         assert_eq!(scope(json!({"keycloak_organizations": true})), "openid email profile organization");
         assert_eq!(scope(json!({})), "openid email profile");
-        assert_eq!(scope(json!({"preset": "google", "roles": null})), "openid email profile");
+        assert_eq!(scope(json!({"preset": "google", "roles": null, "hosted_domains": ["acme.org"]})), "openid email profile");
     }
 
     #[test]

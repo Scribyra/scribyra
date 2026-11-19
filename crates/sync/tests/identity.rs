@@ -288,6 +288,7 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
         {"sub": "1001", "username": "gwen", "password": "pw-gwen", "email": "gwen@acme.example", "email_verified": true, "hd": "acme.example"},
         {"sub": "1002", "username": "gus", "password": "pw-gus", "email": "gus@acme.example", "email_verified": true, "hd": "acme.example"},
         {"sub": "1003", "username": "consumer", "password": "pw-consumer", "email": "c@gmail.example", "email_verified": true},
+        {"sub": "1004", "username": "otto", "password": "pw-otto", "email": "otto@other.example", "email_verified": true, "hd": "other.example"},
         // Profile only from userinfo; and an email whose verification the provider leaves out.
         {"sub": "u1", "username": "uma", "password": "pw-uma", "email": "uma@k.test", "email_verified": true, "name": "Uma", "picture": "https://k.test/uma.png",
          "userinfo_only": ["email", "email_verified", "name", "picture"], "keycloak": {"realm_roles": [MEMBER], "organization": ["lab"]}},
@@ -325,13 +326,14 @@ fn keycloak_entra_google_and_profiles_from_userinfo() {
     assert_eq!((gil["orgs"][0]["id"].clone(), gil["role"].as_str()), (ed["orgs"][0]["id"].clone(), Some("guest")), "Entra B2B guests are guests of the tenant");
     // Google: the Workspace domain is the organisation, admin_subjects its administrators, and
     // consumer accounts (no hd) are refused.
-    let google = json!({"claims": null, "roles": null, "preset": "google", "admin_subjects": ["1001"]});
+    let google = json!({"claims": null, "roles": null, "preset": "google", "admin_subjects": ["1001"], "hosted_domains": ["acme.example"]});
     let g = Sr::start(Blobs::Fs, users, json!({}), json!({"provider": google}));
     let c = g.env.client();
     let gwen = c.login("gwen");
     assert_eq!((gwen["orgs"][0]["name"].as_str(), gwen["role"].as_str()), (Some("acme.example"), Some("admin")));
     assert_eq!(c.login("gus")["role"], "member");
     assert_eq!(c.sign_in("consumer").0, Outcome::Error("no_organisation".into()));
+    assert_eq!(c.sign_in("otto").0, Outcome::Error("domain".into()), "only the configured Workspace domains");
     // Entra guests are refused when the deployment admits none.
     let off = Sr::start(Blobs::Fs, json!([{"sub": "e2", "username": "gil", "password": "pw-gil", "email": "gil@guest.test", "email_verified": true, "roles": [MEMBER], "entra": {"tid": "t", "acct": 1}}]), json!({}), json!({"provider": {"claims": null, "preset": "entra"}}));
     assert_eq!(off.env.client().sign_in("gil").0, Outcome::Error("guest".into()));
