@@ -1,6 +1,6 @@
 // Server compile in the real app (design section 6, slice 11), across browser profiles, with a
-// server-readable deployment that compiles `both` ways and a worker inside the service (real TeX
-// Live and bubblewrap from the dev shell): Ana switches a shared project to "Compile on server"
+// server-readable deployment that compiles `both` ways and a worker inside the service (the
+// WebAssembly engine, Node and bubblewrap from the dev shell): Ana switches a shared project to "Compile on server"
 // and compiles it there without loading the in-browser compiler, and sees the PDF with "Compiled
 // on server"; Ben, a viewer in another profile, sees the same PDF appear without reloading and
 // cannot start a compile; after Ana edits, the badge says "from an older version" until she
@@ -154,6 +154,52 @@ test('server compile: the project switch, the PDF in a viewer’s app, older ver
   expect(ana.compiler.length).toBeGreaterThan(0);
   await expect(badge(ana.page)).toHaveCount(0);
   await expect(pdfText(ana.page)).toContainText('Second');
+ }finally{
+  for(const context of contexts)await context.close().catch(()=>{});
+  await s.close();
+ }
+});
+
+// The server's default engine is the browser's own WebAssembly LuaLaTeX: a multi-page document
+// with cross-references and a bibliography compiled on the server has as many pages, and the
+// same text on its first page, as when the same app compiles it in the browser.
+const LONG='\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\\tableofcontents\n'+Array.from({length:9},(_,i)=>`\\section{Part ${i+1}}\\label{s${i+1}}\nSee Section~\\ref{s${(i+3)%9+1}} and~\\cite{k${i%3}}. `+'Server and browser should agree on every line break of this paragraph. '.repeat(40)+`\n\\begin{equation}a_{${i}}=\\sum_{k=1}^{n}k^{${i}}\\end{equation}\n`).join('')+'\\begin{thebibliography}{9}\n'+[0,1,2].map(i=>`\\bibitem{k${i}} Author ${i}, \\emph{Title ${i}}, 2026.`).join('\n')+'\n\\end{thebibliography}\n\\end{document}\n';
+test('the server’s WebAssembly engine makes the same PDF pages as the browser’s',async({browser},info)=>{
+ test.setTimeout(3600000);
+ const s=await compileService();const contexts=[];
+ try{
+  const ana=await profile(browser,info);contexts.push(ana.context);
+  await ana.page.evaluate(async({text})=>{
+   const {Y,model,storage}=await import('/org-harness.js'),doc=new Y.Doc(),id=crypto.randomUUID(),main=crypto.randomUUID();
+   model.addEntries(doc,[{id:main,path:'main.tex',content:text}]);model.migrateProject(doc,id);
+   doc.getMap('meta').set('name','Same pages');doc.getMap('meta').set('mainFile',main);
+   await storage.saveProject(id,doc);doc.destroy();await window.scribyra.action('home');
+  },{text:LONG});
+  await signIn(ana.page,s,'ana');
+  const dialog=dialogOf(ana.page);
+  await dialog.getByRole('list',{name:'Projects only on this device'}).getByRole('listitem').filter({hasText:'Same pages'}).getByRole('button',{name:'Add to Acme Lab'}).click();
+  await expect(orgRow(ana.page,'Same pages')).toContainText('Synced',{timeout:60000});
+  let row=await shareBox(ana.page,'Same pages');
+  await row.getByRole('radio',{name:'Compile on server'}).check();
+  await expect(dialog.getByRole('status')).toContainText('Same pages now compiles on Acme Lab’s server.');
+  await openFromDialog(ana.page,'Same pages');
+  await ana.page.getByRole('button',{name:/^Compile on server/}).click();
+  await expect(status(ana.page)).toHaveText(/^Compiled on server · \d+ pages/,{timeout:COMPILE});
+  const serverPages=Number((await status(ana.page).textContent()).match(/· (\d+) pages/)[1]);
+  expect(serverPages).toBeGreaterThan(2);
+  await expect(pdfText(ana.page)).toContainText('Contents');
+  const serverFirst=(await pdfText(ana.page).textContent()).replace(/\s+/g,' ').trim();
+  expect(ana.compiler).toEqual([]);
+  await home(ana.page);
+  row=await shareBox(ana.page,'Same pages');
+  await row.getByRole('radio',{name:'Compile in the browser'}).check();
+  await expect(dialog.getByRole('status')).toContainText('Same pages now compiles in the browser.');
+  await openFromDialog(ana.page,'Same pages');
+  await compileButton(ana.page).click();
+  await expect(status(ana.page)).toHaveText(new RegExp(`^Compiled · [\\d.]+ s · ${serverPages} pages`),{timeout:COMPILE});
+  expect(ana.compiler.length).toBeGreaterThan(0);
+  await expect(pdfText(ana.page)).toContainText('Contents');
+  expect((await pdfText(ana.page).textContent()).replace(/\s+/g,' ').trim()).toBe(serverFirst);
  }finally{
   for(const context of contexts)await context.close().catch(()=>{});
   await s.close();

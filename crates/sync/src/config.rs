@@ -123,6 +123,11 @@ pub struct Config {
     pub compile_heartbeat_seconds: u64,
     /// ...and how long without a report before the job is taken back (requeued once, then failed).
     pub compile_heartbeat_timeout_seconds: u64,
+    /// The WebAssembly engine's compile runtime (`scripts/wasm-compile-runtime.mjs`; read-only).
+    /// Workers need it; `serve` reads its `runtime.json`, when present, for the PDF cache key.
+    pub compile_runtime: Option<PathBuf>,
+    /// The WebAssembly engine's shared TeX package cache: a directory only workers write.
+    pub compile_cache: Option<PathBuf>,
     /// How often the audit log's retention task runs (default daily).
     pub audit_purge_seconds: u64,
     /// Development and tests only: keep audit events this many seconds instead of the deployment's
@@ -196,6 +201,8 @@ impl Default for Config {
             compile_worker_in_process: false,
             compile_heartbeat_seconds: 5,
             compile_heartbeat_timeout_seconds: 30,
+            compile_runtime: None,
+            compile_cache: None,
             audit_purge_seconds: 24 * 3600,
             audit_retention_seconds: None,
         }
@@ -203,7 +210,7 @@ impl Default for Config {
 }
 /// The `deployment` fields that `SCRIBYRA_SERVICE_DEPLOYMENT_<FIELD>` can set one by one; the
 /// listed ones are plain text, the others JSON.
-const DEPLOYMENT_FIELDS: [(&str, bool); 12] = [
+const DEPLOYMENT_FIELDS: [(&str, bool); 14] = [
     ("name", true),
     ("encryption", true),
     ("offline", false),
@@ -216,6 +223,8 @@ const DEPLOYMENT_FIELDS: [(&str, bool); 12] = [
     ("audit_retention_days", false),
     ("compile_limits", false),
     ("texlive", true),
+    ("compile_engine", true),
+    ("tex_mirror", true),
 ];
 impl Config {
     /// The deployment's master key, if configured.
@@ -521,9 +530,37 @@ pub struct Deployment {
     pub audit_retention_days: u32,
     #[serde(default)]
     pub compile_limits: CompileLimits,
-    /// A TeX Live tree (server compile).
+    /// A TeX Live tree (server compile with the native engine).
     #[serde(default)]
     pub texlive: Option<PathBuf>,
+    /// Which TeX the server compiles with: the browser's WebAssembly engine (the default, so a
+    /// document compiles the same everywhere) or native TeX Live (`texlive`).
+    #[serde(default)]
+    pub compile_engine: CompileEngine,
+    /// The TeX Live archive mirror the WebAssembly engine's package cache fills from (packages
+    /// not bundled with the engine); an empty text: bundled packages only.
+    #[serde(default = "default_mirror")]
+    pub tex_mirror: String,
+}
+/// The browser's default mirror (`web/tex-packages.js`).
+pub const DEFAULT_TEX_MIRROR: &str = "https://tlnet.yihui.org";
+fn default_mirror() -> String {
+    DEFAULT_TEX_MIRROR.into()
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CompileEngine {
+    #[default]
+    Wasm,
+    Native,
+}
+impl CompileEngine {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Wasm => "wasm",
+            Self::Native => "native",
+        }
+    }
 }
 fn yes() -> bool {
     true
@@ -766,7 +803,9 @@ pub struct CompileLimits {
 }
 impl Default for CompileLimits {
     fn default() -> Self {
-        Self { cpu_seconds: 60, wall_seconds: 120, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120, per_project_per_minute: 30, active_per_member: 2, active_per_owner: 2, retention_days: 90 }
+        // The WebAssembly engine (the default) needs several times native TeX Live's CPU: a 305-page
+        // thesis with Biber takes about 4 minutes (docs/compile-engines.md).
+        Self { cpu_seconds: 300, wall_seconds: 600, memory_mib: 2048, scratch_mib: 512, output_mib: 64, passes: 4, concurrency: 2, queue: 32, per_member_per_hour: 120, per_project_per_minute: 30, active_per_member: 2, active_per_owner: 2, retention_days: 90 }
     }
 }
 fn short_text(text: &str, max: usize) -> bool {
@@ -916,8 +955,14 @@ impl Deployment {
             if self.encryption != Encryption::Server {
                 return Err("deployment.compile \"server\" or \"both\" needs encryption \"server\"");
             }
-            if self.texlive.is_none() {
-                return Err("deployment.compile \"server\" or \"both\" needs texlive");
+            if self.compile_engine == CompileEngine::Native && self.texlive.is_none() {
+                return Err("deployment.compile_engine \"native\" needs texlive");
+            }
+        }
+        if !self.tex_mirror.is_empty() {
+            let ok = url::Url::parse(&self.tex_mirror).is_ok_and(|u| u.query().is_none() && u.fragment().is_none() && (u.scheme() == "https" || (u.scheme() == "http" && matches!(u.host_str(), Some("127.0.0.1" | "localhost" | "[::1]")))));
+            if !ok || self.tex_mirror.len() > 512 {
+                return Err("deployment.tex_mirror must be an https URL (http only on loopback) without query, or empty");
             }
         }
         Ok(())
@@ -1003,9 +1048,18 @@ mod tests {
         assert!(refused(json!({"encryption": "e2ee", "guests": "shared"})).contains("deployment.guests"));
         config(deployment(json!({"guests": "shared", "notify_on_admin_access": false}))).unwrap();
         // Server compile needs server-readable encryption and a TeX Live tree.
-        assert!(refused(json!({"compile": "server"})).contains("needs texlive"));
+        assert!(refused(json!({"compile": "server", "compile_engine": "native"})).contains("needs texlive"));
         assert!(refused(json!({"compile": "both", "encryption": "e2ee", "texlive": "/tex"})).contains("needs encryption"));
-        config(deployment(json!({"compile": "both", "texlive": "/tex"}))).unwrap();
+        config(deployment(json!({"compile": "both", "compile_engine": "native", "texlive": "/tex"}))).unwrap();
+        // The WebAssembly engine (the default) needs no TeX Live tree; its mirror is https.
+        let c = config(deployment(json!({"compile": "server"}))).unwrap();
+        let d = c.deployment.unwrap();
+        assert_eq!((d.compile_engine, d.tex_mirror.as_str()), (CompileEngine::Wasm, DEFAULT_TEX_MIRROR));
+        config(deployment(json!({"compile": "server", "tex_mirror": ""}))).unwrap();
+        config(deployment(json!({"compile": "server", "tex_mirror": "http://127.0.0.1:18540"}))).unwrap();
+        for bad in ["http://mirror.example.org", "ftp://mirror.example.org", "https://mirror.example.org/?x=1", "not a url"] {
+            assert!(refused(json!({"compile": "server", "tex_mirror": bad})).contains("deployment.tex_mirror"), "{bad}");
+        }
         // Server-readable deployments need the master key; end-to-end ones do not.
         let without_key = |d: serde_json::Value| {
             let c: Config = serde_json::from_value(json!({"database_url": "postgres://x/y", "public_url": "https://scribyra.acme.org", "deployment": d})).unwrap();

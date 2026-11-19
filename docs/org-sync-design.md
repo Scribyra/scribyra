@@ -120,7 +120,7 @@ Everything about a deployment is in its one configuration file (`SCRIBYRA_SERVIC
     ],
     "quotas": {"deployment_bytes": 107374182400, "project_bytes": 1073741824, "member_bytes": 10737418240},
     "audit_retention_days": 400,
-    "compile_limits": {"cpu_seconds": 60, "wall_seconds": 120, "memory_mib": 2048, "scratch_mib": 512, "output_mib": 64, "passes": 4, "concurrency": 2, "queue": 32, "per_member_per_hour": 120, "per_project_per_minute": 30, "active_per_member": 2, "active_per_owner": 2, "retention_days": 90},
+    "compile_limits": {"cpu_seconds": 300, "wall_seconds": 600, "memory_mib": 2048, "scratch_mib": 512, "output_mib": 64, "passes": 4, "concurrency": 2, "queue": 32, "per_member_per_hour": 120, "per_project_per_minute": 30, "active_per_member": 2, "active_per_owner": 2, "retention_days": 90},
     "texlive": "/nix/store/…-texlive-2025-env"
   }
 }
@@ -286,7 +286,7 @@ TeX is a full programming language and project content is untrusted. Candidates 
 | `systemd-run` transient units (`PrivateNetwork`, `SystemCallFilter`, `DynamicUser`, `MemoryMax`) | Namespaces and seccomp via systemd | Needs the system manager (root or polkit rule); not available to an unprivileged service | Excellent (cgroups) | Couples the service to PID 1; slower start |
 | gVisor (`runsc`) | User-space kernel: syscalls never reach the host kernel directly | Rootless mode is limited; needs `runsc` and an OCI bundle | Via the OCI runtime | Strongest of these against kernel bugs; 10–30% slower for TeX's file-heavy work; more moving parts |
 | Firecracker micro-VM | Hardware virtualisation | Needs `/dev/kvm` (not in this LXC) | VM sizing | Strongest; image management and boot time |
-| BusyTeX WebAssembly under wasmtime (the 17 November proposal) | Wasm sandbox | Yes | Fuel and memory | Same output as the browser, but slow and an incomplete TeX Live; Paul chose native TeX Live |
+| BusyTeX WebAssembly under wasmtime (the 17 November proposal) | Wasm sandbox | Yes | Fuel and memory | Same output as the browser, but slow and an incomplete TeX Live; Paul first chose native TeX Live, then (19 November) the browser's engine under Node inside bubblewrap, below |
 
 **Recommendation and implementation: bubblewrap** with a seccomp filter and rlimits for each job, inside a worker pod that is itself confined. On Kubernetes the worker pod runs with `hostUsers: false` (user namespaces, Kubernetes 1.33 and later) so bubblewrap can create its namespaces without privileges, a read-only root file system, all capabilities dropped, a `RuntimeDefault`-based seccomp profile that additionally allows `unshare`/`clone` of user namespaces, memory and CPU limits on the pod, and a NetworkPolicy denying all egress except PostgreSQL and the blob store. For paid hosting the operator can set a **gVisor `RuntimeClass`** on the worker pods: the jobs' system calls then reach gVisor's user-space kernel, not the host's, while bubblewrap still separates jobs from the worker and from each other. The runner is one trait in the worker, so a micro-VM runner can follow without changing the queue. Outside Kubernetes (development) the same bubblewrap runner works on any Linux with unprivileged user namespaces, verified in this LXC.
 
@@ -300,7 +300,13 @@ Each job:
 - TeX settings: `-no-shell-escape`, `-interaction=nonstopmode`, `-halt-on-error`, `openin_any=p` and `openout_any=p` (paranoid: no absolute paths, no `..`, no dot files; LuaTeX reads with `openin_any=r` because luaotfload opens TeX Live files by absolute path, which is safe as the sandbox holds nothing else), `shell_escape=f` in the environment kpathsea reads, so even a package that tries `\write18` gets nothing.
 - Nothing from the job is trusted afterwards: the service reads only the PDF and log (regular files, through `O_NOFOLLOW`), with size limits, and deletes the scratch directory.
 
+### Engine: the browser's WebAssembly LuaLaTeX (19 November)
+
+Paul decided on 19 November 2026 that the server uses the **same WebAssembly TeX engine as the browser**, so a document compiles identically everywhere and every engine or package improvement serves both; native TeX Live stays only if measurements demand it. `deployment.compile_engine` is `wasm` (default) or `native`. The WebAssembly engine runs the browser's unchanged BusyTeX module and worker glue under Node (pinned from nixpkgs), driven by the browser's own compile driver (`web/compile-driver.js`, shared: passes, Biber/BibTeX, rerun detection, missing-package resolution, diagnostics, live log), inside the same bubblewrap sandbox, cgroup and seccomp filter as above, with Node's permission model as a further layer and a shared, content-addressed package cache the worker fills outside the sandbox (`docs/service.md`, "WebAssembly engine"). Measurements and the recommendation on native: [compile engines](compile-engines.md).
+
 ### TeX Live and the package cache
+
+With the WebAssembly engine the shared package cache is the worker's TeX package cache: archives by SHA-512, filled from the runtime's bundled set and the mirror, each checked against the pinned catalog. The paragraph below describes the native engine.
 
 TeX Live comes from nixpkgs (`texliveSmall` by default, `texlive.combine { … }` for more): one read-only, content-addressed tree in `/nix/store`, shared by every job and every project — the server's shared package cache. Formats and font maps are prebuilt by Nix; per-job font caches (LuaTeX) live in scratch and are discarded, with an optional read-only, pre-warmed `luaotfload` cache built at deployment time. Projects that need packages outside the configured scheme fail with the usual "File `x.sty' not found" and the app suggests asking the administrator.
 
@@ -389,10 +395,11 @@ spec:
   encryption: server                    # server | e2ee; fixed after first start
   compile:
     mode: both                          # browser | server | both
-    texlive: small                      # small | medium | full image variant
+    engine: wasm                        # wasm (the browser's engine) | native
+    texlive: small                      # native only: small | medium | full image variant
     runtimeClassName: gvisor            # optional
     workers: {min: 0, max: 8, jobsPerWorker: 2}
-    limits: {cpuSeconds: 60, wallSeconds: 120, memoryMiB: 2048, scratchMiB: 512, outputMiB: 64}
+    limits: {cpuSeconds: 300, wallSeconds: 600, memoryMiB: 2048, scratchMiB: 512, outputMiB: 64}
   offline: true
   linkSharing: false
   guests: "off"
@@ -527,7 +534,7 @@ The former slices "passkeys and teams" and "switching encryption modes" are remo
 3. Members share by invitation as editor, reviewer or viewer; guests only through the provider's guest accounts; link sharing off by default.
 4. Administrators see and control everything, with an append-only, exportable audit log with configurable retention.
 5. Encryption is a deployment setting: server-readable by default (chosen here: sealed at rest with per-project keys under a master key file, section 7), end-to-end optional, with re-keying only there.
-6. Server compile with native TeX Live in a throwaway sandbox (chosen here: bubblewrap, section 6), PDF synced to members, deployment and project compile modes, a shared package cache.
+6. Server compile with native TeX Live in a throwaway sandbox (chosen here: bubblewrap, section 6), PDF synced to members, deployment and project compile modes, a shared package cache. **Changed 19 November 2026:** the server uses the browser's WebAssembly engine by default (section 6, "Engine"); native stays behind `compile_engine` for comparison ([compile engines](compile-engines.md)).
 7. Personal use without an organisation stays as today.
 8. Deployments are cloud native: a Kubernetes operator (Rust, kube-rs) is the default and probably only deployment method, with single-node k3s as the small install; the NixOS module and Compose file become development-only (section 10).
 

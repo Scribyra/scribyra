@@ -7,6 +7,7 @@
 //! (`driver.sh`) runs the passes and hands back the PDF and log over pipes, which are read
 //! with size bounds.
 
+use crate::cache::Packages;
 use crate::cgroup::{Cgroups, Confinement, Usage};
 use crate::{seccomp, Bibliography, Cancel, Engine, Job, JobError, Limit, Limits, Outcome, Runner, Status};
 use std::ffi::{CString, OsString};
@@ -16,6 +17,7 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::Arc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -23,7 +25,10 @@ use crate::DRIVER;
 const RAW: &str = r#"ulimit -u "$1" -n "$2" -f "$3" -c 0 || exit 99; eval "$4""#;
 const STDERR_CAP: usize = 64 << 10;
 
-pub struct Bubblewrap { bwrap: PathBuf, texlive: PathBuf, closure: Vec<PathBuf>, bash: PathBuf, coreutils: PathBuf, id: String, conf: Conf }
+pub struct Bubblewrap { bwrap: PathBuf, closure: Vec<PathBuf>, bash: PathBuf, coreutils: Option<PathBuf>, id: String, conf: Conf, kind: Kind }
+
+/// What runs in the sandbox: native TeX Live, or the browser's WebAssembly engine under Node.
+enum Kind { Native { texlive: PathBuf }, Wasm(crate::wasm::Wasm) }
 
 enum Conf { Unset, Cgroups(Cgroups), Unconfined }
 
@@ -77,7 +82,49 @@ impl Bubblewrap {
     let bash = find(&["bash"], "-bash-").ok_or_else(|| bad("the TeX Live closure has no bash".into()))?.join("bin/bash");
     let coreutils = find(&["cat", "stat", "tail", "rm", "dd"], "-coreutils-").ok_or_else(|| bad("the TeX Live closure has no coreutils".into()))?;
     let id = texlive.file_name().unwrap().to_string_lossy().into_owned();
-    Ok(Bubblewrap { bwrap, texlive, closure, bash, coreutils, id, conf: Conf::Unset })
+    Ok(Bubblewrap { bwrap, closure, bash, coreutils: Some(coreutils), id, conf: Conf::Unset, kind: Kind::Native { texlive } })
+  }
+
+  /// The WebAssembly engine: `node` (a store path's `bin/node`) runs the compile runtime
+  /// (`scripts/wasm-compile-runtime.mjs`) bound read-only at `/runtime`, with the package cache
+  /// read-only at `/cache`; `closure` must hold node's store closure and a bash (for the
+  /// in-namespace rlimits). `packages` fills the cache when a job asks.
+  pub fn wasm(bwrap: impl Into<PathBuf>, node: impl Into<PathBuf>, closure: Vec<PathBuf>, runtime: impl Into<PathBuf>, cache: impl Into<PathBuf>, packages: Arc<dyn Packages>) -> io::Result<Bubblewrap> {
+    let (bwrap, node, runtime, cache) = (bwrap.into(), node.into(), runtime.into(), cache.into());
+    let bad = |m: String| io::Error::new(io::ErrorKind::InvalidInput, m);
+    if !bwrap.is_file() { return Err(bad(format!("no bwrap at {}", bwrap.display()))); }
+    let store = node.parent().and_then(Path::parent).map(Path::to_path_buf).unwrap_or_default();
+    if !store_path_ok(&store) || !node.is_file() { return Err(bad(format!("{} is not a node in the Nix store", node.display()))); }
+    let mut closure = closure;
+    if let Some(p) = closure.iter().find(|p| !store_path_ok(p)) { return Err(bad(format!("closure entry {} is not a store path", p.display()))); }
+    closure.push(store);
+    closure.sort();
+    closure.dedup();
+    let bash = closure.iter().filter(|p| p.join("bin/bash").is_file()).min_by_key(|p| p.to_string_lossy().contains("interactive")).ok_or_else(|| bad("the node closure has no bash".into()))?.join("bin/bash");
+    let coreutils = closure.iter().find(|p| ["cat", "stat", "rm"].iter().all(|b| p.join("bin").join(b).is_file())).cloned();
+    let w = crate::wasm::Wasm::new(node, runtime, cache, packages)?;
+    let id = w.id().to_string();
+    Ok(Bubblewrap { bwrap, closure, bash, coreutils, id, conf: Conf::Unset, kind: Kind::Wasm(w) })
+  }
+
+  /// The compile runtime `runtime` and package cache `cache`, with `SCRIBYRA_BWRAP` (else `PATH`),
+  /// `SCRIBYRA_NODE` and `SCRIBYRA_WASM_CLOSURE` (a file of store paths; without it,
+  /// `nix-store -qR` of node and `SCRIBYRA_BASH`), confined as [`Confinement::from_env`] says.
+  pub fn wasm_from_env(runtime: impl Into<PathBuf>, cache: impl Into<PathBuf>, packages: Arc<dyn Packages>) -> io::Result<Bubblewrap> {
+    let var = |k: &str| std::env::var_os(k).ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{k} is not set")));
+    let bwrap = std::env::var_os("SCRIBYRA_BWRAP").map(PathBuf::from)
+      .or_else(|| std::env::split_paths(&std::env::var_os("PATH")?).map(|d| d.join("bwrap")).find(|p| p.is_file()))
+      .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "bwrap is not installed (set SCRIBYRA_BWRAP)"))?;
+    let (node, runtime) = (PathBuf::from(var("SCRIBYRA_NODE")?), runtime.into());
+    let closure = match std::env::var_os("SCRIBYRA_WASM_CLOSURE") {
+      Some(f) => std::fs::read_to_string(f)?.lines().filter(|l| !l.is_empty()).map(PathBuf::from).collect(),
+      None => {
+        let bash = PathBuf::from(var("SCRIBYRA_BASH")?);
+        let roots: Vec<PathBuf> = [&node, &bash].iter().filter_map(|p| p.canonicalize().ok()?.parent()?.parent().map(Path::to_path_buf)).collect();
+        store_closure(&roots.iter().map(PathBuf::as_path).collect::<Vec<_>>())?
+      }
+    };
+    Bubblewrap::wasm(bwrap, node, closure, runtime, cache, packages)?.confine(Confinement::from_env())
   }
 
   /// `SCRIBYRA_BWRAP`, `SCRIBYRA_TEXLIVE` and optionally `SCRIBYRA_TEXLIVE_CLOSURE` (a file of
@@ -95,7 +142,7 @@ impl Bubblewrap {
 
   /// Sets up job-wide limits. Until this succeeds every job fails with `SandboxFailure`.
   pub fn confine(mut self, c: Confinement) -> io::Result<Bubblewrap> {
-    let cat = self.coreutils.join("bin/cat");
+    let cat = match &self.coreutils { Some(c) => c.join("bin/cat"), None => PathBuf::from("cat") };
     self.conf = match c {
       Confinement::Cgroup(d) => Conf::Cgroups(Cgroups::delegated(d)?),
       Confinement::SystemdUser => Conf::Cgroups(Cgroups::systemd_user(&cat)?),
@@ -110,7 +157,11 @@ impl Bubblewrap {
   pub fn is_confined(&self) -> bool { matches!(self.conf, Conf::Cgroups(_)) }
 
   pub fn closure(&self) -> &[PathBuf] { &self.closure }
-  pub fn has_biber(&self) -> bool { self.texlive.join("bin/biber").exists() }
+  pub(crate) fn bash(&self) -> &Path { &self.bash }
+  /// Native: whether the TeX Live tree has biber. The WebAssembly engine always has Biber.
+  pub fn has_biber(&self) -> bool { match &self.kind { Kind::Native { texlive } => texlive.join("bin/biber").exists(), Kind::Wasm(_) => true } }
+  /// Whether this runner is the WebAssembly engine.
+  pub fn is_wasm(&self) -> bool { matches!(self.kind, Kind::Wasm(_)) }
 
   /// Test hook: runs a bash `script` in the same sandbox (closure binds plus `extra_ro`, same
   /// seccomp filter, rlimits and wall clock) with `files` in `/work`. Not used by compiles.
@@ -122,15 +173,20 @@ impl Bubblewrap {
       let l = inner_limits(limits);
       [self.bash.as_os_str(), "-c".as_ref(), RAW.as_ref(), "raw".as_ref(), l[0].as_ref(), l[1].as_ref(), l[2].as_ref(), script.as_ref()].iter().map(|s| s.to_os_string()).collect()
     };
-    let r = self.sandbox(files, extra_ro, ("p", 0), 0, limits, cancel, 1 << 20, inner)?;
+    let r = self.sandbox(Spec { files, extra_ro, mounts: &self.mounts(), openin: "p", epoch: 0, pipes: 0, fill: None, address_space: !self.is_wasm(), stdout_cap: 1 << 20 }, limits, cancel, inner)?;
     let limit = r.usage.and_then(|u| if u.oom_kills > 0 { Some(Limit::Memory) } else if u.pids_max_hits > 0 { Some(Limit::Processes) } else { None });
     Ok(RawOutcome { code: r.code, stdout: lossy(&r.stdout.0), stderr: lossy(&r.stderr.0), killed: r.killed, limit, cpu_ms: r.cpu_ms })
   }
 
   /// Starts bwrap and waits for it under the wall clock. `inner` builds the command run inside
   /// from the descriptor numbers of `pipes` extra capture pipes (handed to the sandbox).
-  #[allow(clippy::too_many_arguments)]
-  fn sandbox(&self, files: &[(String, Vec<u8>)], extra_ro: &[PathBuf], (openin, epoch): (&str, u64), pipes: usize, limits: &Limits, cancel: &Cancel, stdout_cap: usize, inner: impl FnOnce(&[RawFd]) -> Vec<OsString>) -> io::Result<Ran> {
+  /// Read-only binds at fixed places: the WebAssembly runtime and the package cache.
+  fn mounts(&self) -> Vec<(PathBuf, &'static str)> {
+    match &self.kind { Kind::Native { .. } => vec![], Kind::Wasm(w) => vec![(w.runtime().to_path_buf(), "/runtime"), (w.cache().to_path_buf(), "/cache")] }
+  }
+
+  pub(crate) fn sandbox(&self, spec: Spec, limits: &Limits, cancel: &Cancel, inner: impl FnOnce(&[RawFd]) -> Vec<OsString>) -> io::Result<Ran> {
+    let Spec { files, extra_ro, mounts, openin, epoch, pipes, fill, address_space, stdout_cap } = spec;
     let cg = match &self.conf {
       Conf::Cgroups(c) => Some(c.job(limits)?),
       Conf::Unconfined => None,
@@ -145,6 +201,7 @@ impl Bubblewrap {
     binds.sort();
     binds.dedup();
     for p in binds { arg(&"--ro-bind"); arg(p); arg(p); }
+    for (from, to) in mounts { arg(&"--ro-bind"); arg(from); arg(to); }
     // No /proc at all: nothing in a compile needs it, and it would show the host (kernel,
     // CPUs, memory, mounts) and let job code reach the driver's descriptors.
     for s in ["--dev", "/dev", "--size"] { arg(&s); }
@@ -164,7 +221,11 @@ impl Bubblewrap {
       keep.push(fd);
     }
     for s in ["--remount-ro", "/dev", "--remount-ro", "/", "--chdir", "/work"] { arg(&s); }
-    let path = format!("{}/bin:{}/bin", self.texlive.display(), self.coreutils.display());
+    let path = match (&self.kind, &self.coreutils) {
+      (Kind::Native { texlive }, Some(c)) => format!("{}/bin:{}/bin", texlive.display(), c.display()),
+      (_, Some(c)) => format!("{}/bin", c.display()),
+      _ => "/nonexistent".into(),
+    };
     let epoch = epoch.to_string();
     for (k, v) in [("PATH", path.as_str()), ("HOME", "/work/.home"), ("TEXMFVAR", "/work/.texmf-var"), ("TEXMFCACHE", "/work/.texmf-var"), ("XDG_CACHE_HOME", "/work/.cache"), ("TMPDIR", "/work/.tmp"),
       ("openin_any", openin), ("openout_any", "p"), ("shell_escape", "f"), ("SOURCE_DATE_EPOCH", epoch.as_str())] {
@@ -176,17 +237,34 @@ impl Bubblewrap {
     keep.push(filter);
     let (mut readers, mut writers, mut wfds) = (vec![], vec![], vec![]);
     for _ in 0..pipes { let (r, w) = pipe()?; wfds.push(w.as_raw_fd()); pass.push(w.as_raw_fd()); readers.push(r); writers.push(w); }
+    // The package channel: the job writes requests, the worker answers on the reply pipe.
+    let mut channel = None;
+    if let Some(packages) = fill {
+      let (req_r, req_w) = pipe()?;
+      let (rep_r, rep_w) = pipe()?;
+      wfds.push(req_w.as_raw_fd()); wfds.push(rep_r.as_raw_fd());
+      pass.push(req_w.as_raw_fd()); pass.push(rep_r.as_raw_fd());
+      writers.push(req_w); writers.push(rep_r);
+      channel = Some((req_r, rep_w, packages));
+    }
     arg(&"--");
     a.extend(inner(&wfds));
 
     let mib = |m: u64| m << 20;
     let rl = [
       (libc::RLIMIT_CPU, limits.cpu_seconds, limits.cpu_seconds + 1),
-      (libc::RLIMIT_AS, mib(limits.memory_mib), mib(limits.memory_mib)),
+      // V8 reserves about 10 GiB of address space per WebAssembly memory (guard regions), so
+      // the WebAssembly engine gets RLIMIT_DATA instead (written private memory: heaps and the
+      // engine's grown memory, not the PROT_NONE reservations), besides its cgroup's
+      // memory.max, Node's heap flag and the engine's own heap cap.
+      (libc::RLIMIT_AS, if address_space { mib(limits.memory_mib) } else { libc::RLIM_INFINITY }, if address_space { mib(limits.memory_mib) } else { libc::RLIM_INFINITY }),
       (libc::RLIMIT_FSIZE, mib(limits.output_mib).max(largest + 1), mib(limits.output_mib).max(largest + 1)),
       (libc::RLIMIT_NOFILE, limits.open_files.max(pass.len() as u64 + 64), limits.open_files.max(pass.len() as u64 + 64)),
       (libc::RLIMIT_CORE, 0, 0),
-    ];
+    ]
+    .into_iter()
+    .chain((!address_space).then(|| (libc::RLIMIT_DATA, mib(limits.memory_mib), mib(limits.memory_mib))))
+    .collect::<Vec<_>>();
     let mut cmd = Command::new(&self.bwrap);
     cmd.args(&a).env_clear().stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).process_group(0);
     let pass_c = pass.clone();
@@ -207,6 +285,7 @@ impl Bubblewrap {
     let out = read_bounded(child.stdout.take().unwrap(), stdout_cap, false);
     let err = read_bounded(child.stderr.take().unwrap(), STDERR_CAP, true);
     let caps: Vec<_> = readers.into_iter().zip(pipe_caps(limits, pipes)).enumerate().map(|(i, (r, cap))| read_bounded(File::from(r), cap, i == 2)).collect();
+    if let Some((req, reply, packages)) = channel { std::thread::spawn(move || serve_packages(File::from(req), File::from(reply), packages)); }
     let pid = child.id() as libc::pid_t;
     let deadline = Instant::now() + Duration::from_secs(limits.wall_seconds);
     let (mut status, mut ru): (libc::c_int, libc::rusage) = (0, unsafe { std::mem::zeroed() });
@@ -248,9 +327,47 @@ fn pipe_caps(l: &Limits, n: usize) -> Vec<usize> {
 
 /// (bytes kept, total bytes seen). Keeps the first `cap` bytes (the last ones with `tail`);
 /// reads to the end regardless.
-type Captured = (Vec<u8>, u64);
+pub(crate) type Captured = (Vec<u8>, u64);
 
-struct Ran { code: Option<i32>, cpu_ms: u64, usage: Option<Usage>, killed: Option<Status>, stdout: Captured, stderr: Captured, pipes: Vec<Captured> }
+/// Package bytes one job may have the worker fetch (the browser's limit is 96 MiB).
+const FILL_BYTES: u64 = 256 << 20;
+
+pub(crate) struct Ran { pub code: Option<i32>, pub cpu_ms: u64, pub usage: Option<Usage>, pub killed: Option<Status>, pub stdout: Captured, pub stderr: Captured, pub pipes: Vec<Captured> }
+
+/// One sandbox run: inputs, extra read-only binds (store paths at their own place, and
+/// `mounts` at fixed places), TeX's `openin_any`, `SOURCE_DATE_EPOCH`, capture pipes handed to
+/// the job (status, PDF, log), an optional package channel, whether `RLIMIT_AS` applies, and
+/// how much of stdout to keep.
+pub(crate) struct Spec<'a> {
+  pub files: &'a [(String, Vec<u8>)],
+  pub extra_ro: &'a [PathBuf],
+  pub mounts: &'a [(PathBuf, &'static str)],
+  pub openin: &'a str,
+  pub epoch: u64,
+  pub pipes: usize,
+  pub fill: Option<Arc<dyn Packages>>,
+  pub address_space: bool,
+  pub stdout_cap: usize,
+}
+
+/// Answers a job's package requests (`{"fill": name}` lines) until it closes its end. At most
+/// 128 requests, short lines and [`FILL_BYTES`] newly fetched: a job cannot make the worker do
+/// unbounded work (the cache itself limits fills running at once and fetches each entry once).
+fn serve_packages(req: File, mut reply: File, packages: Arc<dyn Packages>) {
+  use std::io::BufRead;
+  let mut lines = io::BufReader::new(req.take(128 * 1024)).lines();
+  let mut fetched = 0u64;
+  for _ in 0..128 {
+    let Some(Ok(line)) = lines.next() else { return };
+    let answer = match serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v.get("fill")?.as_str().map(str::to_owned)) {
+      Some(_) if fetched > FILL_BYTES => serde_json::json!({"ok": false, "error": "this compile fetched too many packages"}),
+      Some(name) => match packages.fill(&name) { Ok(n) => { fetched += n; serde_json::json!({"ok": true}) } Err(e) => serde_json::json!({"ok": false, "error": e}) },
+      None => serde_json::json!({"ok": false, "error": "invalid package request"}),
+    };
+    if writeln!(reply, "{answer}").is_err() { return; }
+  }
+  let _ = writeln!(reply, "{}", serde_json::json!({"ok": false, "error": "too many package requests in one compile"}));
+}
 
 fn read_bounded(mut r: impl Read + Send + 'static, cap: usize, tail: bool) -> JoinHandle<Captured> {
   std::thread::spawn(move || {
@@ -269,7 +386,7 @@ fn read_bounded(mut r: impl Read + Send + 'static, cap: usize, tail: bool) -> Jo
   })
 }
 
-fn lossy(b: &[u8]) -> String { String::from_utf8_lossy(b).into_owned() }
+pub(crate) fn lossy(b: &[u8]) -> String { String::from_utf8_lossy(b).into_owned() }
 
 fn memfd(name: &str, bytes: &[u8]) -> io::Result<OwnedFd> {
   let n = CString::new(name).unwrap();
@@ -299,12 +416,13 @@ fn children_cpu_ms(report: &str) -> u64 {
 
 /// The limits the driver sets itself, inside the job's user namespace: processes, open files,
 /// file size in KiB.
-fn inner_limits(l: &Limits) -> [String; 3] { [l.processes.to_string(), l.open_files.to_string(), (l.output_mib << 10).to_string()] }
+pub(crate) fn inner_limits(l: &Limits) -> [String; 3] { [l.processes.to_string(), l.open_files.to_string(), (l.output_mib << 10).to_string()] }
 
 impl Runner for Bubblewrap {
   fn texlive_id(&self) -> &str { &self.id }
 
   fn run(&self, job: &Job, limits: &Limits, cancel: &Cancel) -> Outcome {
+    if let Kind::Wasm(w) = &self.kind { return w.run(self, job, limits, cancel); }
     if let Err(e) = job.validate(limits) { return Outcome::fail(Status::Rejected(e.clone()), e.to_string()); }
     if job.bibliography == Bibliography::Biber && !self.has_biber() { return Outcome::fail(Status::Rejected(JobError::BiberUnavailable), JobError::BiberUnavailable.to_string()); }
     let bib = match job.bibliography { Bibliography::None => "none", Bibliography::Bibtex => "bibtex", Bibliography::Biber => "biber" };
@@ -319,7 +437,7 @@ impl Runner for Bubblewrap {
       v.extend([job.engine.command(), &job.main, &limits.passes.max(1).to_string(), bib, &l[0], &l[1], &l[2]].map(OsString::from));
       v
     };
-    let ran = match self.sandbox(&job.files, &[], (openin, job.source_date_epoch), 3, limits, cancel, 64 << 10, inner) {
+    let ran = match self.sandbox(Spec { files: &job.files, extra_ro: &[], mounts: &[], openin, epoch: job.source_date_epoch, pipes: 3, fill: None, address_space: true, stdout_cap: 64 << 10 }, limits, cancel, inner) {
       Ok(r) => r,
       Err(e) => return Outcome::fail(Status::SandboxFailure, format!("could not start the sandbox: {e}")),
     };
@@ -356,7 +474,7 @@ impl Runner for Bubblewrap {
     // With a cgroup, CPU time comes from cpu.stat (orphans included); the driver's own figure
     // is only a fallback for unconfined development runs.
     let cpu_ms = if ran.usage.is_some() { ran.cpu_ms } else { ran.cpu_ms + children_cpu_ms(&report) };
-    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)) }
+    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)), peak_memory: usage.peak_bytes }
   }
 }
 

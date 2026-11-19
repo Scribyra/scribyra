@@ -12,13 +12,15 @@ use support::{sr::*, sso::*, *};
 fn texlive() -> String {
     std::env::var("SCRIBYRA_TEXLIVE").expect("SCRIBYRA_TEXLIVE: run under `nix develop`")
 }
-/// `compile` mode with TeX Live and small limits; `limits` overrides some of them.
+/// `compile` mode with native TeX Live and small limits; `limits` overrides some of them. The
+/// tests below that do not name an engine exercise the native engine, kept behind
+/// `compile_engine` for comparison; the WebAssembly engine (the default) has its own at the end.
 fn deployment(compile: &str, limits: Value) -> Value {
     let mut l = json!({"cpu_seconds": 10, "wall_seconds": 40, "memory_mib": 1536, "scratch_mib": 64, "output_mib": 16, "passes": 4, "concurrency": 2, "queue": 32, "per_member_per_hour": 120});
     for (k, v) in limits.as_object().unwrap() {
         l[k] = v.clone();
     }
-    json!({"compile": compile, "texlive": texlive(), "compile_limits": l})
+    json!({"compile": compile, "compile_engine": "native", "texlive": texlive(), "compile_limits": l})
 }
 /// A server-readable deployment with server compile; `in_process` runs a worker inside `serve`.
 fn start(blobs: Blobs, compile: &str, in_process: bool, service: Value, limits: Value) -> Sr {
@@ -495,7 +497,7 @@ impl scribyra_compile::Runner for Waiting {
         if cancel.is_cancelled() {
             self.cancelled.fetch_add(1, SeqCst);
         }
-        scribyra_compile::Outcome { status: scribyra_compile::Status::Cancelled, pdf: None, log: String::new(), cpu_ms: 0, passes: 0 }
+        scribyra_compile::Outcome { status: scribyra_compile::Status::Cancelled, pdf: None, log: String::new(), cpu_ms: 0, passes: 0, peak_memory: 0 }
     }
     fn texlive_id(&self) -> &str {
         "waiting"
@@ -702,4 +704,72 @@ fn finished_rows_are_removed_after_the_retention_period_except_the_ones_still_in
     for job in [kept_pdf, recent, latest] {
         assert_eq!(postgres().psql(&sr.db(), &format!("SELECT count(*) FROM compiles WHERE job = '{job}'")), "1");
     }
+}
+
+/// The WebAssembly engine's compile runtime, assembled once for this test binary.
+fn wasm_runtime() -> std::path::PathBuf {
+    static R: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    R.get_or_init(|| {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize().unwrap();
+        let out = root.join("target/wasm-compile-runtime-sync");
+        let s = std::process::Command::new("node").arg("scripts/wasm-compile-runtime.mjs").arg(&out).arg("--link").current_dir(&root).stdout(std::process::Stdio::null()).status().unwrap();
+        assert!(s.success(), "assembling the compile runtime (needs `npm run wasm` and the compiler assets)");
+        out
+    })
+    .clone()
+}
+
+#[test]
+fn the_webassembly_engine_is_the_default_and_compiles_like_the_browser() {
+    let cache = std::env::temp_dir().join(format!("scribyra-tex-cache-{}", random_hex(8)));
+    std::fs::create_dir_all(&cache).unwrap();
+    // Bundled packages only: no mirror, so nothing leaves this host.
+    let service = json!({"compile_runtime": wasm_runtime(), "compile_cache": cache});
+    let limits = json!({"cpu_seconds": 50, "wall_seconds": 120, "memory_mib": 2048});
+    let mut d = json!({"cpu_seconds": 10, "wall_seconds": 40, "memory_mib": 1536, "scratch_mib": 64, "output_mib": 16, "passes": 4, "concurrency": 2, "queue": 32, "per_member_per_hour": 120});
+    for (k, v) in limits.as_object().unwrap() {
+        d[k] = v.clone();
+    }
+    let mut s = json!({"compile_heartbeat_seconds": 1, "compile_heartbeat_timeout_seconds": 3});
+    for (k, v) in service.as_object().unwrap() {
+        s[k] = v.clone();
+    }
+    let sr = Sr::start(Blobs::S3, people(), s, json!({"compile": "server", "tex_mirror": "", "compile_limits": d}));
+    let metrics_port = free_port();
+    let worker = sr.worker(json!({"metrics_bind": format!("127.0.0.1:{metrics_port}")}));
+    assert!(worker.logs.lock().unwrap().contains("\"texlive\":\"wasm-"), "{}", worker.logs.lock().unwrap());
+    let (ana, ben) = (sr.api(&sr.login("alice")), sr.api(&sr.login("ben")));
+    // Biber and a bundled package (biblatex) from the cache, cross-references, two files.
+    let main = "\\documentclass{article}\n\\usepackage[backend=biber]{biblatex}\n\\addbibresource{refs.bib}\n\\begin{document}\n\\section{One}\\label{s:one}See~\\ref{s:one} and \\textcite{knuth84}.\n\\printbibliography\n\\end{document}\n";
+    let (p, doc) = paper(&ana, "Same everywhere", main);
+    assert_eq!(ana.append(&p, "a", 3, &doc.add_text("f2", "refs.bib", None, "@book{knuth84, author = {Donald E. Knuth}, title = {The {\\TeX}book}, publisher = {Addison-Wesley}, year = {1984}}\n")).status, 201);
+    assert_eq!(ana.invite(&p, "ben@example.org", "viewer").status, 201);
+    let job = ana.compile(&p, None).json()["job"].as_str().unwrap().to_owned();
+    let status = ana.compiled(&p, &job);
+    let log = String::from_utf8_lossy(&ana.call("GET", &format!("/v1/sr/projects/{p}/compile/log"), None).body).into_owned();
+    assert_eq!(status["job"]["outcome"], "success", "{status}\n{log}");
+    // The browser's engine is LuaLaTeX whatever the project's meta.engine says.
+    assert_eq!(status["pdf"]["engine"], "lualatex");
+    assert!(status["texlive"].as_str().unwrap().starts_with("wasm-"), "{status}");
+    assert!(log.contains("luahblatex") && log.contains("biber") && log.contains("TeX packages installed for this compile:"), "{log}");
+    let got = ben.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf"), None);
+    assert!(got.status == 200 && got.body.starts_with(b"%PDF-"));
+    assert!(std::fs::read_dir(&cache).unwrap().count() >= 1, "bundled archives went through the cache");
+    // An error names its file and line.
+    let (bad, bdoc) = paper(&ana, "Broken", "\\documentclass{article}\n\\begin{document}\n\\input{ch/one}\n\\end{document}\n");
+    assert_eq!(ana.append(&bad, "a", 3, &bdoc.add_text("f2", "ch/one.tex", None, "Text.\n\\nosuchmacro\n")).status, 201);
+    let job = ana.compile(&bad, None).json()["job"].as_str().unwrap().to_owned();
+    assert_eq!(ana.compiled(&bad, &job)["job"]["outcome"], "tex_error");
+    let log = String::from_utf8_lossy(&ana.call("GET", &format!("/v1/sr/projects/{bad}/compile/log"), None).body).into_owned();
+    assert!(log.starts_with("Diagnostics:\nch/one.tex:2: Undefined control sequence."), "{log}");
+    // A runaway document ends at the CPU limit and the worker stays ready.
+    let (endless_p, _) = paper(&ana, "Endless", &endless(&format!("scribyra-pwned-{}", random_hex(8))));
+    let job = ana.compile(&endless_p, None).json()["job"].as_str().unwrap().to_owned();
+    assert_eq!(ana.compiled(&endless_p, &job)["job"]["outcome"], "limit_cpu");
+    assert_eq!(status_of(&format!("{}/readyz", worker.url)), 200);
+    // The worker's metrics count the package cache's work, naming no package or project.
+    let text = support::sso::fetch(&format!("http://127.0.0.1:{metrics_port}/metrics"), None).body;
+    assert!(text.contains("scribyra_compile_package_requests_total{result=\"bundled\"}") && !text.contains("scribyra_compile_package_requests_total{result=\"bundled\"} 0"), "{text}");
+    assert!(text.contains("scribyra_compile_jobs_total{outcome=\"success\"} 1") && !text.contains(&p) && !text.contains("biblatex"), "{text}");
+    let _ = std::fs::remove_dir_all(&cache);
 }
