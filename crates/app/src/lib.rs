@@ -46,9 +46,7 @@ struct State {
     search_status: String,
     search_truncated: bool,
     undo_replace_label: String,
-    outline_items: Vec<Heading>,
     outline_scope: String,
-    outline_busy: bool,
     outline_status: String,
     projects: Vec<Card>,
     files: Vec<File>,
@@ -120,14 +118,6 @@ struct SearchHit {
     preview: String,
 }
 #[derive(Clone, Default, Deserialize)]
-struct Heading {
-    index: usize,
-    path: String,
-    line: usize,
-    level: usize,
-    title: String,
-}
-#[derive(Clone, Default, Deserialize)]
 struct Card {
     id: String,
     name: String,
@@ -190,6 +180,8 @@ fn Icon(#[prop(default = "file")] name: &'static str) -> impl IntoView {
         "fit-width" => "M3 12h18M7 8l-4 4 4 4m10-8 4 4-4 4",
         "fit-page" => "M7 3h10v18H7Z",
         "minus" => "M5 12h14",
+        "expand-all" => "m8 9 4-4 4 4M8 15l4 4 4-4",
+        "collapse-all" => "m8 5 4 4 4-4M8 19l4-4 4 4",
         "page-previous" => "m15 6-6 6 6 6",
         "page-next" => "m9 6 6 6-6 6",
         "plug" => "M9 3v5m6-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4",
@@ -313,7 +305,7 @@ fn App() -> impl IntoView {
                 </header>
                 <div class="workspace">
                     <history::HistoryView state=Signal::derive(move || s.get().history)/>
-                    <aside class="file-sidebar">
+                    <aside class="file-sidebar" id="file-sidebar">
                         <nav class="workspace-navigation" aria-label="Workspace tools">
                             <button aria-label="Files" aria-pressed=move || (s.get().side_panel == "files").to_string() on:click=move |_| action("workspace-panel","files")>"Files"</button>
                             <button aria-label="Search project" aria-pressed=move || (s.get().side_panel == "search").to_string() on:click=move |_| action("workspace-panel","search")><Icon name="search"/>"Search"</button>
@@ -350,6 +342,8 @@ fn App() -> impl IntoView {
                         <Show when=move || s.get().side_panel == "outline"><OutlinePanel s=s/></Show>
                         <div class="sidebar-bottom"><Icon name="lock"/><p>"Your words stay yours."<br/><span>"Saved on this device."</span></p></div>
                     </aside>
+                    // web/sidebar-resize.js owns the width; phone layouts hide the handle.
+                    <div id="sidebar-divider" class="sidebar-divider" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="file-sidebar" tabindex="0" title="Drag to resize. Double-click to reset."></div>
                     <section class="writing-area" aria-label="LaTeX workspace" data-review-mode=move || s.get().review_workspace.mode>
                         <div class="workspace-toolbar">
                             <review_workspace::Mode state=Signal::derive(move || s.get().review_workspace)/>
@@ -565,13 +559,16 @@ fn SearchPanel(s: ReadSignal<State>) -> impl IntoView {
 }
 #[component]
 fn OutlinePanel(s: ReadSignal<State>) -> impl IntoView {
-    view! { <section class="tool-panel" aria-label="Source outline">
-        <label>"Outline scope"<select aria-label="Outline scope" prop:value=move || s.get().outline_scope on:change=move |e| action("outline-scope",&event_target_value(&e))><option value="file">"Current file"</option><option value="project">"Entire project"</option></select></label>
+    // web/outline.js renders the tree into #outline-tree: only the rows in view exist, and the
+    // headings stay out of the state that every update serialises.
+    view! { <section class="tool-panel outline-panel" aria-label="Source outline">
+        <div class="outline-toolbar">
+            <select aria-label="Outline scope" prop:value=move || s.get().outline_scope on:change=move |e| action("outline-scope",&event_target_value(&e))><option value="project">"Entire project"</option><option value="file">"Current file"</option></select>
+            <button class="icon-button" aria-label="Expand all" title="Expand all" on:click=move |_| action("outline-expand-all","")><Icon name="expand-all"/></button>
+            <button class="icon-button" aria-label="Collapse all" title="Collapse all" on:click=move |_| action("outline-collapse-all","")><Icon name="collapse-all"/></button>
+        </div>
         <p class="tool-status" aria-live="polite">{move || s.get().outline_status}</p>
-        <div class="tool-results"><For each=move || s.get().outline_items key=|item| (item.index,item.title.clone(),item.path.clone(),item.line) children=move |item| view!{
-            <button disabled=move || s.get().outline_busy style=format!("padding-left:{}px",8+item.level.min(5)*8) on:click=move |_| action("outline-hit",&item.index.to_string())><strong>{item.title}</strong><span>{format!("{}:{}",item.path,item.line)}</span></button>
-        }/></div>
-        <p class="tool-help">"Literal TeX headings. Custom macros and included-file order are not expanded."</p>
+        <div id="outline-tree" class="outline-tree" role="tree" aria-label="Outline"></div>
     </section> }
 }
 

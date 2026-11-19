@@ -40,6 +40,8 @@ import './style.css';
 import './menu.css';
 import './review-editor.css';
 import {editorSearch} from './editor-search.js';
+import {wireSidebarDivider} from './sidebar-resize.js';
+import './outline.css';
 import {latexCompletion,prefetchCompletionData} from './latex-completion.js';
 import {latexIndex} from './latex-index.js';
 import './latex-completion.css';
@@ -106,7 +108,7 @@ const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.pla
 const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
-const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision,emit,activate:activateFile,notify:notice,wireTree,mutate:run=>{assertUiMutation(collaboration?.review.state.mode);return run();}});
+const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision,emit,activate:activateFile,notify:notice,wireTree,outlineKey:()=>projectId&&!transientProject?`scribyra:outline:${projectId}`:null,mutate:run=>{assertUiMutation(collaboration?.review.state.mode);return run();}});
 const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision,emit,notify:notice,showRectangle:showSourceRectangle,clearMarker:clearSourceHighlight,activate:(id,line)=>{activateFile(id);selectSourceLine(line);}});
 // Bibliography import and Zotero links (docs/zotero.md). Links and keys stay on this device.
 const zotero=zoteroController({context:()=>doc&&!leavingProject&&commands?{doc,projectId,commands,mode:collaboration?.review.state.mode,transient:transientProject}:null,notify:message=>notice(message),activate:id=>activateFile(id),onLinks:()=>{zoteroBar();emit();}});
@@ -331,7 +333,7 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
   Object.assign(state,collaboration.state);
   agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,mode:()=>collaboration?.review.state.mode,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
   window.scribyra.agent=agent.api;
-  loadWorkspace();void zotero.load(id);texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
+  loadWorkspace();workspace.open();void zotero.load(id);texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');
   if(previousEngine!=='lualatex') { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
   refreshDoc(); state.selected = state.active; emit();
@@ -361,7 +363,7 @@ function mountEditor() {
   const host = document.getElementById('code-editor');
   if (!state.current || !doc) return;
   if (!host) { renderFrame = requestAnimationFrame(mountEditor); return; }
-  wireDivider();
+  wireDivider();wireSidebarDivider();
   if (mountedFile === state.active && (editor?.dom.isConnected || (host.querySelector('.asset-message') && mountedBytes === doc.getMap('assets').get(state.active) && mountedAssetPath === projectNode(doc, state.active)?.path))) return;
   collaboration?.review.beforeLeave();
   captureSelection();
@@ -406,13 +408,17 @@ function mountEditor() {
       if(!command)return false;void action(...command);return true;
     }},...(collaboration?.review.state.mode!=='editing'?[]:yUndoManagerKeymap), ...defaultKeymap, ...searchKeymap, indentWithTab]), StreamLanguage.define(stex), syntaxHighlighting(accessibleHighlight), bracketMatching(), highlightSelectionMatches(), editorSearch(),
     ...(collaboration?.review.state.mode==='reviewing'?[]:[yCollab(text, sync?.awareness || null, { undoManager: collaboration?.review.state.mode==='viewing'?false:undo })]),
+    // The outline highlights the section that holds the cursor.
+    EditorView.updateListener.of(update=>{if(update.selectionSet||update.docChanged)reportCursor(update.view);}),
     EditorView.contentAttributes.of({ 'aria-label': 'LaTeX source', spellcheck: 'false' }),
     EditorView.theme({ '&': { color: 'var(--text)', backgroundColor: 'var(--surface)' }, '.cm-activeLine': { backgroundColor: 'var(--subtle)' }, '.cm-cursor': { borderLeftColor: 'var(--text)' } }),
   ] }) });
   editor.scrollDOM.tabIndex=0;editor.scrollDOM.setAttribute('role','region');editor.scrollDOM.setAttribute('aria-label','LaTeX source scroll area');
   host.style.setProperty('--editor-font-size',`${state.fontSize}px`);
   if(saved)editor.scrollDOM.scrollTop=saved.scroll;
+  reportCursor(editor);
 }
+function reportCursor(view){if(mountedFile&&view===editor){const head=view.state.selection.main.head;workspace.cursor(mountedFile,collaboration?.review.toSource(head)??head);}}
 function imageMime(path) {
   return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', avif: 'image/avif' })[path.split('.').pop().toLowerCase()];
 }

@@ -164,6 +164,8 @@ pub struct Heading {
     pub start: usize,
     pub line: usize,
     pub level: usize,
+    /// The sectioning command without its star, such as `section`.
+    pub command: String,
     pub title: String,
 }
 /// An `\input`, `\include` or `\subfile` with a literal argument. The browser splices the named
@@ -192,6 +194,7 @@ pub fn outline(files: Vec<SourceFile>) -> Result<Outline, String> {
         let bytes = text.as_bytes();
         let mut i = 0;
         let mut position = Position::default();
+        let file_start = result.items.len();
         while i < bytes.len() {
             if bytes[i] == b'%' {
                 while i < bytes.len() && bytes[i] != b'\n' {
@@ -244,7 +247,7 @@ pub fn outline(files: Vec<SourceFile>) -> Result<Outline, String> {
             if matches!(command, "input" | "include" | "subfile") {
                 if let Some((a, b, next)) = crate::references::group(bytes, i, b'{', b'}') {
                     let target = text[a..b].trim();
-                    if !target.is_empty() && result.includes.len() < MAX_RESULTS {
+                    if !target.is_empty() && result.includes.len() < MAX_RESULTS * 4 {
                         let (start, _, _) = position.at(text, command_at);
                         result.includes.push(Include {
                             file_id: file.id.clone(),
@@ -275,9 +278,10 @@ pub fn outline(files: Vec<SourceFile>) -> Result<Outline, String> {
                 continue;
             };
             i = next;
-            if result.items.len() >= MAX_RESULTS {
+            // The limit applies per file, so one huge file cannot hide the others.
+            if result.items.len() - file_start >= MAX_RESULTS {
                 result.truncated = true;
-                return Ok(result);
+                break;
             }
             let (start, line, _) = position.at(text, command_at);
             let title = plain_title(&text[a..b]);
@@ -287,6 +291,7 @@ pub fn outline(files: Vec<SourceFile>) -> Result<Outline, String> {
                 start,
                 line,
                 level,
+                command: command.into(),
                 title: if title.is_empty() {
                     format!("Untitled {command}")
                 } else {
