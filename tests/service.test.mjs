@@ -111,7 +111,7 @@ test('relay bounds rooms, members, messages; shutdown closes active peers',async
   } finally {for(const socket of sockets)socket.terminate();await s.close();}
 });
 
-test('corrupted committed objects are never served and fail verify; future schema and duplicate ownership refuse startup',async()=>{
+test('corrupted committed objects are never served and fail verify; duplicate ownership refuses startup, a future schema is served but not migrated',async()=>{
   const s=await service();const bytes=randomBytes(32);
   try {
     assert.equal((await fetch(s.object(bytes),{method:'PUT',headers:s.headers,body:bytes})).status,201);
@@ -127,8 +127,11 @@ test('corrupted committed objects are never served and fail verify; future schem
     assert.equal(await s.command('verify'),1);
     await writeFile(s.blob(bytes),bytes);
     assert.equal(await s.command('verify'),0);
+    // A newer build's additional migration (design section 10, review L8): replicas of this build
+    // keep serving it, while `migrate` refuses to run this build's migrations against it.
     await s.sql("INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (9999, 'future', true, '\\x00', 0)");
-    await assert.rejects(s.start(),/Service exited 1/);
+    await s.start();assert.match(s.logs,/"event":"schema_ahead"/);await s.stop();
+    assert.equal(await s.command('migrate'),1);
   } finally {await s.close();}
 });
 
