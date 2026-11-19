@@ -1,13 +1,15 @@
 //! Server compile (design section 6, slice 11): the queue, the compile worker and the routes.
 //!
 //! A request materialises the project (at the `seq` the caller saw, or its head) and digests its
-//! files; a successful compile of the same digest, engine and TeX Live tree is reused. Otherwise
-//! a `compiles` row is queued: FIFO, at most `compile_limits.queue` waiting, at most one queued
-//! job per project (a newer request replaces it) and one running (a project's next job waits
-//! for the running one), `per_member_per_hour` requests per member. Workers (`scribyra-sync
-//! compile-worker`, or `compile_worker_in_process` in `serve`) take jobs with `FOR UPDATE SKIP
-//! LOCKED`, run `concurrency` at once in the [`scribyra_compile`] sandbox, heartbeat each one,
-//! and store the PDF and log sealed with the project's data key. A job whose worker stops
+//! files (after `per_member_per_hour` and `per_project_per_minute` admitted it); a successful
+//! compile of the same digest, engine and TeX Live tree is reused. Otherwise a `compiles` row is
+//! queued: at most `compile_limits.queue` waiting, `active_per_member` per requester and
+//! `active_per_owner` per owner, at most one queued job per project (a newer request replaces
+//! it) and one running (a project's next job waits for the running one). Workers
+//! (`scribyra-sync compile-worker`, or `compile_worker_in_process` in `serve`) take jobs round
+//! robin by requester with `FOR UPDATE SKIP LOCKED` under a per-claim token, run `concurrency`
+//! at once in the [`scribyra_compile`] sandbox, heartbeat each one, and store the PDF and log
+//! sealed with the project's data key under the claim's slot. A job whose worker stops
 //! heartbeating is requeued once, then failed; SIGTERM requeues what does not finish within
 //! `shutdown_grace_seconds`. Only the newest successful PDF and log and the newest failed log
 //! keep their blobs. Every change `NOTIFY`s the project, so heads polls wake.
