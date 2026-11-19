@@ -28,7 +28,7 @@ fn rs256_sign_in_me_logout_and_replays() {
     let started = c.start();
     assert!(started.url.starts_with(&format!("{}/authorize?", env.idp.issuer)));
     let query: std::collections::HashMap<String, String> = url::Url::parse(&started.url).unwrap().query_pairs().into_owned().collect();
-    assert_eq!(query["scope"], "openid email profile");
+    assert_eq!(query["scope"], "openid email profile offline_access");
     assert_eq!(query["code_challenge_method"], "S256");
     assert_eq!(query["redirect_uri"], format!("{}/v1/sso/callback/test", env.service.config["public_url"].as_str().unwrap()));
     let callback = c.authorize(&started, "alice", "pw-alice");
@@ -638,4 +638,31 @@ fn concurrent_sign_in_starts_all_succeed() {
         .collect();
     let statuses: Vec<u16> = threads.into_iter().flat_map(|t| t.join().unwrap()).collect();
     assert_eq!(statuses.iter().filter(|s| **s == 200).count(), 160, "{statuses:?}");
+}
+
+#[test]
+fn logins_without_a_refresh_token_are_short_and_providers_ask_for_one() {
+    // Review M7: Zitadel and generic providers did not ask for offline_access, so their logins
+    // had no refresh token, were never rechecked, and kept a role taken away for up to
+    // session_hours (at most 720).
+    let users = json!([user("nora", &[MEMBER], json!({"refresh_needs_offline_access": true}))]);
+    let expires_in = |login: &Value| login["expires"].as_i64().unwrap() - std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+    let refresh = |env: &Env| postgres().psql(env.service.database_url(), "SELECT count(*) FROM sso_logins WHERE refresh_token IS NOT NULL");
+    // By default the sign-in asks for offline_access, gets a refresh token and lasts session_hours.
+    let env = Env::start("RS256", users.clone(), json!({}), json!({"provider": {"session_hours": 24}}));
+    let nora = env.client().login("nora");
+    assert_eq!(refresh(&env), "1");
+    assert!((24 * 3600 - 60..=24 * 3600 + 1).contains(&expires_in(&nora)), "{nora}");
+    assert!(!env.service.logs.lock().unwrap().contains("sso_no_refresh"));
+    // Without offline_access there is no refresh token: the login lasts no_refresh_session_minutes
+    // (an hour by default), so a role taken away applies at the next sign-in, and the start warns.
+    let env = Env::start("RS256", users.clone(), json!({}), json!({"provider": {"session_hours": 24, "offline_access": false}}));
+    let nora = env.client().login("nora");
+    assert_eq!(refresh(&env), "0");
+    assert!((3600 - 60..=3600 + 1).contains(&expires_in(&nora)), "{nora}");
+    assert!(env.service.logs.lock().unwrap().contains(r#"{"event":"sso_no_refresh","providers":["test"]}"#));
+    let start = postgres().psql(env.service.database_url(), "SELECT detail->>'noRefresh' FROM audit_log WHERE action = 'deployment.start'");
+    assert_eq!(start, r#"["test"]"#);
+    let env = Env::start("RS256", users, json!({}), json!({"provider": {"session_hours": 24, "offline_access": false, "no_refresh_session_minutes": 30}}));
+    assert!((1800 - 60..=1800 + 1).contains(&expires_in(&env.client().login("nora"))));
 }

@@ -1338,7 +1338,8 @@ async fn callback_flow(State(s): State<Shared>, axum::extract::Path(provider): a
             .bind(&flow.challenge)
             .bind(identity_json(&identity, &orgs).to_string())
             .bind(&refresh_token)
-            .bind(configured.session_hours as i64 * 3600)
+            // Review M7: a login without a refresh token is never rechecked, so it is short.
+            .bind(configured.session_seconds(refresh_token.is_some()))
             .bind(GRANT_SECONDS as f64)
             .execute(&mut *tx)
             .await?;

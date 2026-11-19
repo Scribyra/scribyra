@@ -629,7 +629,13 @@ pub async fn serve(store: Store) -> Result<(), store::Error> {
         let protection = crate::audit::protect(&s.store.pool).await?;
         println!("{}", serde_json::json!({"event": "audit_protection", "state": protection}));
         let retention = crate::audit::set_retention(&s.store.pool, config.audit_retention()).await?;
-        let detail = serde_json::json!({"policy": policy, "encryption": deployment.encryption.as_str(), "schema": schema, "version": env!("CARGO_PKG_VERSION"), "auditRetention": retention, "auditProtection": protection});
+        // Review M7: logins of a provider that issues no refresh tokens are never rechecked, so a
+        // role taken away reaches them only when they end (`no_refresh_session_minutes`).
+        let no_refresh: Vec<&str> = deployment.providers.iter().filter(|p| !p.can_refresh()).map(|p| p.id.as_str()).collect();
+        if !no_refresh.is_empty() {
+            println!("{}", serde_json::json!({"event": "sso_no_refresh", "providers": no_refresh}));
+        }
+        let detail = serde_json::json!({"policy": policy, "encryption": deployment.encryption.as_str(), "schema": schema, "version": env!("CARGO_PKG_VERSION"), "auditRetention": retention, "auditProtection": protection, "noRefresh": no_refresh});
         crate::audit::record_now(&s.store.pool, &[], &crate::audit::Actor::system(), "deployment.start", Some(("deployment", org)), detail).await?;
         // Providers whose tokens name no organisation have one each, made now in the configured
         // order (so the first takes the deployment's ID).

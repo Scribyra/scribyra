@@ -1140,7 +1140,7 @@ async fn settings(State(a): State<Shared>, source: SourceIp, headers: HeaderMap)
             json!({"id": p.id, "label": p.label, "issuer": p.issuer, "emailDomains": p.email_domains, "preset": p.preset, "claims": p.claims, "roles": p.roles,
                    "zitadelProjectId": p.zitadel_project_id, "zitadelProjectOwnerOrg": p.zitadel_project_owner_org, "zitadelForeignOrganisations": p.zitadel_foreign_organisations,
                    "keycloakOrganizations": p.keycloak_organizations, "rolesApplyToAllOrganisations": p.roles_apply_to_all_organisations, "hostedDomains": p.hosted_domains, "entraRequireAcct": p.entra_require_acct, "adminSubjects": p.admin_subjects.len(),
-                   "offlineAccess": p.offline_access, "sessionHours": p.session_hours, "recheckMinutes": p.recheck_minutes})
+                   "offlineAccess": p.offline_access(), "canRefresh": p.can_refresh(), "sessionHours": p.session_hours, "noRefreshSessionMinutes": p.no_refresh_session_minutes, "recheckMinutes": p.recheck_minutes})
         })
         .collect();
     let policy = scribyra_core::blob::hash(serde_json::to_string(d).unwrap_or_default().as_bytes());

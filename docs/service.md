@@ -663,8 +663,9 @@ because the service only ever redirects back to a configured origin.
 | `hosted_domains` | `[]` | `google` only: the Workspace domains (`hd`) admitted; another domain is refused with `domain`. A `google` provider needs this or `email_domains` (then those domains are the admitted `hd` values), or it refuses to start: without either, every Workspace domain in the world could sign in |
 | `entra_require_acct` | `false` | `entra` only: refuse tokens without the `acct` optional claim (`missing_claim`) instead of telling guests apart by `idp` |
 | `admin_subjects` | `[]` | `google` only: the exact `sub` values of administrators. Google's tokens carry no roles, so this is the one place a configuration names people (a Directory API group check may come later) |
-| `offline_access` | `false` | Adds the `offline_access` scope, which some providers require before they issue refresh tokens |
+| `offline_access` | `true`, except `keycloak` and `google` | Adds the `offline_access` scope, which most providers (Zitadel, Entra, Okta) require before they issue refresh tokens; without refresh tokens logins are never rechecked. Keycloak issues refresh tokens without it (and with it gives offline sessions, which need the `offline_access` role); Google does not take the scope |
 | `session_hours` | 12 | 1–720: how long a login lasts |
+| `no_refresh_session_minutes` | 60 | 5–43200: how long a login lasts at most when the provider gave it no refresh token (capped by `session_hours`). Such a login is never rechecked, so a role taken away, a guest mark or a disabled account at the provider reaches it only when it ends and the person signs in again |
 | `recheck_minutes` | 10 | 1–1440: how often a login with a refresh token is rechecked |
 | `scopes` | `[]` | Extra scopes beyond `openid email profile` and those `offline_access` and the preset add |
 
@@ -809,10 +810,14 @@ provider again, but stay blocked until an administrator unlinks them. Their acco
 client error (except 408 and 429) revokes only that login without blocking, so a
 wrong client secret does not block everyone. Network and server errors keep the login
 and retry on the next pass (the claim is undone); the service logs only counters
-(`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked and
-simply expire after `session_hours`: **role changes, guest marks and provider disablement
-reach such logins only when they expire**, so set `offline_access: true` (or use a provider that
-issues refresh tokens without it, like Keycloak) wherever that matters. Each revocation of a linked member's login (also a
+(`{"event":"sso_recheck",…}`). Logins without a refresh token cannot be rechecked: **role
+changes, guest marks and provider disablement reach such logins only when they expire**, so
+they last at most `no_refresh_session_minutes` (an hour by default) rather than `session_hours`
+(review M7: they used to keep a removed role for up to 720 hours). `offline_access` is on by
+default for that reason; a provider that is not expected to issue refresh tokens (`google`, or
+`offline_access: false` on anything but Keycloak) is named at every start in
+`{"event":"sso_no_refresh","providers":["<id>",…]}` and in the `deployment.start` audit event
+(`noRefresh`). Each revocation of a linked member's login (also a
 sign-out or a back-channel logout) closes their device sessions at once.
 
 **Back-channel logout** (OpenID Connect Back-Channel Logout 1.0) is accepted at
@@ -851,10 +856,12 @@ the redirect fragment (`#scribyra-sso-error=id_token`).
 - *Google Workspace*: issuer `https://accounts.google.com`; `preset: "google"` with
   `hosted_domains` (your Workspace domains; required) and `admin_subjects`. The Workspace domain (`hd`) is the organisation; consumer accounts are
   refused. Google issues refresh tokens only for offline access requests, which this service
-  does not make, so Google logins are not rechecked and last for `session_hours`.
+  does not make, so Google logins are not rechecked and last for `no_refresh_session_minutes`
+  (an hour by default).
 - *Okta and others*: a generic `claims` mapping, for example `{"roles": "$.groups"}` once you
   added a groups claim to the authorization server (`https://<org>.okta.com/oauth2/<server-id>`).
-  Use `offline_access` for refresh tokens.
+  `offline_access` (on by default) asks for refresh tokens; allow the refresh token grant for the
+  client.
 - *Keycloak*: issuer `https://<host>/realms/<realm>`; `preset: "keycloak"` with realm or client
   roles (with organisations, per-organisation `<alias>:<role>` client roles or groups). Keycloak issues refresh tokens without `offline_access` and supports back-channel
   logout (set the client's back-channel logout URL).
