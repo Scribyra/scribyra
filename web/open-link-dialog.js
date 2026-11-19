@@ -115,12 +115,12 @@ export function openLinkEntry({initial,projects,openExisting,importProject,compi
     actions.append(button('Cancel',close));
    }else if(phase==='ready'){
     const plan=checked.plan;
-    summary.append(el('p',{className:'open-link-numbers'},
+    summary.append(...[el('p',{className:'open-link-numbers'},
      checked.commit?el('span',{},'Commit ',el('code',{text:checked.commit.slice(0,12)})):null,
      el('span',{text:plural(plan.files.length,'file')}),
      el('span',{text:size(plan.bytes)})),
      checked.rate&&checked.rate.remaining<20?el('p',{className:'open-link-rate',text:`GitHub requests left this hour from your network: ${checked.rate.remaining} of ${checked.rate.limit}.`}):null,
-     report(plan.skipped));
+     report(plan.skipped)].filter(Boolean));
     what.textContent=`A copy is made in this browser; nothing is sent back. Files are downloaded from ${link.kind==='github'?'raw.githubusercontent.com':link.host}${link.kind==='github'?'':' (already received)'}. Import and compile also runs LaTeX on the main file, in this browser.`;
     actions.append(button('Cancel',close),button('Import',()=>run(false)),button('Import and compile',()=>run(true),true));
    }else if(phase==='problem'){

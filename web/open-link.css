@@ -1,4 +1,4 @@
-.open-link-dialog{width:min(560px,92vw);max-height:90dvh;overflow:auto}
+.modal.open-link-dialog{width:min(560px,92vw);max-height:90dvh;overflow:auto}
 .open-link-dialog h2{margin-bottom:16px}
 .open-link-facts{display:grid;grid-template-columns:max-content 1fr;gap:8px 16px;margin:0 0 14px;font-size:12px;line-height:1.5}
 .open-link-facts dt{color:var(--muted)}

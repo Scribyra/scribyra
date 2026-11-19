@@ -6,3 +6,28 @@
 .footer .legal{flex:1 0 100%;font-size:11px;line-height:1.6;color:var(--muted)}.footer .legal span{white-space:nowrap}
 @media(max-width:600px){.footer>div{flex:1 1 0;min-width:0}}
 .github-link{gap:8px}.github-link .github-mark{flex-shrink:0;margin-left:-2px}.github-link>span{margin-left:4px}
+/* Open in Scribyra link generator (open.html) */
+.open-generator{max-width:760px}
+.open-form{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px 20px;margin:8px 0 6px}
+.open-field{display:flex;flex-direction:column;gap:6px;min-width:0}
+.open-wide{grid-column:1/-1}
+.open-field label{font-size:13px;font-weight:600;color:var(--ink)}
+.open-field label span{font-weight:400;color:var(--muted);margin-left:4px}
+.open-field input,.open-field select,.open-snippet textarea{font:inherit;font-size:14px;color:var(--ink);background:white;border:1px solid #cfd0dc;border-radius:7px;padding:10px 12px;min-width:0}
+.open-field input:focus-visible,.open-field select:focus-visible,.open-snippet textarea:focus-visible{outline:2px solid var(--purple);outline-offset:1px}
+.open-field small{font-size:12px;line-height:1.5;color:var(--muted)}
+.open-status{min-height:1.7em;font-size:14px;margin:6px 0 0}
+.open-status[data-state=error]{color:#a3302c}
+.open-output{border:1px solid var(--line);border-radius:12px;background:var(--soft);padding:20px 22px;margin:14px 0 8px}
+.open-output[hidden]{display:none}
+.doc .open-output h2{margin:0 0 14px;font-size:21px}
+.open-preview{display:flex;align-items:center;flex-wrap:wrap;gap:18px;margin-bottom:16px}
+.open-preview img{display:block}
+.doc .open-preview a{line-height:0}
+.doc .open-preview #open-try{line-height:1.5;font-size:14px}
+.open-snippet{margin:14px 0 0}
+.open-snippet-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px}
+.open-snippet label{font-size:13px;font-weight:600}
+.open-snippet textarea{display:block;width:100%;resize:vertical;font:12.5px/1.55 "SFMono-Regular",Consolas,"Liberation Mono",monospace;overflow-wrap:anywhere;overflow:hidden}
+.open-snippet .button{margin-top:0;flex-shrink:0;font-size:12px;padding:7px 12px;color:var(--ink)}
+@media(max-width:620px){.open-form{grid-template-columns:1fr}}
