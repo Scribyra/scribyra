@@ -12,7 +12,7 @@ const measure=(name,start)=>{try{performance.measure(name,{start,end:performance
 const chevron=()=>{const svg=document.createElementNS(SVG,'svg');svg.setAttribute('viewBox','0 0 16 16');svg.setAttribute('aria-hidden','true');const path=document.createElementNS(SVG,'path');path.setAttribute('d','m6 4 4 4-4 4');svg.append(path);return svg;};
 
 export function outlineController({state,getDoc,emit,activate,tool,storageKey}){
-  const cache=new Map();const dirty=new Set();let timer,running=false,generation=0,tree=null,cursor=null,saveTimer,assembledFor=null;
+  const cache=new Map();const dirty=new Set();let timer,running=false,generation=0,tree=null,cursor=null,saveTimer,assembledFor=null,cursorFrame=0;
   let exp=expansion(null);
   const view=outlineView({
     jump:node=>{flush();const fresh=tree?.byKey.get(node.key)||node;if(fresh.kind==='file')activate(fresh.fileId,0);else activate(fresh.fileId,fresh.start);},
@@ -76,7 +76,8 @@ export function outlineController({state,getDoc,emit,activate,tool,storageKey}){
     // Called after every project refresh: a new active file or main document re-assembles the tree.
     structure(){if(state.sidePanel==='outline'&&tree&&assembledFor!==`${state.outlineScope}:${state.outlineScope==='file'?state.active:state.mainFile}`)schedule(0);},
     scope(value){state.outlineScope=value==='file'?'file':'project';persist();emit();schedule(0);},
-    cursor(fileId,offset){cursor={fileId,offset};if(tree&&state.sidePanel==='outline')view.setCurrent(currentNode(tree,fileId,offset));},
+    // Coalesced per frame: opening a file reports its first line just before a jump moves the cursor on.
+    cursor(fileId,offset){cursor={fileId,offset};if(!cursorFrame)cursorFrame=requestAnimationFrame(()=>{cursorFrame=0;if(tree&&cursor&&state.sidePanel==='outline')view.setCurrent(currentNode(tree,cursor.fileId,cursor.offset));});},
     expandAll(){view.all(true);},collapseAll(){view.all(false);},
     open(){load();},
     leave(){clearTimeout(timer);clearTimeout(saveTimer);generation++;tool.cancel();running=false;cache.clear();dirty.clear();tree=null;cursor=null;assembledFor=null;exp=expansion(null);view.reset();},

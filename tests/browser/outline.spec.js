@@ -177,7 +177,8 @@ test('the thesis outline stays within the typing budget',async({page},testInfo)=
   // Word-sized bursts with pauses, as in docs/large-projects.md, so debounced updates run.
   await page.keyboard.press('End');
   for(let burst=0;burst<6;burst++){await page.keyboard.type(' outline',{delay:40});await page.waitForTimeout(260);}
-  await page.keyboard.insertText('\n\\section{Typed heading}\n');
+  // WebKit drops text after a newline in one insertText, so the line break is its own key.
+  await page.keyboard.press('Enter');await page.keyboard.insertText('\\section{Typed heading}');
   await expect(page.locator('.tool-status')).toHaveText('123 headings');await expect(item(page,'Typed heading')).toHaveAttribute('aria-current','location');
   for(let i=0;i<6;i++){await page.getByRole('button',{name:i%2?'Expand all':'Collapse all',exact:true}).click();}
   await item(page,'Introduction').locator('.outline-chevron').click();await item(page,'Introduction').locator('.outline-chevron').click();
