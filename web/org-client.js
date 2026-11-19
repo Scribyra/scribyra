@@ -12,14 +12,17 @@ const messages={
  413:'This change is larger than the service allows.',429:'The service is busy. Retrying shortly.',503:'The service is unavailable. Retrying shortly.',
  507:'The service’s storage is full. Your changes stay saved on this device.',
 };
+// A sign-in the service refuses (redeem `403 {code}`) says why in the service's own words.
+const REFUSALS=new Set(['no_role','guest','no_organisation','account_disabled','account_removed']);
 async function failure(response){
- let detail='';try{const body=await response.json();if(typeof body?.error==='string'&&body.error.length<300)detail=body.error;}catch{}
- return new ServiceError(response.status,detail?`${messages[response.status]||'The service refused the request.'} (${detail})`:messages[response.status]||`The service answered ${response.status}.`);
+ let detail='',code='';try{const body=await response.json();if(typeof body?.error==='string'&&body.error.length<300)detail=body.error;if(typeof body?.code==='string'&&/^[a-z_]{1,40}$/.test(body.code))code=body.code;}catch{}
+ if(REFUSALS.has(code)&&detail)return Object.assign(new ServiceError(response.status,detail),{code});
+ return Object.assign(new ServiceError(response.status,detail?`${messages[response.status]||'The service refused the request.'} (${detail})`:messages[response.status]||`The service answered ${response.status}.`),{code});
 }
 export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),timeoutMs=20000}={}){
  let token=null;
- async function request(path,{method="GET",body,type,auth=true,sso,timeout=timeoutMs,signal}={}){
-  const headers={};if(type)headers['Content-Type']=type;
+ async function request(path,{method="GET",body,type,auth=true,sso,org,timeout=timeoutMs,signal}={}){
+  const headers={};if(type)headers['Content-Type']=type;if(org)headers['Scribyra-Org']=org;
   if(sso)headers.Authorization='ScribyraSSO '+sso;else if(auth&&token)headers.Authorization='Scribyra '+token;
   let response;
   try{response=await fetchImpl(service+path,{method,headers,body,signal:signal?AbortSignal.any([signal,AbortSignal.timeout(timeout)]):AbortSignal.timeout(timeout),cache:'no-store',credentials:'omit'});}
@@ -71,7 +74,8 @@ export function orgClient(service,{fetchImpl=globalThis.fetch.bind(globalThis),t
   },
   async ssoStart(provider,returnTo,challenge){return json('/v1/sso/start',{method:'POST',type:'application/json',body:JSON.stringify({provider,return:returnTo,challenge}),auth:false});},
   async ssoRedeem(code,verifier){return json('/v1/sso/redeem',{method:'POST',type:'application/json',body:JSON.stringify({code,verifier}),auth:false});},
-  async ssoMe(sso){return json('/v1/sso/me',{sso});},
+  /** The login; with `org`, the role and end-to-end link shown are that organisation's. */
+  async ssoMe(sso,org){return json('/v1/sso/me',{sso,org});},
   async ssoLogout(sso){await request('/v1/sso/logout',{method:'POST',type:'application/json',body:'{}',sso});},
   async reportWrap(org,project,epoch,sender){await request(`/v1/orgs/${org}/keys/report`,{method:'POST',type:'application/json',body:JSON.stringify({project,epoch,sender})});},
   async pending(org){return(await json(`/v1/orgs/${org}/pending`)).pending;},

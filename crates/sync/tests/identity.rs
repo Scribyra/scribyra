@@ -75,6 +75,11 @@ fn zitadel_organisations_roles_and_guests() {
     let cy = c.login("cy");
     assert_eq!(orgs(&cy), [(a.clone(), "member".into(), false), (b.clone(), "guest".into(), true)]);
     assert_eq!(postgres().psql(&sr.db(), "SELECT count(*) FROM accounts WHERE subject = 'sub-cy'"), "1");
+    // `/v1/sso/me` shows the role (and end-to-end link) of the organisation `Scribyra-Org` names.
+    let cy_api = sr.api(&token(&cy));
+    assert_eq!(cy_api.call("GET", "/v1/sso/me", None).json()["role"], "member");
+    assert_eq!(cy_api.in_org(&b).call("GET", "/v1/sso/me", None).json()["role"], "guest");
+    assert_eq!(sr.api(&token(&bea)).in_org(&a).call("GET", "/v1/sso/me", None).json()["code"], "unknown_org");
     // A role in an organisation that maps to nothing gives nothing there; no mapped role at all
     // is refused with its own code, and the app gets the design's message at redeem.
     assert_eq!(orgs(&c.login("eve")), [(a.clone(), "member".into(), false)]);

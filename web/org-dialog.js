@@ -105,7 +105,13 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
   if(login){
    if(!about&&login.state!=='blocked'){void engine.about().then(a=>{about=a;render();}).catch(error=>{feedback=error.message;render();});return;}
    const who=login.subject?.email||login.subject?.name||'your account';
-   body.append(element('p',`${login.name||'Organisation'} · ${login.service}`,'org-service'),element('p',`Signed in as ${who}.`,'org-help'));
+   body.append(element('p',`${login.orgName||login.name||'Organisation'} · ${login.service}`,'org-service'),element('p',`Signed in as ${who}.`,'org-help'));
+   // One end-to-end organisation per organisation the provider names (never as a guest): choose one.
+   if(login.orgs?.length>1){
+    const choose=select('Organisation',login.orgs.map(o=>[o.id,o.name]),login.org);
+    choose.input.onchange=async()=>{busy=true;render();try{await engine.chooseOrg(choose.input.value);about=null;feedback='';}catch(e){feedback=e.message;}finally{busy=false;render();}};
+    choose.input.disabled=busy;body.append(choose.row);
+   }
    if(login.state==='linked'){
     body.append(section('Add this browser',element('p','One of your devices that is already connected adds it: it asks you for the code this browser shows.','org-help'),
      actions(button('Ask one of my devices',async()=>{await engine.requestDevice();onChanged();feedback='On one of your devices, open Remote backup and type the code this browser shows.';},'primary'))));
@@ -117,9 +123,9 @@ export function orgDialog({engine,server,anchor,listProjects,prefill={},onRestor
    }else if(login.state==='unlinked'&&!about?.genesis){
     if(login.role==='admin'){
      creatorName.input.value||=login.subject?.name||'';
-     body.append(section('Create the organisation',element('p',`You are an administrator of ${login.name||'this deployment'}. Creating its organisation makes keys in this browser; others then sign in and ask to join, and you approve them.`,'org-help'),creatorName.row,
-      actions(button('Create organisation',async()=>{kit=await engine.create({name:login.name,ownerName:creatorName.input.value||'Owner'});onChanged();},'primary'))));
-    }else body.append(element('p',`${login.name||'This organisation'} is not set up yet. An administrator signs in first to create it; then sign in again here.`,'org-help'));
+     body.append(section('Create the organisation',element('p',`You are an administrator of ${login.orgName||login.name||'this deployment'}. Creating its organisation makes keys in this browser; others then sign in and ask to join, and you approve them.`,'org-help'),creatorName.row,
+      actions(button('Create organisation',async()=>{kit=await engine.create({name:login.orgName||login.name,ownerName:creatorName.input.value||'Owner'});onChanged();},'primary'))));
+    }else body.append(element('p',`${login.orgName||login.name||'This organisation'} is not set up yet. An administrator signs in first to create it; then sign in again here.`,'org-help'));
    }else if(login.state==='unlinked')body.append(actions(button('Ask to join',async()=>joined(await engine.requestJoin()),'primary')));
    body.append(actions(button('Use another account',async()=>{engine.forgetLogin();about=null;})));
    return;

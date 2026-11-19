@@ -1,7 +1,9 @@
-// The organisation dialog for a server-readable deployment (design section 9): who is signed in
-// and what the server can read, the deployment's projects (on this device or to open from the
-// server) with their sync state, "Add to <deployment>" for personal projects, sharing by email
-// invitation with a role, and signing out.
+// The organisation dialog for a server-readable deployment (design section 9): who is signed in,
+// their role (from the provider, read-only) and what the server can read, the organisation switcher
+// when the account has roles in several organisations (design section 3), the active organisation's
+// projects (on this device or to open from the server) with their sync state, "Add to <organisation>"
+// for personal projects (not for guests), sharing by email invitation with a role, organisations
+// whose access ended, and signing out.
 import {openDialog} from './menu.js';
 import {MODE_TEXT} from './org-server.js';
 import {orgAdminDialog,adminNotice} from './org-admin-dialog.js';
@@ -10,6 +12,7 @@ import './org-dialog.css';
 const element=(tag,text,cls)=>{const node=document.createElement(tag);if(text)node.textContent=text;if(cls)node.className=cls;return node;};
 const ROLE_LABEL={owner:'Owner',editor:'Editor',reviewer:'Reviewer',viewer:'Viewer',admin:'Opened as administrator'};
 const ROLES=[['editor','Editor'],['reviewer','Reviewer'],['viewer','Viewer']];
+const ACCOUNT_ROLE={admin:'Administrator',member:'Member',guest:'Guest'};
 const host=service=>{try{return new URL(service).host;}catch{return service;}};
 
 export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged=()=>{},onOpen=async()=>{}}){
@@ -55,7 +58,8 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
  }
 
  async function shareBox(project){
-  const details=await engine.details(project.project),box=element('div',null,'org-share'),manage=['owner','editor'].includes(details.role);
+  // Owners and editors share, except guests (design section 3).
+  const details=await engine.details(project.project),box=element('div',null,'org-share'),manage=['owner','editor'].includes(details.role)&&!engine.info.guest;
   const people=element('ul',null,'org-members');people.setAttribute('aria-label','People with access');
   for(const m of [details.owner,...details.members]){
    const row=element('li',null,'org-member'),who=m.email||m.name||'Someone';
@@ -92,17 +96,24 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
   }
   if(manage){
    const {email,role}=keep('invite:'+project.project,()=>({email:field('Email','','email'),role:select('Role',ROLES,'editor')}));
+   // The organisation's directory (members and administrators; not for guests) fills in whom to invite.
+   const listed=new Set([details.owner,...details.members].map(m=>m.email).filter(Boolean));
+   const offered=(await engine.directory().catch(()=>[])).filter(m=>m.email&&!listed.has(m.email)).map(m=>[m.email,m.name?`${m.name} (${m.email})`:m.email]);
+   if(offered.length){
+    const {pick}=keep(`directory:${project.project}:${offered.map(([v])=>v).join()}`,()=>{const pick=select('From the directory',[['','Choose someone…'],...offered],'');pick.input.onchange=()=>{if(pick.input.value)email.input.value=pick.input.value;};return{pick};});
+    box.append(pick.row);
+   }
    box.append(email.row,role.row,actions(button('Invite',async()=>{
     const address=email.input.value.trim(),result=await engine.invite(project.project,address,role.input.value);
     email.input.value='';
-    feedback=result.status==='pending'?`Invited ${address}. Ask them to sign in to ${engine.info.name}’s Scribyra; the project then appears in their list.`:`Shared with ${address}.`;
+    feedback=result.status==='pending'?`Invited ${address}. Ask them to sign in to ${engine.info.place}’s Scribyra; the project then appears in their list.`:`Shared with ${address}.`;
    },'primary')));
   }
   return box;
  }
 
  async function connected(){
-  const info=engine.info,parts=[],drawn=used=new Set();
+  const info=engine.info,parts=[],drawn=used=new Set(),place=info.place;
   parts.push(element('p',`${info.name} · ${host(info.service)}`,'org-service'),element('p',MODE_TEXT(info.name),'org-help org-mode'));
   if(info.offline===false)parts.push(element('p',`${info.name} keeps projects online only: you edit while connected, and projects leave this device when you sign out.`,'org-help'));
   if(!info.signedIn){
@@ -112,10 +123,22 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
    return parts;
   }
   const [projects,local]=await Promise.all([engine.projects(),listProjects()]);
-  parts.push(element('p',`Signed in as ${info.email||info.accountName||'your account'}.`,'org-help'),actions(button('Sign out',async()=>{await engine.signOut();onChanged();feedback='Signed out.';}),
-   // The admin area, for the deployment's administrators only (the service refuses everyone else).
-   ...(engine.info.role==='admin'?[button('Admin',async()=>{close();orgAdminDialog({engine,anchor,onOpen,onChanged});})]:[])));
-  const list=element('ul',null,'org-projects');list.setAttribute('aria-label',`Projects on ${info.name}`);
+  // The list may have changed the role (a refresh at the provider): show what holds now.
+  const now=engine.info,role=now.role,provider=(now.providers||[]).find(p=>p.id===now.provider)?.label||now.label||'your sign-in provider';
+  parts.push(element('p',`Signed in as ${now.email||now.accountName||'your account'}.`,'org-help'));
+  // Organisations come from the provider; with several the person works in one at a time.
+  if(now.orgs?.length>1){
+   const choose=select('Organisation',now.orgs.map(o=>[o.id,o.guest?`${o.name} (guest)`:o.name]),now.active);
+   choose.input.onchange=async()=>{const id=choose.input.value,name=now.orgs.find(o=>o.id===id)?.name;busy=true;render();try{await engine.setActive(id);shared=null;feedback=`Working in ${name}.`;onChanged();}catch(e){feedback=e.message;}finally{busy=false;render();}};
+   choose.input.disabled=busy;parts.push(choose.row);
+  }
+  if(role)parts.push(element('p',`Your role in ${place}: ${ACCOUNT_ROLE[role]||role}, from ${provider}. Roles are granted in ${provider}.`,'org-help org-role'));
+  if(role==='guest')parts.push(element('p',`As a guest you see only the projects shared with you in ${place}, and you cannot add projects.`,'org-help'));
+  for(const e of now.ended||[])parts.push(element('p',`Your access to ${e.name} ended. ${now.offline===false?'Its projects were removed from this device.':'Its projects stay on this device and no longer sync.'}`,'org-help org-ended'));
+  parts.push(actions(button('Sign out',async()=>{await engine.signOut();onChanged();feedback='Signed out.';}),
+   // The admin area, for the active organisation's administrators only (the service refuses everyone else).
+   ...(role==='admin'?[button('Admin',async()=>{close();orgAdminDialog({engine,anchor,onOpen,onChanged});})]:[])));
+  const list=element('ul',null,'org-projects');list.setAttribute('aria-label',`Projects on ${place}`);
   for(const project of projects){
    const row=element('li',null,'org-project'),s=project.localId?engine.status(project.localId):null;
    row.append(element('span',project.name,'org-name'));
@@ -134,17 +157,17 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
   }
   if(!projects.length)list.append(element('li','No projects yet. Add one from this device below.','org-help'));
   parts.push(section('Projects',list));
-  if(info.role!=='guest'){
+  if(role!=='guest'){
    const linked=new Set(projects.map(p=>p.localId).filter(Boolean)),personal=local.filter(p=>!linked.has(p.id)&&!engine.status(p.id));
    const add=element('ul',null,'org-projects');add.setAttribute('aria-label','Projects only on this device');
    for(const project of personal){
-    const row=element('li',null,'org-project');row.append(element('span',project.name,'org-name'),button(`Add to ${info.name}`,async()=>{
-     const result=await engine.add(project.id);onChanged();feedback=`Added a copy of ${result.name} to ${info.name}.`;
+    const row=element('li',null,'org-project');row.append(element('span',project.name,'org-name'),button(`Add to ${place}`,async()=>{
+     const result=await engine.add(project.id);onChanged();feedback=`Added a copy of ${result.name} to ${place}.`;
     }));
     add.append(row);
    }
    if(!personal.length)add.append(element('li','No other projects on this device.','org-help'));
-   parts.push(section(`Add to ${info.name}`,element('p',`Adds a copy: its source, files, comments, history and trash go to ${info.name}’s server, which can read them. The project on this device stays as it is.`,'org-help'),add));
+   parts.push(section(`Add to ${place}`,element('p',`Adds a copy: its source, files, comments, history and trash go to ${info.name}’s server, which can read them. The project on this device stays as it is.`,'org-help'),add));
   }
   for(const key of kept.keys())if(!drawn.has(key))kept.delete(key);
   return parts;
@@ -166,7 +189,7 @@ export function orgServerDialog({engine,anchor,listProjects,prefill={},onChanged
  render();
  if(prefill.ssoCode)void (async()=>{
   busy=true;render();
-  try{await engine.ssoFinish(prefill.ssoCode);feedback=`Signed in to ${engine.info.name}.`;onChanged();}
+  try{await engine.ssoFinish(prefill.ssoCode);feedback=`Signed in to ${engine.info.place}.`;onChanged();}
   catch(error){feedback=error?.message||String(error);}
   finally{busy=false;render();}
  })();

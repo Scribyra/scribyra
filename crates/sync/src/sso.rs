@@ -1032,9 +1032,10 @@ fn expect<'a>(configured: &'a Configured, nonce: Option<&'a str>) -> Expect<'a> 
 }
 
 /// A login as `/v1/sso/redeem` and `/v1/sso/me` show it (docs/service.md): the account's profile,
-/// its organisations with their roles (`orgs`, oldest first) and, for the first of them, `role`
-/// and the end-to-end link (`person`, `state`). `org` is the deployment's ID.
-fn login_json(login: &Login, link: Option<(String, bool)>) -> Value {
+/// its organisations with their roles (`orgs`, oldest first) and, for organisation `chosen` (the
+/// first one unless `/v1/sso/me` names another with `Scribyra-Org`), `role` and the end-to-end
+/// link (`person`, `state`). `org` is the deployment's ID.
+fn login_json(login: &Login, chosen: &str, link: Option<(String, bool)>) -> Value {
     let state = match &link {
         None => "unlinked",
         Some((_, false)) => "linked",
@@ -1045,7 +1046,7 @@ fn login_json(login: &Login, link: Option<(String, bool)>) -> Value {
         "expires": login.expires.duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
         "org": login.org,
         "provider": login.provider,
-        "role": login.orgs.first().map(|m| m.role.as_str()),
+        "role": login.membership(chosen).or(login.orgs.first()).map(|m| m.role.as_str()),
         "orgs": orgs,
         "subject": {"email": login.email, "name": login.name},
         "person": link.map(|(p, _)| p),
@@ -1460,7 +1461,7 @@ async fn redeem(State(s): State<Shared>, source: Option<axum::Extension<crate::s
         Ok(link) => link,
         Err(e) => return internal(e),
     };
-    let mut body = login_json(&login, link);
+    let mut body = login_json(&login, &login.orgs[0].org, link);
     body["token"] = json!(token);
     log("sso_login", "ok");
     (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(body)).into_response()
@@ -1472,8 +1473,16 @@ async fn me(State(s): State<Shared>, headers: HeaderMap) -> Response {
         Ok(None) => return error(StatusCode::UNAUTHORIZED, "sign in required"),
         Err(e) => return internal(e),
     };
-    match s.linked_person(&login.orgs[0].org, &login).await {
-        Ok(link) => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(login_json(&login, link))).into_response(),
+    // `Scribyra-Org` names the organisation whose role and end-to-end link to show (the first by default).
+    let chosen = match headers.get(ORG_HEADER) {
+        None => login.orgs[0].org.clone(),
+        Some(_) => match login.active(&headers) {
+            Ok(m) => m.org.clone(),
+            Err(choice) => return org_choice_error(choice),
+        },
+    };
+    match s.linked_person(&chosen, &login).await {
+        Ok(link) => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")], Json(login_json(&login, &chosen, link))).into_response(),
         Err(e) => internal(e),
     }
 }

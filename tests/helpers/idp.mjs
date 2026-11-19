@@ -65,6 +65,29 @@ export function serverService({deployment={},...options}={}){
  return orgService({sr_snapshot_entries:50,sr_retention_seconds:0,sr_maintenance_seconds:1,...options,deployment:{encryption:'server',...deployment}});
 }
 
+/** Two Zitadel organisations of one instance (project `42`): Acme, and a partner that grants roles to Acme's people. */
+export const ZITADEL={project:'42',acme:{id:'100',name:'acme.zitadel.test'},partner:{id:'200',name:'partner.zitadel.test'}};
+/**
+ * A user whose ID tokens are Zitadel-shaped: `home` is their organisation (`acme` or `partner`),
+ * `grants` maps provider role names to the organisations granting them, for example
+ * `{[ROLES.member]:['acme','partner']}` (a grant by another organisation than home makes a guest).
+ */
+export function zitadelUser(name,home,grants){
+ const roles=Object.fromEntries(Object.entries(grants).map(([role,orgs])=>[role,Object.fromEntries(orgs.map(o=>[ZITADEL[o].id,ZITADEL[o].name]))]));
+ return{sub:`sub-${name}`,username:name,password:`pw-${name}`,email:`${name}@acme.test`,email_verified:true,name:name[0].toUpperCase()+name.slice(1),zitadel:{resourceowner:ZITADEL[home].id,project_id:ZITADEL.project,roles}};
+}
+/**
+ * A server-readable deployment whose provider "Acme account" is a Zitadel instance (preset
+ * `zitadel`): organisations and roles come from the tokens, guests are admitted (`guests:
+ * "shared"`), and logins are rechecked every second once due (`recheck_minutes` 1; tests make a
+ * login due at once with `due()`). `users` are `zitadelUser`s.
+ */
+export async function identityService({users,deployment={},provider={},...options}){
+ const s=await serverService({users,admins:[],sso_recheck_tick_seconds:1,...options,deployment:{guests:'shared',...deployment},
+  provider:{claims:null,preset:'zitadel',zitadel_project_id:ZITADEL.project,offline_access:true,recheck_minutes:1,...provider}});
+ return Object.assign(s,{due:()=>s.sql("UPDATE sso_logins SET checked = now() - interval '1 day' WHERE NOT revoked")});
+}
+
 /** Follows the provider (test shortcut) and the service's callback; returns the grant. */
 async function authorize(url,user){
  const at=await fetch(`${url}&login_hint=${encodeURIComponent(user)}&test_password=pw-${encodeURIComponent(user)}`,{redirect:'manual'}),callback=at.headers.get('location');

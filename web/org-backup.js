@@ -967,11 +967,21 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
  /** The tab's login now belongs to `person` (after a genesis or a join request linked it). */
  function markLinked(person){const login=readSession(SSO_LOGIN);if(login){writeSession(SSO_LOGIN,{...login,state:'linked',person});}}
  function requireLogin(){const login=ssoLogin();if(!login)throw Object.assign(Error('Sign in with your organisation first.'),{sso:true});return login;}
- /** Records a finished sign-in for this tab, and hands it to a connection of the same organisation. */
+ /**
+  * Records a finished sign-in for this tab, and hands it to a connection of the same organisation.
+  * Each organisation the provider names is its own end-to-end organisation with the same ID
+  * (design section 3; never a guest's): this browser's connection keeps its own, otherwise the
+  * first one is taken and the dialog offers the others (`chooseOrg`). The role and end-to-end link
+  * are read for the organisation taken.
+  */
  async function useLogin(flow,login){
-  const record={service:flow.service,org:login.org,provider:flow.provider,label:flow.label,name:flow.name,token:login.token,expires:login.expires,subject:login.subject,person:login.person,state:login.state,role:login.role};
-  writeSession(SSO_LOGIN,record);
   if(orgConnected()&&!connection)await load().catch(()=>{});
+  const orgs=(Array.isArray(login.orgs)?login.orgs:[]).filter(o=>/^[0-9a-f]{64}$/.test(o?.id)&&!o.guest&&o.role!=='guest').map(o=>({id:o.id,name:String(o.name||flow.name),role:o.role}));
+  const org=orgs.find(o=>o.id===connection?.org)?.id||orgs[0]?.id||login.org;
+  if(orgs.length&&org!==login.orgs[0]?.id)login={...login,...await orgClient(flow.service,{fetchImpl}).ssoMe(login.token,org)};
+  const record={service:flow.service,org,orgName:orgs.length>1&&orgs.find(o=>o.id===org)?.name||flow.name,orgs,provider:flow.provider,label:flow.label,name:flow.name,token:login.token,expires:login.expires,subject:login.subject,person:login.person,state:login.state,role:login.role};
+  writeSession(SSO_LOGIN,record);
+  login=record;
   if(connection?.ready&&connection.org===login.org){connection.ssoToken=login.token;connection.ssoNeeded=false;connection.provider=flow.provider;connection.providerLabel=flow.label;await saveConnection();client?.forget();follow();for(const link of await db.getAll('links'))schedule(link.localId,100);onMembership();}
   else if(connection&&!connection.ready&&connection.org===login.org){connection.ssoToken=login.token;await saveConnection();}
   return record;
@@ -1231,6 +1241,15 @@ export function orgBackup({onChange=()=>{},onRemote=()=>{},onMembership=()=>{},f
   ssoLogin,
   /** Forgets this tab's login (to sign in with another account). */
   forgetLogin(){writeSession(SSO_LOGIN,null);},
+  /** Before connecting: works with another of the login's organisations (its role and end-to-end link are read). */
+  async chooseOrg(org){
+   const login=requireLogin(),chosen=(login.orgs||[]).find(o=>o.id===org);
+   if(!chosen)throw Error('Your account has no role in that organisation.');
+   if(connection?.ready||orgJoining())throw Error('This browser is already connected to an organisation.');
+   const me=await orgClient(login.service,{fetchImpl}).ssoMe(login.token,org);
+   const record={...login,org,orgName:chosen.name,person:me.person,state:me.state,role:me.role};
+   writeSession(SSO_LOGIN,record);return record;
+  },
   async signOut(){await load();if(!connection.ssoToken)return;try{await client.ssoLogout(connection.ssoToken);}finally{connection.ssoToken=null;connection.ssoNeeded=true;await saveConnection();writeSession(SSO_LOGIN,null);client.forget();onMembership();}},
 
   // --- Devices

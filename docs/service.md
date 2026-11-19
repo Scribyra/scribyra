@@ -700,7 +700,9 @@ without `token`) and `POST /v1/sso/logout` take `Authorization: ScribyraSSO <tok
 
 `orgs` lists the organisations the account may act in now (a role, not disabled or removed
 there; guests only with `guests: "shared"`), oldest first; `role`, `person` and `state` are for the
-first of them (`state` is `unlinked`, `linked` or `blocked`: the end-to-end link). `email` is the
+first of them, or for the organisation a `Scribyra-Org` header on `GET /v1/sso/me` names (`404
+unknown_org` for one the account holds no role in), so an end-to-end client can read its link in
+each organisation (`state` is `unlinked`, `linked` or `blocked`: the end-to-end link). `email` is the
 **verified** email or `null`; `subject.email` is whatever the provider sent, for the person's own
 display only. A session whose account has no organisation left answers `401`.
 
@@ -720,6 +722,29 @@ check it the same way. Error codes the app can show:
 | `404` `unknown project` | A project of another organisation (or none), whoever asks |
 | `403 no_role`, `guest`, `no_organisation`, `account_disabled`, `account_removed` | Redeem refused (also as `#scribyra-sso-error=<code>` for the first three) |
 | `403` `administrators only` | An admin route from someone who is not an administrator of the organisation |
+
+**In the app** (server-readable; `web/org-server.js`). The browser keeps the account's `orgs` from
+the redeem and from `GET /v1/sso/me` at each start, and works in one of them at a time: with
+several, Remote backup shows an **Organisation** switcher (a guest organisation reads "<name>
+(guest)"), and the project list, "Add to <organisation>", sharing, the directory (which fills in
+the invitation form) and the admin area all act in the chosen one. Every request carries
+`Scribyra-Org`; each local copy records the organisation it was added to or opened from and keeps
+syncing under it whichever is chosen, and the heads are long-polled in the chosen organisation and
+in each one the browser holds copies of (one poll each). The dialog states the person's role and
+its provider ("Your role in acme: Member, from Acme account. Roles are granted in Acme account."),
+read-only; the admin area lists every member's role "· from <provider>" without a way to change
+it. Guests see only the projects shared with them, get no "Add to", cannot share and have no
+directory. When a request or the heads poll answers `404 unknown_org` (the provider took the role
+away at a recheck, or an administrator stopped the person there) the app drops that organisation,
+stops syncing its copies (status "Access ended"), keeps them on the device (an online-only
+deployment deletes them, as at sign-out) and says "Your access to <organisation> ended."; a later
+sign-in that names it again resumes them. Sign-in refusals show the service's sentences, for
+example "Your account has no Scribyra role. Ask your administrator to grant one in Acme account."
+for `no_role`. With `notify_on_admin_access: false` members see no administrator notice, and the
+administrator's read-only copy says that members are not told (the open is audited either way).
+In an end-to-end deployment each organisation the provider names is its own end-to-end
+organisation (no guests): Remote backup offers the choice before connecting and joins, creates or
+restores in the chosen one, reading its role and link with `Scribyra-Org` on `/v1/sso/me`.
 
  Sign-ins in progress, one-time
 grants and used back-channel logout tokens are in PostgreSQL (`sso_flows`, `sso_grants`,

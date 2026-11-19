@@ -1,5 +1,7 @@
-// The admin area of a server-readable deployment (design sections 5 and 9), for its administrators
-// only: Members (role, disable or unblock, remove with a new owner for their projects), Projects
+// The admin area of a server-readable deployment (design sections 5 and 9), for the administrators
+// of the active organisation and scoped to it (every request names it): Members (their role and the
+// provider it comes from, read-only, since roles are granted in the provider; disable or unblock,
+// remove with a new owner for their projects), Projects
 // (open as administrator, read-only; transfer; delete), the audit log (filters, export as JSON
 // lines or CSV), export everything (a zip), and the deployment's policy. The service checks every
 // call and records every action; this dialog only presents them.
@@ -19,6 +21,7 @@ export function adminNotice({action,time}){
 }
 const TABS=[['members','Members'],['projects','Projects'],['audit','Audit log'],['export','Export'],['settings','Settings']];
 const STATE={active:'Active',disabled:'Disabled',blocked:'Blocked by the sign-in provider',removed:'Removed'};
+const ROLE={admin:'Administrator',member:'Member',guest:'Guest'};
 /** Saves a downloaded blob under its name (an object URL the browser downloads). */
 function save({blob,name}){const url=URL.createObjectURL(blob),a=element('a');a.href=url;a.download=name;document.body.append(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),60000);}
 
@@ -59,7 +62,7 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
  const choices=options=>options.map(([v])=>v).join();
 
  dialog=element('dialog',null,'ui-popup org-dialog org-admin');dialog.setAttribute('aria-label','Admin');dialog.tabIndex=-1;
- const heading=element('div',null,'org-heading');heading.append(element('h2',`Admin · ${info?.name||''}`,'ui-prompt-title'));
+ const heading=element('div',null,'org-heading');heading.append(element('h2',`Admin · ${info?.place||info?.name||''}`,'ui-prompt-title'));
  const x=element('button','×','icon-button');x.type='button';x.setAttribute('aria-label','Close admin');x.onclick=close;heading.append(x);
  const tabs=element('div',null,'org-tabs');tabs.setAttribute('role','tablist');tabs.setAttribute('aria-label','Admin sections');
  const panel=element('div',null,'org-body');panel.setAttribute('role','tabpanel');panel.id='org-admin-panel';
@@ -74,17 +77,14 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
  async function members(admin){
   const {members:list}=await admin.members();
   const ul=element('ul',null,'org-projects');ul.setAttribute('aria-label','Members');
-  const heirs=list.filter(m=>m.state==='active'&&m.role!=='guest');
+  const heirs=list.filter(m=>m.state==='active'&&m.role&&m.role!=='guest');
+  const providers=new Map((info.providers||[]).map(p=>[p.id,p.label])),labels=[...new Set(list.map(m=>providers.get(m.provider)||m.provider))];
   for(const m of list){
-   const li=element('li',null,'org-project'),name=who(m),me=m.account===info.account;
+   const li=element('li',null,'org-project'),name=who(m),me=m.account===info.account,from=providers.get(m.provider)||m.provider;
    li.append(element('span',me?`${name} (you)`:name,'org-name'));
-   li.append(element('span',`${m.provider} · ${STATE[m.state]||m.state} · last seen ${when(m.lastSeen)} · ${size(m.storage)} in ${m.projects} project${m.projects===1?'':'s'}`,'org-state'));
-   if(m.role==='guest'||me)li.append(element('span',m.role==='guest'?'Guest':'Administrator','org-state'));
-   else{
-    const role=select(`Role for ${name}`,[['admin','Administrator'],['member','Member']],m.role);role.row.querySelector('span').remove();
-    role.input.onchange=async()=>{busy=true;render();try{const r=await admin.setRole(m.account,role.input.value);feedback=`${name} is now ${r.role==='admin'?'an administrator':'a member'}.`;}catch(e){feedback=e.message;}finally{busy=false;render();}};
-    li.append(role.row);
-   }
+   li.append(element('span',`${STATE[m.state]||m.state} · last seen ${when(m.lastSeen)} · ${size(m.storage)} in ${m.projects} project${m.projects===1?'':'s'}`,'org-state'));
+   // Roles come from the provider, read-only here (design section 3).
+   const role=element('span',m.role?`${ROLE[m.role]||m.role} · from ${from}`:`No role · from ${from}`,'org-state org-role');role.setAttribute('aria-label',`Role of ${name}`);li.append(role);
    if(!me){
     if(m.state==='active')li.append(button('Disable',async()=>{await admin.disable(m.account);feedback=`${name} is disabled: their sessions ended and they cannot sign in.`;},'secondary',`Disable ${name}`));
     else li.append(button('Unblock',async()=>{await admin.unblock(m.account);feedback=`${name} can sign in again.`;},'secondary',`Unblock ${name}`));
@@ -101,7 +101,7 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
    }
    ul.append(li);
   }
-  return [ul];
+  return [element('p',`Roles come from ${labels.join(' and ')||'the sign-in provider'}: grant or remove them there. Disabling stops someone here at once, whatever their role.`,'org-help'),ul];
  }
 
  async function projects(admin){
@@ -174,7 +174,8 @@ export function orgAdminDialog({engine,anchor,onOpen=async()=>{},onChanged=()=>{
   const s=await admin.settings(),dl=element('dl',null,'org-settings');dl.setAttribute('aria-label','Deployment settings');
   const add=(term,value)=>{dl.append(element('dt',term),element('dd',value));};
   add('Name',s.name);add('Encryption',s.encryption==='server'?'Server-readable':'End to end');add('Offline editing',s.offline?'On':'Off (online only)');add('Compile',s.compile);
-  add('Share links',s.linkSharing?'On':'Off');add('Guests',s.guests);if(s.admins)add('Administrators (configured)',s.admins.join(', ')||'None');
+  add('Share links',s.linkSharing?'On':'Off');add('Guests',s.guests);
+  add('Administrator access',s.notifyOnAdminAccess===false?'Audited; members are not told':'Audited; members see “An administrator opened this project”');
   add('Audit log kept',`${s.auditRetentionDays} days`);add('Quotas',`${size(s.quotas.deployment_bytes)} in all, ${size(s.quotas.project_bytes)} per project, ${size(s.quotas.member_bytes)} per member`);
   for(const p of s.providers)add(`Sign-in: ${p.label}`,[p.issuer,p.emailDomains.length?`domains ${p.emailDomains.join(', ')}`:'',p.preset?`roles from ${p.preset}`:'roles from claims',`sessions ${p.sessionHours} h`].filter(Boolean).join(' · '));
   add('Policy hash',s.policy);

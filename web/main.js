@@ -1,7 +1,7 @@
 import {directShare} from './direct-share.js';
 import {orgBackup,orgConnected,orgJoining} from './org-backup.js';
 import {orgDialog} from './org-dialog.js';
-import {orgServer,orgServerConnected,serverSignInPending,forgetServerSignIn,compiledBadge} from './org-server.js';
+import {orgServer,orgServerConnected,serverSignInPending,forgetServerSignIn,compiledBadge,refusalText,pendingSignInLabel} from './org-server.js';
 import {orgServerDialog} from './org-server-dialog.js';
 import {parseInvite,profileIdentity,requireDirectSupport,deleteProfileIdentity} from './direct-identity.js';
 import {identityAuthorId,earlierRecords} from './direct-provenance.js';
@@ -196,6 +196,8 @@ function serverEngine(){
   srEngine??=orgServer({onChange:localId=>{if(localId===projectId&&state.current){remoteState(localId);emit();}refreshSoon();},
     onRemote:localId=>{if(localId===projectId){void tabSession?.refresh({force:true});void serverBadge(localId);}else if(!state.current)void refreshProjects().catch(()=>{});},
     onAccount:refreshSoon,
+    // The provider took a role away: that organisation's copies stay here and stop syncing.
+    onEnded:({name})=>{notice(`Your access to ${name} ended. Its projects stay on this device and no longer sync.`);refreshSoon();},
     onCompile:(localId,compile)=>{if(localId===projectId&&state.current)void serverCompileChanged(localId,compile).catch(()=>{});refreshSoon();},
     // Online-only: local copies are deleted; an open one is closed first (its unsent edits cannot be kept).
     beforeErase:async ids=>{if(state.current&&ids.includes(projectId)){await leaveProject({save:false});state.current=false;notice('Signed out. This organisation keeps projects online only, so they were removed from this device.');}}});
@@ -301,14 +303,14 @@ async function openOrgPanel(prefill={}){
   if(prefill.server||orgServerConnected()&&!orgConnected())orgPanel=orgServerDialog({engine:serverEngine(),anchor,prefill,listProjects:()=>storage.listProjects(),onChanged:()=>{void refreshProjects();},onOpen:id=>openProject(id)});
   else orgPanel=orgDialog({engine:remoteBackup(),server:serverEngine,anchor,prefill,listProjects:()=>storage.listProjects(),onRestored:()=>refreshProjects(),onChanged:()=>{void refreshProjects();}});
 }
-const SIGN_IN_ERRORS={guest:'Guest accounts can’t use this organisation’s Scribyra.',no_role:'Your account has no Scribyra role. Ask your administrator to grant one.',no_organisation:'Your identity provider did not say which organisation your account belongs to.',not_member:'Your account is not in a group that may use this organisation’s Scribyra. Ask your administrator.'};
 function takeOrgFragment(){
   const hash=location.hash;
   const kind=['#scribyra-sso=','#scribyra-sso-error='].find(prefix=>hash.startsWith(prefix));
   if(!kind)return;
   history.replaceState(null,'',location.pathname+location.search);
   const server=serverSignInPending();
-  if(kind==='#scribyra-sso-error='){forgetServerSignIn();return void notice(SIGN_IN_ERRORS[hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')]||'Signing in with your organisation did not work ('+hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,'')+'). Try again.');}
+  // A refusal names the provider the sign-in went to (design section 3's sentence for `no_role`).
+  if(kind==='#scribyra-sso-error='){const code=hash.slice(kind.length).replace(/[^a-z0-9_-]/gi,''),label=pendingSignInLabel();forgetServerSignIn();return void notice(refusalText(code,label||undefined)||'Signing in with your organisation did not work ('+code+'). Try again.');}
   const code=new URLSearchParams(hash.slice(1)).get('scribyra-sso')||'';openOrgPanel({ssoCode:code,server});
 }
 window.addEventListener('hashchange',()=>void wasmReady.then(takeOrgFragment,()=>{}));
