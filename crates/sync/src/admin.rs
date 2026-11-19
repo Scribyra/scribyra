@@ -1,6 +1,7 @@
 //! The admin area (design section 5): `/v1/admin/…`, for the deployment's administrators only
 //! (anyone else `403`, no session `401`). Every action is recorded in the audit log in its own
-//! transaction, and so is every read of content (opening a project, exporting).
+//! transaction, and so is every read of content (opening a project, exporting); that transaction
+//! first locks the caller's account row and checks again that they are an active administrator.
 //!
 //! Members: list (name, email, provider, role, state, last seen, storage), change role
 //! (administrator or member; guests stay guests; the configuration's own administrators stay
@@ -57,6 +58,8 @@ type SourceIp = Option<Extension<crate::service::Source>>;
 struct Caller {
     account: String,
     ip: Option<IpAddr>,
+    /// An administrator through another administrator's grant (not the deployment's rules).
+    granted: bool,
 }
 impl Caller {
     fn actor(&self) -> Actor {
@@ -83,7 +86,7 @@ impl Admin {
             return Err(error(StatusCode::FORBIDDEN, "administrators only"));
         }
         let _ = sqlx::query("UPDATE accounts SET last_seen = now() WHERE account = $1 AND last_seen < now() - interval '1 minute'").bind(&account).execute(&self.store.pool).await;
-        Ok(Caller { account, ip: audit::source(source) })
+        Ok(Caller { account, ip: audit::source(source), granted: login.granted })
     }
     /// Server-readable mode only: content routes are refused in end-to-end mode.
     fn readable(&self) -> Result<&Arc<server_projects::Projects>, Response> {
@@ -154,11 +157,37 @@ async fn member(a: &Admin, account: &str) -> Response {
         Err(e) => internal(e),
     }
 }
-/// Locks the account rows of every active administrator, always in account order (so concurrent
-/// member actions queue rather than deadlock), before the action's target, and returns them:
-/// whether at least one administrator remains is decided under these locks (review M3).
-async fn lock_admins(tx: &mut sqlx::PgConnection) -> Result<Vec<String>, Response> {
-    sqlx::query_scalar("SELECT account FROM accounts WHERE role = 'admin' AND state = 'active' ORDER BY account FOR UPDATE").fetch_all(&mut *tx).await.map_err(internal)
+/// Locks, in one statement and in account order (so concurrent actions queue rather than
+/// deadlock; account rows before any project row), the caller's account row, the rows `others`
+/// name and, with `admins`, every active administrator's. Then checks under those locks that the
+/// caller is still an active administrator, still holding the grant if that is what makes them
+/// one (review L2: the check when the request arrived could be overtaken by a concurrent disable
+/// or demotion). Returns the active administrators, among the locked rows; whether at least one
+/// remains is decided under these locks (review M3).
+async fn lock_accounts(caller: &Caller, others: &[&str], admins: bool, tx: &mut sqlx::PgConnection) -> Result<Vec<String>, Response> {
+    let others: Vec<String> = others.iter().map(|o| o.to_string()).collect();
+    let rows: Vec<(String, String, String, bool)> = sqlx::query_as(
+        "SELECT account, role, state, admin_grant FROM accounts WHERE account = $1 OR account = ANY($2) OR ($3 AND role = 'admin' AND state = 'active') ORDER BY account FOR UPDATE",
+    )
+    .bind(&caller.account)
+    .bind(&others)
+    .bind(admins)
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(internal)?;
+    match rows.iter().find(|r| r.0 == caller.account) {
+        Some((_, _, state, grant)) if state == "active" && (!caller.granted || *grant) => {}
+        _ => return Err(error(StatusCode::FORBIDDEN, "administrators only")),
+    }
+    Ok(rows.into_iter().filter(|(_, role, state, _)| role == "admin" && state == "active").map(|r| r.0).collect())
+}
+/// Records an action that changes nothing else (an export), once [`lock_accounts`] confirmed the
+/// caller.
+async fn record_checked(a: &Admin, caller: &Caller, action: &str, target: Option<(&str, &str)>, detail: Value) -> Result<(), Response> {
+    let mut tx = a.store.pool.begin().await.map_err(internal)?;
+    lock_accounts(caller, &[], false, &mut tx).await?;
+    audit::record(&mut tx, &caller.actor(), action, target, detail).await.map_err(internal)?;
+    tx.commit().await.map_err(internal)
 }
 /// Refuses an action that would leave no active administrator: `target` stops being one.
 fn keeps_an_admin(admins: &[String], target: &str) -> Result<(), Response> {
@@ -210,7 +239,7 @@ async fn set_role(State(a): State<Shared>, Path(account): Path<String>, source: 
     };
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
-        let admins = lock_admins(&mut tx).await?;
+        let admins = lock_accounts(&caller, &[&account], true, &mut tx).await?;
         let (role, state, guest, granted) = target(&caller, &account, &mut tx).await?;
         if guest || role == "guest" {
             return Err(error(StatusCode::CONFLICT, "guests stay guests"));
@@ -245,7 +274,7 @@ async fn disable(State(a): State<Shared>, Path(account): Path<String>, source: S
     check!(not_listed(&a, &account).await);
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
-        let admins = lock_admins(&mut tx).await?;
+        let admins = lock_accounts(&caller, &[&account], true, &mut tx).await?;
         let (_, state, ..) = target(&caller, &account, &mut tx).await?;
         keeps_an_admin(&admins, &account)?;
         match state.as_str() {
@@ -272,7 +301,7 @@ async fn unblock(State(a): State<Shared>, Path(account): Path<String>, source: S
     let caller = admin!(a, headers, source);
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
-        lock_admins(&mut tx).await?;
+        lock_accounts(&caller, &[&account], false, &mut tx).await?;
         let (_, state, ..) = target(&caller, &account, &mut tx).await?;
         if state == "active" {
             return Ok(());
@@ -304,7 +333,7 @@ async fn remove(State(a): State<Shared>, Path(account): Path<String>, source: So
     check!(not_listed(&a, &account).await);
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
-        let admins = lock_admins(&mut tx).await?;
+        let admins = lock_accounts(&caller, &[&account, &to], true, &mut tx).await?;
         let (_, state, ..) = target(&caller, &account, &mut tx).await?;
         keeps_an_admin(&admins, &account)?;
         if state == "removed" {
@@ -441,6 +470,7 @@ async fn open(State(a): State<Shared>, Path(p): Path<String>, source: SourceIp, 
     let projects = check!(a.readable());
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        lock_accounts(&caller, &[], false, &mut tx).await?;
         live(&p, &mut tx).await?;
         sqlx::query("INSERT INTO sr_admin_opens (project, account, until) VALUES ($1, $2, now() + make_interval(hours => $3)) ON CONFLICT (project, account) DO UPDATE SET until = EXCLUDED.until")
             .bind(&p)
@@ -470,6 +500,7 @@ async fn edit(State(a): State<Shared>, Path(p): Path<String>, source: SourceIp, 
     let projects = check!(a.readable());
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        lock_accounts(&caller, &[], false, &mut tx).await?;
         let owner = live(&p, &mut tx).await?;
         if owner == caller.account {
             return Err(error(StatusCode::CONFLICT, "you own this project"));
@@ -506,6 +537,7 @@ async fn transfer(State(a): State<Shared>, Path(p): Path<String>, source: Source
     check!(a.readable());
     let done = async {
         let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        lock_accounts(&caller, &[&request.account], false, &mut tx).await?;
         // The heir's row is locked (account rows before project rows, as removal locks them), so
         // it cannot be disabled or removed while the project passes (review L1).
         let heir: Option<(String, String)> = sqlx::query_as("SELECT role, state FROM accounts WHERE account = $1 FOR UPDATE").bind(&request.account).fetch_optional(&mut *tx).await.map_err(internal)?;
@@ -551,16 +583,27 @@ async fn delete(State(a): State<Shared>, Path(p): Path<String>, source: SourceIp
         };
     }
     let projects = check!(a.sr.projects());
-    match projects.delete(&p, &caller.actor(), json!({"admin": true})).await {
+    let done = async {
+        let mut tx = a.store.pool.begin().await.map_err(internal)?;
+        lock_accounts(&caller, &[], false, &mut tx).await?;
+        if !projects.delete_in(&mut tx, &p, &caller.actor(), json!({"admin": true})).await.map_err(internal)? {
+            return Ok(false);
+        }
+        tx.commit().await.map_err(internal)?;
+        projects.erased();
+        Ok(true)
+    };
+    match done.await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => server_projects::not_found(),
-        Err(e) => internal(e),
+        Err(r) => r,
     }
 }
 async fn delete_e2ee(a: &Admin, caller: &Caller, p: &str) -> Result<bool, Response> {
     let org = a.org()?.to_owned();
     let namespace = crate::org::object_namespace(p);
     let mut tx = a.store.pool.begin().await.map_err(internal)?;
+    lock_accounts(caller, &[], false, &mut tx).await?;
     let Some(bytes): Option<i64> = sqlx::query_scalar("SELECT bytes FROM projects WHERE project = $1 AND org = $2 FOR UPDATE").bind(p).bind(&org).fetch_optional(&mut *tx).await.map_err(internal)? else { return Ok(false) };
     let (entries, blobs): (i64, Vec<String>) = {
         let count: i64 = sqlx::query_scalar("SELECT count(*) FROM entries WHERE project = $1").bind(p).fetch_one(&mut *tx).await.map_err(internal)?;
@@ -672,8 +715,8 @@ async fn audit_export(State(a): State<Shared>, source: SourceIp, Query(q): Query
     }
     let mut detail = q.filters();
     detail["format"] = json!(if csv { "csv" } else { "jsonl" });
-    if let Err(e) = audit::record_now(&a.store.pool, &caller.actor(), "audit.export", Some(("audit", "log")), detail).await {
-        return internal(e);
+    if let Err(r) = record_checked(&a, &caller, "audit.export", Some(("audit", "log")), detail).await {
+        return r;
     }
     let head = match audit::head(&a.store.pool).await {
         Ok(head) => head,
@@ -787,8 +830,8 @@ async fn export(State(a): State<Shared>, source: SourceIp, headers: HeaderMap) -
         Ok(ids) => ids,
         Err(e) => return internal(e),
     };
-    if let Err(e) = audit::record_now(&a.store.pool, &caller.actor(), "export.everything", Some(("deployment", a.store.org.as_deref().unwrap_or(""))), json!({"projects": ids.len()})).await {
-        return internal(e);
+    if let Err(r) = record_checked(&a, &caller, "export.everything", Some(("deployment", a.store.org.as_deref().unwrap_or(""))), json!({"projects": ids.len()})).await {
+        return r;
     }
     let (tx, body) = channel();
     let store = a.store.clone();

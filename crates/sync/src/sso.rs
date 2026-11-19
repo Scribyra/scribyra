@@ -102,6 +102,9 @@ pub struct Login {
     pub groups: Vec<String>,
     pub guest: bool,
     pub role: Role,
+    /// The role is administrator through an administrator's grant (`accounts.admin_grant`), not
+    /// the deployment's rules.
+    pub granted: bool,
     pub expires: SystemTime,
 }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -397,7 +400,8 @@ impl Sso {
         let Ok(role) = admit(deployment, configured, &subject, email.as_deref(), email_verified, &groups, guest) else { return Ok(None) };
         // An administrator can make a member an administrator (slice 10); the configuration's
         // own administrators and guests are decided by it alone.
-        let role = if role == Role::Member && row.get::<bool, _>(10) { Role::Admin } else { role };
+        let granted = role == Role::Member && row.get::<bool, _>(10);
+        let role = if granted { Role::Admin } else { role };
         Ok(Some(Login {
             org: org.clone(),
             account: row.get(9),
@@ -410,6 +414,7 @@ impl Sso {
             groups,
             guest,
             role,
+            granted,
             expires: UNIX_EPOCH + Duration::from_secs(row.get::<i64, _>(8).max(0) as u64),
         }))
     }

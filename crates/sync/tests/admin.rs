@@ -676,6 +676,44 @@ fn projects_never_pass_to_an_account_disabled_meanwhile() {
 }
 
 #[test]
+fn an_administrator_disabled_or_demoted_meanwhile_cannot_act() {
+    // Review L2: the caller's role and state were checked before the action's transaction, so
+    // an administrator being disabled (or losing the grant) at that moment could still act;
+    // two administrators disabling each other could leave none.
+    let sr = start(Blobs::Fs);
+    let alice = sr.api(&sr.login("alice"));
+    let ben = sr.api(&sr.login("ben"));
+    let cat = sr.api(&sr.login("cat"));
+    let dan = sr.api(&sr.login("dan"));
+    let (ben_id, cat_id, dan_id) = (account_of(&ben), account_of(&cat), account_of(&dan));
+    for id in [&cat_id, &dan_id] {
+        assert_eq!(alice.call("PUT", &format!("/v1/admin/members/{id}/role"), Some(json!({"role": "admin"}))).status, 200);
+    }
+    let p = ben.create("Paper");
+    let held = hold(&sr, &format!("UPDATE accounts SET state = 'disabled' WHERE account = '{cat_id}'"), 1.5);
+    let reply = cat.call("POST", &format!("/v1/admin/members/{ben_id}/disable"), None);
+    held.join().unwrap();
+    assert_eq!(reply.status, 403, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(psql(&sr, &format!("SELECT state FROM accounts WHERE account = '{ben_id}'")), "active");
+    let held = hold(&sr, &format!("UPDATE accounts SET admin_grant = false, role = 'member' WHERE account = '{dan_id}'"), 1.5);
+    let reply = dan.call("POST", &format!("/v1/admin/projects/{p}/open"), None);
+    held.join().unwrap();
+    assert_eq!(reply.status, 403, "{}", String::from_utf8_lossy(&reply.body));
+    assert_eq!(psql(&sr, "SELECT count(*) FROM audit_events WHERE action IN ('account.disabled', 'project.admin_open')"), "0");
+    // Two administrators disabling each other at once: one of them stays.
+    psql(&sr, &format!("UPDATE accounts SET state = 'active', admin_grant = true, role = 'admin' WHERE account IN ('{cat_id}', '{dan_id}')"));
+    let (cat, dan) = (sr.api(&sr.login("cat")), sr.api(&sr.login("dan")));
+    let both: Vec<_> = [(cat, dan_id.clone()), (dan, cat_id.clone())]
+        .into_iter()
+        .map(|(api, other)| std::thread::spawn(move || api.call("POST", &format!("/v1/admin/members/{other}/disable"), None).status))
+        .collect();
+    let mut statuses: Vec<u16> = both.into_iter().map(|t| t.join().unwrap()).collect();
+    statuses.sort();
+    assert!(statuses[0] == 200 && [401, 403].contains(&statuses[1]), "{statuses:?}");
+    assert_eq!(psql(&sr, &format!("SELECT count(*) FROM accounts WHERE account IN ('{cat_id}', '{dan_id}') AND state = 'active'")), "1");
+}
+
+#[test]
 fn removal_from_the_admin_group_at_the_provider_demotes_at_the_next_recheck() {
     let sr = Sr::start(
         Blobs::Fs,
