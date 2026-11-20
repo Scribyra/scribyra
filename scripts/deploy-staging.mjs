@@ -5,43 +5,38 @@
 //   node scripts/deploy-staging.mjs .cache/staging [--dry-run]
 //       the staging site (scripts/staging-pages.mjs) → https://dev.scribyra.com/
 //   node scripts/deploy-staging.mjs .cache/production --production [--dry-run]
-//       GitHub only: the production site (.pages) → the presentation repository that
-//       serves https://scribyra.com/ (app.scribyra.com is the main repository's own
-//       Pages site; see docs/delivery.md)
+//       the production site (.pages) → the presentation repository that serves
+//       https://scribyra.com/ (app.scribyra.com is the main repository's own Pages
+//       site; see docs/delivery.md)
 //
-// GitHub (SCRIBYRA_PAGES_FORGE=github, what the workflows use): the target
-// repository's own workflow deploys public/ with actions/deploy-pages, and a push by
-// a deploy key starts it. That
-// workflow (ops/staging/github-pages.yml or ops/pages/github-pages.yml) is installed
-// once by a maintainer (docs/delivery.md); deployments keep `.github/` as it is,
-// so CI never writes workflow files in another repository.
+// The target repository's own workflow deploys public/ with actions/deploy-pages, and
+// a push by a deploy key starts it. That workflow (ops/staging/github-pages.yml or
+// ops/pages/github-pages.yml) is installed once by a maintainer (docs/delivery.md);
+// deployments keep `.github/` as it is, so CI never writes workflow files in another
+// repository.
 //
 // The private key arrives base64-encoded, single line: SCRIBYRA_STAGING_DEPLOY_KEY
 // (staging) or SCRIBYRA_SITE_DEPLOY_KEY (--production). SCRIBYRA_STAGING_REPOSITORY /
-// SCRIBYRA_SITE_REPOSITORY override the SSH remote. The default forge, gitlab, is the
-// former GitLab staging project (urundead-labs/scribyra-staging) and is no longer used.
+// SCRIBYRA_SITE_REPOSITORY name the SSH remote; there is no default.
 import {mkdir,readdir,rm,copyFile,writeFile,mkdtemp,readFile} from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {pathToFileURL,fileURLToPath} from 'node:url';
 
-export const STAGING_REPOSITORY='git@gitlab.com:urundead-labs/scribyra-staging.git',STAGING_BRANCH='main',CHECKOUT='.cache/staging-repo';
+export const STAGING_BRANCH='main',CHECKOUT='.cache/staging-repo';
 const ROOT=resolve(fileURLToPath(new URL('..',import.meta.url)));
-// Per forge and channel: the CI file the target repository runs, where it goes, the
-// pinned SSH host key, and the release label the site must carry.
+// Per channel: the entry of the target repository that deployments leave alone, its
+// README, the pinned SSH host key, and the release label the site must carry.
 export const TARGETS={
- gitlab:{staging:{ci:['ops/staging/gitlab-ci.yml','.gitlab-ci.yml'],readme:'ops/staging/README.md',knownHosts:'ops/staging/known_hosts',key:'SCRIBYRA_STAGING_DEPLOY_KEY',release:/^dev-[1-9]\d{0,11}-[a-f0-9]{7,40}$/,url:'https://dev.scribyra.com/'}},
- github:{
-  staging:{ci:null,keep:'.github',readme:'ops/staging/README.md',knownHosts:'ops/github/known_hosts',key:'SCRIBYRA_STAGING_DEPLOY_KEY',release:/^dev-[1-9]\d{0,11}-[a-f0-9]{7,40}$/,url:'https://dev.scribyra.com/'},
-  production:{ci:null,keep:'.github',readme:'ops/pages/README.site.md',knownHosts:'ops/github/known_hosts',key:'SCRIBYRA_SITE_DEPLOY_KEY',release:/^web-[1-9]\d{0,11}$/,url:'https://scribyra.com/'},
- },
+ staging:{keep:'.github',readme:'ops/staging/README.md',knownHosts:'ops/github/known_hosts',key:'SCRIBYRA_STAGING_DEPLOY_KEY',release:/^dev-[1-9]\d{0,11}-[a-f0-9]{7,40}$/,url:'https://dev.scribyra.com/'},
+ production:{keep:'.github',readme:'ops/pages/README.site.md',knownHosts:'ops/github/known_hosts',key:'SCRIBYRA_SITE_DEPLOY_KEY',release:/^web-[1-9]\d{0,11}$/,url:'https://scribyra.com/'},
 };
-export function target(forge='gitlab',channel='staging'){
- const found=TARGETS[forge]?.[channel];if(!found)throw Error(`No ${channel} Pages repository on ${forge}`);return found;
+export function target(channel='staging'){
+ const found=Object.hasOwn(TARGETS,channel)?TARGETS[channel]:null;if(!found)throw Error(`No ${channel} Pages repository`);return found;
 }
 
-export function commitMessage({release,sha,pipeline,source='urundead-labs/scribyra',channel='staging'}){
+export function commitMessage({release,sha,pipeline,source='Scribyra/scribyra',channel='staging'}){
  return[`${channel==='production'?'Production':'Staging'} ${release}`,'',`Built from ${source}@${sha||'unknown'}${pipeline?` by ${pipeline}`:''}.`].join('\n');
 }
 export function sshCommand(keyFile,knownHosts){
@@ -62,17 +57,17 @@ async function copyTree(source,destination){
   else if(entry.isFile())await copyFile(from,to);
  }
 }
-// Replaces the checkout's tree with public/ (the site), README.md and, on GitLab, the
-// target's CI file. On GitHub the target's `.github/` stays as the maintainer set it.
-export async function stageTree(site,checkout,{ci=TARGETS.gitlab.staging.ci,readme=TARGETS.gitlab.staging.readme,keep=null}={}){
+// Replaces the checkout's tree with public/ (the site) and README.md. The target's
+// `.github/` stays as the maintainer set it.
+export async function stageTree(site,checkout,{readme=TARGETS.staging.readme,keep=TARGETS.staging.keep}={}){
  for(const entry of await readdir(checkout))if(entry!=='.git'&&entry!==keep)await rm(join(checkout,entry),{recursive:true,force:true});
  await copyTree(site,join(checkout,'public'));
- if(ci)await copyFile(join(ROOT,ci[0]),join(checkout,ci[1]));
  await copyFile(join(ROOT,readme),join(checkout,'README.md'));
 }
 
-export async function publish({root,checkout=CHECKOUT,remote=STAGING_REPOSITORY,env=process.env,dry=false,log=console.log,forge='gitlab',channel='staging'}){
- const goal=target(forge,channel);
+export async function publish({root,checkout=CHECKOUT,remote,env=process.env,dry=false,log=console.log,channel='staging'}){
+ const goal=target(channel);
+ if(!remote)throw Error('The Pages repository address is required');
  const release=JSON.parse(await readFile(join(root,'site/release.json'),'utf8')).release;
  if(!goal.release.test(release||''))throw Error(`Only a checked ${channel} build can be published`);
  const secrets=dry?null:await mkdtemp(join(tmpdir(),'scribyra-pages-key-'));
@@ -91,9 +86,7 @@ export async function publish({root,checkout=CHECKOUT,remote=STAGING_REPOSITORY,
   await stageTree(join(root,'site'),checkout,goal);
   git(['add','-A']);
   try{git(['diff','--cached','--quiet']);log('Site unchanged; nothing to publish.');return false;}catch{}
-  // The source repository is named by the forge that deploys: a GitLab deploy never
-  // reads GITHUB_REPOSITORY, which any shell on a GitHub runner carries.
-  git(['commit','-q','--no-gpg-sign','-m',commitMessage({release,sha:env.CI_COMMIT_SHA,pipeline:env.CI_PIPELINE_URL,source:(forge==='github'&&env.GITHUB_REPOSITORY)||undefined,channel})]);
+  git(['commit','-q','--no-gpg-sign','-m',commitMessage({release,sha:env.CI_COMMIT_SHA,pipeline:env.CI_PIPELINE_URL,source:env.GITHUB_REPOSITORY||undefined,channel})]);
   if(dry){log(`Dry run: committed ${release} in ${checkout}; not pushed.`);return true;}
   git(['push','-q','origin',`HEAD:refs/heads/${STAGING_BRANCH}`],{stdio:['ignore','inherit','inherit']});
   log(`Published ${release} to ${remote}; its Pages job deploys ${goal.url}.`);return true;
@@ -102,10 +95,10 @@ export async function publish({root,checkout=CHECKOUT,remote=STAGING_REPOSITORY,
 
 if(import.meta.url===pathToFileURL(process.argv[1]).href){
  const root=process.argv[2],dry=process.argv.includes('--dry-run'),channel=process.argv.includes('--production')?'production':'staging';
- const forge=process.env.SCRIBYRA_PAGES_FORGE||'gitlab',goal=target(forge,channel);
+ const goal=target(channel);
  if(!root)throw Error('Usage: deploy-staging.mjs <prepared folder> [--production] [--dry-run]');
  if(!dry&&!process.env[goal.key])throw Error(`${goal.key} is not set for this job`);
- const remote=channel==='production'?process.env.SCRIBYRA_SITE_REPOSITORY:(process.env.SCRIBYRA_STAGING_REPOSITORY||(forge==='gitlab'?STAGING_REPOSITORY:undefined));
+ const remote=channel==='production'?process.env.SCRIBYRA_SITE_REPOSITORY:process.env.SCRIBYRA_STAGING_REPOSITORY;
  if(!remote)throw Error(`Set ${channel==='production'?'SCRIBYRA_SITE_REPOSITORY':'SCRIBYRA_STAGING_REPOSITORY'} to the SSH address of the ${channel} Pages repository`);
- await publish({root,remote,dry,forge,channel,checkout:channel==='production'?'.cache/site-repo':CHECKOUT});
+ await publish({root,remote,dry,channel,checkout:channel==='production'?'.cache/site-repo':CHECKOUT});
 }

@@ -38,7 +38,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "Actual suite process outcomes, separate from application usage. Source defaults to local tests; CI context is reported metadata, and a live GitLab job is required to establish CI execution. Synthetic validation executes deliberate pass/fail assertions. Counts are available only when a framework summary was observed. No data is not a passing test. Case totals include skipped/cancelled/todo; flaky is a subset of passed. Build processes have no case counts. Run ID joins the safe JSON/JUnit artifact, log and trace; raw test names, paths and failures are excluded. Counters are cumulative since the collector stream began; rates need at least two observations. Do not sum flaky into case totals."
+        "content": "Actual suite process outcomes, separate from application usage. Source defaults to local tests; CI context is reported metadata, and a live CI job is required to establish CI execution. Synthetic validation executes deliberate pass/fail assertions. Counts are available only when a framework summary was observed. No data is not a passing test. Case totals include skipped/cancelled/todo; flaky is a subset of passed. Build processes have no case counts. Run ID joins the safe JSON/JUnit artifact, log and trace; raw test names, paths and failures are excluded. Counters are cumulative since the collector stream began; rates need at least two observations. Do not sum flaky into case totals."
       }
     },
     {

@@ -63,7 +63,6 @@ const cacheName='scribyra-shell-'+createHash('sha256').update(worker).update(rou
 if(!/const CACHE='scribyra-shell-[a-f0-9]{12}';/.test(worker))throw Error('Unexpected root cache format');
 worker=worker.replace(/const CACHE='scribyra-shell-[a-f0-9]{12}';/,`const CACHE='${cacheName}';`);await writeFile(join(output,'sw.js'),worker);
 const version=JSON.parse(await readFile('package.json','utf8')).version;
-const preferred=domains.active?application.href:(process.env.CI_PAGES_URL?process.env.CI_PAGES_URL.replace(/\/$/,'')+'/app/':domains.legacyApplication);
-const release={version,revision:process.env.CI_COMMIT_SHA||null,pipeline:process.env.CI_PIPELINE_URL||null,release:process.env.SCRIBYRA_RELEASE||(process.env.CI_PIPELINE_IID?`web-${process.env.CI_PIPELINE_IID}`:null),builtAt:new Date().toISOString(),appUrl:preferred};
+const preferred=domains.active?application.href:domains.legacyApplication;
+const release={version,revision:process.env.CI_COMMIT_SHA||null,pipeline:process.env.CI_PIPELINE_URL||null,release:process.env.SCRIBYRA_RELEASE||null,builtAt:new Date().toISOString(),appUrl:preferred};
 for(const path of [join(output,'app/release.json'),join(output,'release.json')])await writeFile(path,JSON.stringify(release,null,2)+'\n');
-if(relativeOutput==='.pages')await writeFile('.pages-release.env','SCRIBYRA_DEPLOYED_APP_URL='+preferred+'\n');

@@ -35,9 +35,8 @@ args=parser.parse_args()
 if not 1<=args.timeout<=86390:parser.error('Timeout must be 1–86390 seconds')
 validator=ROOT/'target/debug/scribyra-telemetry'
 if not validator.is_file():parser.error('Build scribyra-telemetry first; the shared Rust validator is required')
-# GitLab CI or GitHub Actions; each needs its full numeric identity, or the run stops.
-forge='gitlab' if os.environ.get('GITLAB_CI')=='true' else 'github' if os.environ.get('GITHUB_ACTIONS')=='true' else None
-ci=forge is not None
+# GitHub Actions; a CI run needs its full numeric identity, or the run stops.
+ci=os.environ.get('GITHUB_ACTIONS')=='true'
 source='ci' if ci else 'synthetic' if args.suite.startswith('synthetic-') else 'local_test'
 suite='browser' if args.suite.startswith('browser') else 'fault_validation' if args.suite.startswith('synthetic-') else args.suite
 env=os.environ.copy();env['SCRIBYRA_TELEMETRY_SOURCE']=source;env.pop('FORCE_COLOR',None);env.pop('NODE_TEST_CONTEXT',None);env['NO_COLOR']='1'
@@ -49,9 +48,9 @@ context=None
 if ci:
  # GitHub: repository id, workflow run id, and the job's check run id, which the
  # workflow exports as SCRIBYRA_CI_JOB_ID (Actions has no default job-id variable).
- names=[('projectId','CI_PROJECT_ID'),('pipelineId','CI_PIPELINE_ID'),('jobId','CI_JOB_ID')] if forge=='gitlab' else [('projectId','GITHUB_REPOSITORY_ID'),('pipelineId','GITHUB_RUN_ID'),('jobId','SCRIBYRA_CI_JOB_ID')]
+ names=[('projectId','GITHUB_REPOSITORY_ID'),('pipelineId','GITHUB_RUN_ID'),('jobId','SCRIBYRA_CI_JOB_ID')]
  try:context={key:int(os.environ[name]) for key,name in names}
- except (KeyError,ValueError):parser.error(('GitLab' if forge=='gitlab' else 'GitHub Actions')+' CI identity is incomplete')
+ except (KeyError,ValueError):parser.error('GitHub Actions CI identity is incomplete')
 
 endpoint=None;token=None
 if args.endpoint or args.token_file:

@@ -328,9 +328,8 @@ artifact. Transport has three finite attempts and does not override the suite ex
 status. In CI a run needs its full numeric identity or it stops. On GitHub
 Actions (`GITHUB_ACTIONS=true`) that is `GITHUB_REPOSITORY_ID`, `GITHUB_RUN_ID`
 and `SCRIBYRA_CI_JOB_ID`, which the workflow exports because Actions has no
-job-id variable. The script still accepts the former GitLab names
-(`GITLAB_CI=true` with `CI_PROJECT_ID`, `CI_PIPELINE_ID` and `CI_JOB_ID`). This
-marks reported context, not authenticated proof of CI execution.
+job-id variable. This marks reported context, not authenticated proof of CI
+execution.
 CI integration and Grafana test views are described below.
 
 ### Test dashboard, safe CI artifacts and stored verification
@@ -383,9 +382,8 @@ For the rendered link check, use the same state variable with
 Raw test output and credential-bearing browser traces are not retained.
 
 Self-hosted Loki provisions the two named run links automatically. The
-"Safe run artifacts" link (`grafana/run-links.json` and the provisioned
-datasource) still points at job pages of the former GitLab project, so it does
-not resolve for GitHub Actions runs. On managed
+"CI job" link opens the GitHub Actions job a CI record names; its summaries are
+on that run's page for one day. On managed
 Grafana, dashboard deployment needs no datasource edit. Optional
 `telemetry-grafana.py --apply --run-links` also needs Loki datasource-write access;
 the current token's PUT is denied with HTTP 403, so Cloud log shortcuts remain

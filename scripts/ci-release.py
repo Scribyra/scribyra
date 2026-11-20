@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""Register the pipeline-built web release using the job's scoped token.
+"""Register the workflow-built web release using the job's scoped token.
 
-GitLab: the release web-<pipeline IID> through the release API with CI_JOB_TOKEN.
-GitHub Actions: the GitHub Release named by SCRIBYRA_RELEASE (web-N, the number the
-production workflow built with) with GITHUB_TOKEN (permission contents: write). Both
-carry the same text: who built it and where the deployed app is.
+Creates the GitHub Release named by SCRIBYRA_RELEASE (web-N, the number the
+production workflow built with) with GITHUB_TOKEN (permission contents: write). Its
+text says who built it and where the deployed app is.
 """
 import json
 import os
@@ -18,25 +17,6 @@ domains=json.loads((Path(__file__).resolve().parent.parent/'ops/pages/domains.js
 
 def description(run_url,app):
     return 'Production browser app built by '+run_url+'\n\nOpen the latest deployed release: '+app
-
-def gitlab():
-    version='web-'+os.environ['CI_PIPELINE_IID']
-    app=domains['application'] if domains['active'] else os.environ['CI_PAGES_URL'].rstrip('/')+'/app/'
-    payload={'name':'Scribyra '+version,'tag_name':version,'ref':os.environ['CI_COMMIT_SHA'],
-             'description':description(os.environ['CI_PIPELINE_URL'],app),
-             'assets':{'links':[{'name':'Open browser app','url':app,'link_type':'other'}]}}
-    url=os.environ['CI_API_V4_URL']+'/projects/'+os.environ['CI_PROJECT_ID']+'/releases'
-    request=urllib.request.Request(url,data=json.dumps(payload).encode(),headers={'JOB-TOKEN':os.environ['CI_JOB_TOKEN'],'Content-Type':'application/json'})
-    try:
-        with urllib.request.urlopen(request,timeout=30) as response:print('Registered pipeline-built release:',version,response.status)
-    except urllib.error.HTTPError as error:
-        if error.code==409:
-            check=urllib.request.Request(url+'/'+urllib.parse.quote(version,safe=''),headers={'JOB-TOKEN':os.environ['CI_JOB_TOKEN']})
-            with urllib.request.urlopen(check,timeout=30) as response:existing=json.load(response)
-            if existing.get('commit',{}).get('id')==os.environ['CI_COMMIT_SHA']:
-                print('Pipeline release already registered:',version)
-                raise SystemExit(0)
-        raise SystemExit(f'Release registration failed: HTTP {error.code}; response details suppressed')
 
 # GitHub has no release link assets; the link goes into the body. The tag is created by
 # the release itself, on the deployed commit.
@@ -71,4 +51,4 @@ def github():
         raise SystemExit(f'Release registration failed: HTTP {error.code}; response details suppressed')
 
 if __name__=='__main__':
-    github() if os.environ.get('GITHUB_ACTIONS')=='true' else gitlab()
+    github()

@@ -19,7 +19,6 @@
 
 # Native browser crash dumps are local disposable diagnostics.
 /core.[0-9]*
-/.pages-release.env
 
 # Local opaque service state and operator configuration.
 /service-data/

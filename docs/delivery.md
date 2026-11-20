@@ -76,8 +76,8 @@ the change at `https://dev.scribyra.com/`.
 1. Check staging at `https://dev.scribyra.com/` (the Staging badge names the
    release, e.g. `dev-1042-1a2b3c4d`).
 2. Generate the changelog (every pull request merged into `dev` since the latest
-   `web-N` tag, grouped into features, fixes and production fixes merged back; it
-   also reads the older GitLab `!N` entries) and open the release pull request:
+   `web-N` tag, grouped into features, fixes and production fixes merged back)
+   and open the release pull request:
 
    ```sh
    git fetch origin --tags --prune
@@ -255,7 +255,7 @@ deleting `main` (CI pushes with the deploy key, so no pull request rule).
   "Staging · "; every site page starts with a Staging banner.
 - **Build locally:** `nix develop -c npm run build:staging` writes
   `.cache/staging/site` and runs the check.
-  `SCRIBYRA_PAGES_FORGE=github SCRIBYRA_STAGING_REPOSITORY=<ssh url> nix develop -c node scripts/deploy-staging.mjs .cache/staging --dry-run`
+  `SCRIBYRA_STAGING_REPOSITORY=<ssh url> nix develop -c node scripts/deploy-staging.mjs .cache/staging --dry-run`
   commits it in `.cache/staging-repo` without fetching or pushing.
 
 ## Runner disk

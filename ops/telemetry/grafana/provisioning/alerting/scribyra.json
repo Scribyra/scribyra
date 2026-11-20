@@ -565,7 +565,7 @@
           "execErrState": "Error",
           "for": "0s",
           "annotations": {
-            "summary": "A reported CI suite process failed within the last hour. Inspect its safe run ID and numeric GitLab job context; source metadata alone does not authenticate CI execution.",
+            "summary": "A reported CI suite process failed within the last hour. Inspect its safe run ID and numeric CI job context; source metadata alone does not authenticate CI execution.",
             "__dashboardUid__": "scribyra-test-runs",
             "__panelId__": "10"
           },
