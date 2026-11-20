@@ -137,7 +137,6 @@ jobs:
           rm -rf .cache/production-artifact
       - name: Push to the presentation repository
         env:
-          SCRIBYRA_PAGES_FORGE: github
           SCRIBYRA_SITE_DEPLOY_KEY: ${{ secrets.SCRIBYRA_SITE_DEPLOY_KEY }}
           SCRIBYRA_SITE_REPOSITORY: git@github.com:${{ github.repository_owner }}/scribyra-site.git
           CI_COMMIT_SHA: ${{ needs.plan.outputs.sha }}
