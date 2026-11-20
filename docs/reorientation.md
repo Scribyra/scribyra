@@ -111,7 +111,7 @@ Run after the decision, on the same day. Neither changes it. Neither ran a real 
 
 The experiment adds a `#tex=` entry that opens a new scratch project and never touches existing work, plus a compact status result and the PDF as a download rather than base64. A real remote browser agent then compiles from a deployed test URL, recording download cost, memory limits and whether sandbox networks block it.
 
-The repository stays private, and public launch requires a later explicit instruction. The owner made the Pages site reachable without sign-in on November 6, 2026, so an agent can now reach it for this experiment. Wider discoverability (`llms.txt`, indexing) waits for public launch, and whether agents would choose Scribyra unprompted is unproven.
+The repository has been public on GitHub since November 12, 2026, and the site needs no sign-in, so an agent can reach it for this experiment. Wider discoverability (`llms.txt`, indexing) waits for public launch, and whether agents would choose Scribyra unprompted is unproven.
 
 **R6, café field test (any time).** Two real laptops on real networks, using the [field-test page](reorientation/field-test.html), hosted privately at `/field-test/` on the Pages site, and [these steps](reorientation/r1-collaboration.md#two-laptop-test). It does not block the milestone's gate, and its result decides whether direct sessions are built.
 

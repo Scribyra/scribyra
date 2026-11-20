@@ -31,7 +31,7 @@ const body=rootIndex.match(/<body[^>]*>([\s\S]*?)<\/body>/)?.[1];
 if(modules.length!==1||body===undefined||[...modules,...styles].some(path=>!path.startsWith('/assets/')||path.includes('..')))throw Error('Unexpected root application shell');
 const title=rootIndex.match(/<title>(.*?)<\/title>/)?.[1]||'Scribyra';
 const config={host:application.hostname,presentationHost:presentation.hostname,url:application.href,legacy:domains.legacyApplication,module:modules[0],styles,body,title};
-const router=`// Host selects a static shell; GitLab Pages still enforces access control.\nconst app=${JSON.stringify(config)};\nif(location.hostname===app.host){
+const router=`// Host selects a static shell.\nconst app=${JSON.stringify(config)};\nif(location.hostname===app.host){
  document.title=app.title;
  const recipe=document.createElement('link');recipe.rel='alternate';recipe.type='text/markdown';recipe.href='agent.md';document.head.append(recipe);
  for(const node of document.querySelectorAll('link[rel="stylesheet"]'))node.remove();

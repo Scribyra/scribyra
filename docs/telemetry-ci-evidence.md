@@ -1,7 +1,14 @@
 # Authenticated CI artifacts in Grafana
 
+This is the record of a check made in November 2026, while the project was on
+GitLab. The project has since moved to GitHub, and the check has no GitHub Actions
+equivalent: there the suite keeps the same summaries as one-day workflow artifacts
+and publishes nothing (see
+[continuous CI publication](telemetry-deployment.md#continuous-ci-publication)).
+
 The optional integration check in `tests/telemetry-ci-storage.test.mjs` fetches a
-real, terminal Scribyra GitLab.com job and its private JSON artifacts. It does not
+real, terminal job of the archived GitLab project
+(`gitlab.com/urundead-labs/scribyra`) and its private JSON artifacts. It does not
 create a synthetic CI environment or rerun that job's suites. The original CI
 run IDs, revision, job/pipeline/project context, times, durations and framework
 counts pass the shared Rust validator before publication through `/v1/runs`.
@@ -16,60 +23,34 @@ Requests are bounded, timed, directed to the fixed project API and reject
 redirects. Only individual small JSON files are downloaded, never the large Pages
 artifact archive or raw test output as an artifact.
 
-## Reproduce with an actual completed job
+## Running it today
 
-Start the [private self-hosted stack](telemetry.md) with Grafana. Select a recent
-job that produced `.telemetry/*.json` and remains within the shared 24-hour report
-age limit. Supply a bounded owner-only GitLab.com credential file and operator
-state. Replace the job and paths below with your actual values:
+The archived GitLab project runs no new jobs and its artifacts expired after one
+day, so the first pass (authenticated download and publication) can no longer be
+repeated. The test is skipped unless `SCRIBYRA_TEST_CI_JOB` and
+`SCRIBYRA_TEST_STORAGE_STATE` are set. Only the retained-query mode still works,
+against the private state a first pass wrote under `<state>/ci-job-<job>/`:
 
 ```sh
 export SCRIBYRA_TEST_STORAGE_STATE=/absolute/private/telemetry-state
 export SCRIBYRA_TEST_CI_JOB=17744591691
-export SCRIBYRA_TEST_GITLAB_TOKEN_FILE=/absolute/private/gitlab.token
-node --test tests/telemetry-ci-storage.test.mjs
-```
-
-The token file must be a regular owner-only file, at most 258 bytes including
-whitespace. `target/debug/scribyra-telemetry validate-run` must already be built.
-Use `SCRIBYRA_TEST_STORAGE_PORT_BASE` for another explicitly started stack. For a
-Cloud collector, use its state/port base plus the existing runtime-only
-`SCRIBYRA_TEST_GRAFANA_URL` and `SCRIBYRA_TEST_GRAFANA_TOKEN` management settings.
-The GitLab credential authenticates only to `gitlab.com`; the management token
-only queries the selected private Grafana. No credential belongs in a static
-release, JSON report, dashboard variable or GitLab trace.
-
-A successful first pass writes canonical records and receipt/query evidence under
-`<state>/ci-job-<job>/`, with owner-only permissions. Preserve that private state.
-Then restart the local stack, or stop the verification-only Cloud collector, and
-re-query without publication or GitLab access:
-
-```sh
 export SCRIBYRA_TEST_CI_READBACK_ONLY=1
 node --test tests/telemetry-ci-storage.test.mjs
 ```
 
 Readback uses original metric observation times and approved-record hashes. It
 checks retained records against the prior authenticated artifact snapshot; the
-snapshot is not a signature or a new authentication check after expiry. Ordinary
-JavaScript suites skip this integration when no operator-selected job/state is
-provided.
-
-Do not repeatedly publish the same job as a way to refresh a dashboard. The
-bounded ingress deduplication receipt is process-local; replay after its restart
-can add another metric observation for the same original run ID. Counters count
-received run reports, not unique authenticated jobs. The retained-query mode
-avoids republishing.
+snapshot is not a signature or a new authentication check after expiry. It makes
+no GitLab request and publishes nothing.
 
 ## Retention and delayed reports
 
-CI config sets artifact access to Maintainer and expiry to one day. In the project
-settings, disable **Keep artifacts from most recent successful jobs** so it cannot
-override that expiry. The live API verifies `keep_latest_artifact: false` and
-actual job `artifacts_expire_at`; this is configuration/metadata evidence, not a
-claim that the future expiry worker has already deleted an artifact. Pages has
-its own deployment lifetime (`pages.expire_in: never`). Keep repository, Pages
-and Grafana access private.
+On GitLab, CI limited artifact access to Maintainers with a one-day expiry, and
+the check verified `keep_latest_artifact: false` and each job's
+`artifacts_expire_at` through the live API. On GitHub the summaries are workflow
+artifacts with `retention-days: 1` (`.github/workflows/suite.yml`), readable by
+any signed-in GitHub user because the repository is public. Keep Grafana access
+private.
 
 Historical report timestamps are preserved. In filesystem/TSDB single-node Loki,
 the ingester store lookback takes precedence over the querier window. Both are
@@ -97,13 +78,14 @@ completed job; it does not prove immediate discovery of every possible delayed
   execution timestamps and the deployed dashboard log query are checked.
 - Both profiles: authorized individual artifact downloads succeed, anonymous
   downloads return 404, and stored metric/log/trace evidence matches the safe
-  artifacts. The project remains private and latest-artifact retention is off.
+  artifacts. The project was private at the time and latest-artifact retention
+  was off.
 
 Open the private [CI view](https://telemetry.scribyra.com/d/scribyra-test-runs?var-source=ci&from=now-24h&to=now)
 with Source = CI and a time range covering the job. This is an explicit operator
-import of real CI artifacts. Continuous direct CI publication still requires the
-persistent managed HTTPS ingest host and protected CI ingest file variables;
-these verification imports do not configure that deployment.
+import of real CI artifacts from the GitLab period. Continuous direct CI
+publication is not configured on GitHub; these verification imports do not
+configure it.
 
 References: [GitLab artifact API](https://docs.gitlab.com/api/job_artifacts/),
 [artifact retention](https://docs.gitlab.com/ci/jobs/job_artifacts/#keep-artifacts-from-most-recent-successful-jobs),

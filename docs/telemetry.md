@@ -1263,6 +1263,11 @@ or deployed release verification is claimed from these local runs.
 
 ## T4b: Stored test-run views and CI integration
 
+The CI jobs, artifacts and private Pages release in T4b to T4f belonged to the
+former GitLab project and are kept as dated records. CI now runs on GitHub
+Actions and publishes no telemetry; see
+[continuous CI publication](telemetry-deployment.md#continuous-ci-publication).
+
 The versioned private `scribyra-test-runs` dashboard now separates local tests,
 reported CI context and synthetic assertions, with suite/browser selectors. It
 shows observed process failures, case outcomes (including skipped/cancelled/todo
