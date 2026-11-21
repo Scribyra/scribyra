@@ -74,7 +74,7 @@ export function cacheHost({cache,fill,operations}){
   async downloadArchive(pkg){
    if(!fill)throw new Error('this compile has no package cache channel');
    if(!/^[a-zA-Z0-9._-]{1,128}$/.test(pkg.name))throw new Error('Invalid TeX package name.');
-   fill(pkg.name);
+   fill(pkg.name,pkg);
    const bytes=read(pkg.sha512);if(!bytes)throw new Error('the package cache did not provide the archive');
    return bytes;
   },

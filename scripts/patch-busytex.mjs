@@ -1,4 +1,12 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile as writeInPlace, rename, rm } from 'node:fs/promises';
+// Compiler assets are often hard links into a shared store (other checkouts, the
+// deployment cache). Write a new file and rename it into place so a patch never
+// changes the bytes another checkout sees through the same inode.
+async function writeFile(path,data){
+  const temporary=`${path}.scribyra-${process.pid}.tmp`;
+  try{await writeInPlace(temporary,data);await rename(temporary,path);}
+  catch(error){await rm(temporary,{force:true});throw error;}
+}
 import { Script } from 'node:vm';
 import { scribyraProjectWrites } from './virtual-fs-guard.mjs';
 import {scribyraBiberProject} from './biber-project.mjs';
@@ -47,6 +55,8 @@ export async function patchBusytex() {
   for(const engine of ['luatex','luahbtex'])source=source.replace(`${engine}: ['-kpathsea-debug', '32', '-recorder']`,`${engine}: ['-kpathsea-debug', '32']`);
   const output='missing: Array.from(Module.scribyraMissing.values())';
   if(!source.includes('recorderTruncated:'))source=source.replace(output,output+`, recorder: Array.from(Module.scribyraInputs||[]).map(path=>'INPUT '+path).join('\\n').slice(0, 256*1024), recorderTruncated: !!Module.scribyraInputsTruncated || Array.from(Module.scribyraInputs||[]).reduce((sum,path)=>sum+path.length+7,0)>256*1024`);
+  // The engine's WebAssembly memory after the run: it only grows, so this is the run's peak.
+  if(!source.includes('memory: Module.HEAPU8.length'))source=source.replace(output,output+', memory: Module.HEAPU8.length');
   source=source.replaceAll(".replace('.tex',",".replace(/\\.tex$/i,");
   const bridge=[
     ["const inputs = [{ path: bcf_path, contents: FS.readFile(bcf_path, { encoding: 'utf8' }) }];", "const relative_dir=FS.cwd().slice(this.project_dir.length).replace(/^\\//,''); const control_path=(relative_dir?relative_dir+'/':'')+bcf_path;\n        const inputs = [{ path: control_path, contents: FS.readFile(bcf_path, { encoding: 'utf8' }) }];"],

@@ -55,7 +55,7 @@ export class LuaRunner extends BusyTexRunner {
     const signal=this.telemetrySignal,abortTrace=()=>finishError(span,signal.reason||new DOMException('Cancelled','AbortError'));
     signal?.addEventListener('abort',abortTrace,{once:true});if(signal?.aborted)abortTrace();
     const sendObserved=(data,...rest)=>send.call(worker,data?.files&&span.context?{...data,scribyra_telemetry:span.context}:data,...rest);
-    const listener = ({data}) => {if(typeof data.print==='string')this.onPrint?.(data.print);if(Array.isArray(data.scribyraTelemetry)&&data.scribyraTelemetry.length<=4)for(const event of data.scribyraTelemetry)span.accept(event); if (data.pdf !== undefined) observed({missing:data.missing||[],recorder:data.recorder||'',recorderTruncated:!!data.recorderTruncated}); };
+    const listener = ({data}) => {if(typeof data.print==='string')this.onPrint?.(data.print);if(Array.isArray(data.scribyraTelemetry)&&data.scribyraTelemetry.length<=4)for(const event of data.scribyraTelemetry)span.accept(event); if (data.pdf !== undefined) observed({missing:data.missing||[],recorder:data.recorder||'',recorderTruncated:!!data.recorderTruncated,engineMemoryBytes:Number(data.memory)||0}); };
     worker.postMessage=sendObserved;
     worker.addEventListener('message', listener);
     try {const result=await liftWrapperDeadline(()=>super.compileWithWorker(...args),this.budget),extra=await evidence;span.end(result.success?'success':'failure',result.success?undefined:'source',result.pdf?[{name:'bytes',value:result.pdf.byteLength}]:[]);return { ...result, ...extra }; }
@@ -96,13 +96,13 @@ export async function runPasses({files,mainFile,runner,packages,record,installed
   const prefix=()=>output.attemptNumber?'Compiling with downloaded packages':where;
   const active=runner;
   const onPrint=raw=>{if(!current())return;const label=output.print(raw);if(label)progress(`${prefix()} · ${label}…`);};active.onPrint=onPrint;
-  let result;
+  let result,engineMemoryBytes=0;
   try{
     for (let pass = 0; pass < MAX_ATTEMPTS; pass++) {
       if(pass){const retry=observe('retry',telemetryParent);retry.end('success',undefined,[{name:'count',value:1}]);}
       output.attempt(pass);progress(pass ? 'Compiling with downloaded packages…' : `${where}…`);
       result = await execute(()=>active.compile(files, mainFile, bibtex, biber, null, true, 'info', 'luahbtex_bibtex8', null, 'scribyra:catalog', false, []));
-      signal.throwIfAborted();
+      signal.throwIfAborted();engineMemoryBytes=Math.max(engineMemoryBytes,result.engineMemoryBytes||0);
       // Optional \IfFileExists probes are not a reason to install anything after success.
       if (result.success) break;
       const installer=packages();if(result.missing.length)output.step(`Looking up ${result.missing.length} missing ${result.missing.length===1?'file':'files'} in the TeX package catalog`);
@@ -119,5 +119,5 @@ export async function runPasses({files,mainFile,runner,packages,record,installed
   const environment=await installer.environment(installed());
   const report=await installer.diagnose({success:result.success,mainFile,log:boundedText(result.log,2*1024*1024),projectFiles:files.map(file=>file.path),recorder:boundedText(result.recorder,256*1024),recorderTruncated:result.recorderTruncated,stalledPackages:result.success?[]:installer.stalledPackages()});
   const packageLog = downloaded.length ? `\n\nTeX packages installed for this compile:\n${downloaded.map(p => `${packageLabel(p.name,p)} · ${p.cached ? 'cache' : 'download'}${p.saved ? '' : ' · not cached'}`).join('\n')}` : '';
-  return { ...result, log: packageLog ? `${packageLog.trim()}\n\n${result.log}` : result.log, packages: downloaded, environment, report, diagnostic: result.success ? null : report.issues.find(issue=>issue.severity==='error')?.summary||'Compilation failed' };
+  return { ...result, passes: output.passes, engineMemoryBytes, log: packageLog ? `${packageLog.trim()}\n\n${result.log}` : result.log, packages: downloaded, environment, report, diagnostic: result.success ? null : report.issues.find(issue=>issue.severity==='error')?.summary||'Compilation failed' };
 }
