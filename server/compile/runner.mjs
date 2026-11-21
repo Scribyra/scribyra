@@ -7,7 +7,8 @@
 //
 // Descriptors (inherited from the worker): --status receives one JSON line ({"event":"result"}),
 // --pdf the PDF, --log the final log (diagnostics naming files and lines, then TeX's log). Packages missing from the cache are
-// asked for on --fill (one JSON line per package) and answered on --reply; the worker fills the
+// asked for on --fill (one JSON line per package) and answered on --reply; --packages a,b,… names
+// the packages the project's previous successful compile installed (installed before the first pass); the worker fills the
 // cache outside the sandbox and checks each archive against the catalog's SHA-512, and the
 // catalog checks it again here before anything is unpacked.
 import {readFileSync,readdirSync,writeSync,readSync,closeSync,lstatSync} from 'node:fs';
@@ -88,7 +89,9 @@ export function cacheHost({cache,fill,operations}){
 const OOM=/Cannot enlarge memory|Failed to grow the heap|Aborted\(OOM\)|Cannot allocate Wasm memory/;
 const engineOom=raw=>/^\/bin\/\S+ stderr: /.test(raw)&&OOM.test(raw);
 
-export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},budgetMs=600_000}){
+// `packages`: names the project's previous successful compile installed (the service keeps them
+// with the project), installed before the first pass.
+export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},onOutput=()=>{},budgetMs=600_000,packages:known=[]}){
  const info=JSON.parse(readFileSync(join(runtime,'runtime.json'),'utf8'));
  globalThis.__TEX_RUNTIME__=info.runtime;globalThis.__TEX_ASSETS__=info.assets;
  const root=join(runtime,'public/core/busytex'),quiet={log(){},info(){},debug(){},warn(){},error(){}};
@@ -110,7 +113,7 @@ export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},budge
  if(!files.some(file=>file.path===main))throw new Error(`main file ${main} is not in the project`);
  const abort=new AbortController(),signal=abort.signal;let phase='Preparing compiler',passes=0,memory=false;
  const progress=message=>{phase=message;onEvent({event:'progress',message});};
- const output=compileOutput(entry=>{if(entry.kind==='step'&&/^LuaLaTeX pass \d+/.test(entry.text))passes++;});
+ const output=compileOutput(entry=>{if(entry.kind==='step'&&/^LuaLaTeX pass \d+/.test(entry.text))passes++;onOutput(entry);});
  const step=(message,label=message.replace(/…$/,''))=>{progress(message);output.step(label);};
  const budget=executionBudget(budgetMs,()=>phase,error=>abort.abort(error));
  const runner=new LuaRunner({busytexBasePath:RUNTIME_BASE,engineMode:'combined',preloadDataPackages:[`${RUNTIME_BASE}/${info.assets.loader.path}`],initRetries:0});
@@ -122,7 +125,7 @@ export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},budge
   step('Preparing LuaLaTeX and bundled packages…');
   await runner.initialize(true);
   const original=output.print.bind(output);output.print=raw=>{if(engineOom(String(raw)))memory=true;return original(raw);};
-  const result=await runPasses({files,mainFile:main,runner,packages:getPackages,record,installed:()=>[...installed.keys()],output,progress,execute:fn=>budget.run(fn),signal,telemetryParent:undefined,where:'Compiling on server'});
+  const result=await runPasses({files,mainFile:main,runner,packages:getPackages,record,installed:()=>[...installed.keys()],output,progress,execute:fn=>budget.run(fn),signal,telemetryParent:undefined,where:'Compiling on server',known:Array.isArray(known)?known:[]});
   return {...result,passes,memory,durationMs:performance.now()-started};
  }catch(error){
   error.passes=passes;error.memory=memory||OOM.test(String(error?.message).split('\nStack:')[0]);throw error;
@@ -151,6 +154,7 @@ async function main(){
  const status=fd(a.status),pdfOut=fd(a.pdf),logOut=fd(a.log);
  const fill=a.fill?fillChannel(fd(a.fill),fd(a.reply)):null;
  const limit=Number(a['engine-memory-mib']||576),logBytes=Number(a['log-bytes']||1<<20);
+ const known=String(a.packages||'').split(',').filter(name=>/^[A-Za-z0-9._-]{1,128}$/.test(name)).slice(0,64);
  let done=false;
  const finish=(outcome,log,pdf)=>{
   if(done)return;done=true;
@@ -168,7 +172,7 @@ async function main(){
  // throwing from a callback; they end the job with a result rather than a crash.
  process.on('uncaughtException',failed);process.on('unhandledRejection',failed);
  try{
-  const result=await compile({runtime:a.runtime,cache:a.cache,work:a.work,main:a.main,fill,budgetMs:Number(a['budget-ms']||600_000)});
+  const result=await compile({runtime:a.runtime,cache:a.cache,work:a.work,main:a.main,fill,budgetMs:Number(a['budget-ms']||600_000),packages:known});
   const ok=result.success&&result.pdf?.byteLength>4&&String.fromCharCode(...result.pdf.subarray(0,5))==='%PDF-';
   let log=boundedLog(result,logBytes);
   if(!ok&&result.memory)log=`${memoryMessage(limit)}\n\n${log}`;

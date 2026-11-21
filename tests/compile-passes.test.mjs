@@ -1,8 +1,11 @@
 // Pass-count regressions for the rerun policy embedded in the BusyTeX pipeline
-// (scripts/tex-passes.mjs), against a simulated TeX run on a small in-memory file system.
+// (scripts/tex-passes.mjs), against a simulated TeX run on a small in-memory file system, and
+// for the source scan that finds a project's packages before the first pass.
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {scribyraTexPasses} from '../scripts/tex-passes.mjs';
+import {fileRequests,projectRequests,stripComments} from '../web/tex-requirements.js';
+import {rememberedPackages,rememberPackages,forgetPackages} from '../web/project-packages.js';
 
 const ROOT='/project';
 function memoryFS(files){
@@ -92,3 +95,32 @@ test('a failing pass stops at once, and the final pass alone must produce pages'
  assert.equal(noPages.passes,2);assert.equal(noPages.exit_code,1);
 });
 
+test('the source scan names classes, packages, themes, libraries and styles, never comments or macros',()=>{
+ const tex=String.raw`\documentclass[11pt]{beamer}
+\usetheme{Madrid}\usecolortheme{beaver}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath, siunitx,
+ booktabs}
+% \usepackage{ignored}
+\usepackage{\mypackage}\RequirePackage[strict]{csquotes}
+\usetikzlibrary{arrows.meta,calc}\usepgfplotslibrary{fillbetween}
+\bibliographystyle{plainnat} 50\% \usepackage{after-percent-sign}`;
+ assert.deepEqual(fileRequests(tex).sort(),['after-percent-sign.sty','amsmath.sty','beamer.cls','beamercolorthemebeaver.sty','beamerthemeMadrid.sty','booktabs.sty','csquotes.sty','fontenc.sty','pgfplotslibraryfillbetween.code.tex','plainnat.bst','siunitx.sty','tikzlibraryarrows.meta.code.tex','tikzlibrarycalc.code.tex']);
+ assert.equal(stripComments('a % b\n\\% c % d'),'a \n\\% c ');
+ assert.deepEqual(projectRequests([{path:'main.tex',content:'\\documentclass{article}\\usepackage{mystyle,hyperref}'},{path:'styles/mystyle.sty',content:'\\RequirePackage{xcolor}'},{path:'fig.png',content:new Uint8Array(4)}]),['article.cls','hyperref.sty','xcolor.sty']);
+});
+
+test('each project remembers the packages its last successful compile installed, per catalog snapshot',()=>{
+ const store=new Map(),storage={getItem:key=>store.get(key)??null,setItem:(key,value)=>store.set(key,String(value))};
+ assert.deepEqual(rememberedPackages('p1','snap',storage),[]);
+ assert.ok(rememberPackages('p1','snap',['siunitx','dist--biblatex','siunitx','bad name','../x'],storage,1));
+ assert.deepEqual(rememberedPackages('p1','snap',storage),['dist--biblatex','siunitx']);
+ assert.deepEqual(rememberedPackages('p1','other-snapshot',storage),[]);
+ assert.deepEqual(rememberedPackages('p2','snap',storage),[]);
+ for(let i=0;i<205;i++)rememberPackages(`q${i}`,'snap',['x'],storage,10+i);
+ assert.deepEqual(rememberedPackages('p1','snap',storage),[],'the least recently used projects are dropped beyond 200');
+ assert.deepEqual(rememberedPackages('q204','snap',storage),['x']);
+ forgetPackages('q204',storage);assert.deepEqual(rememberedPackages('q204','snap',storage),[]);
+ const broken={getItem:()=>{throw new Error('denied');},setItem:()=>{throw new Error('denied');}};
+ assert.deepEqual(rememberedPackages('p1','snap',broken),[]);assert.equal(rememberPackages('p1','snap',['x'],broken),false);
+});

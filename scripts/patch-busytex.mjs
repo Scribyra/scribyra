@@ -73,6 +73,24 @@ export async function patchBusytex() {
 
 `+source.slice(stop);
   }
+  // Which TeX files the engine already has (bundled tree, installed packages), by name, so
+  // packages a project names are installed before the first pass only when they are missing.
+  const presentAt="    async write_texlive_remote_files(files) {";
+  const present=`    async scribyra_present(names) {
+        const Module = await this.Module;
+        if (!Module) throw new Error('Module not initialized');
+        const { FS } = Module, collect = (dir, into) => {
+            if (!FS.analyzePath(dir).exists) return into;
+            for (const name of FS.readdir(dir)) { if (name === '.' || name === '..') continue; const path = dir + '/' + name; if (FS.isDir(FS.stat(path).mode)) collect(path, into); else into.add(name); }
+            return into;
+        };
+        this.scribyra_bundled ||= collect('/texlive', new Set());
+        const installed = collect('/texmf-downloads', new Set());
+        return names.map(name => { const base = String(name).split('/').pop(); return this.scribyra_bundled.has(base) || installed.has(base); });
+    }
+
+`;
+  if(!source.includes('async scribyra_present(names)')){if(source.split(presentAt).length!==2)throw new Error('Unexpected BusyTeX remote-file API.');source=source.replace(presentAt,present+presentAt);}
   // Undo the earlier info-only recorder switch: authoritative input evidence is
   // collected at successful virtual-FS opens, including Lua's own file reads.
   for(const engine of ['luatex','luahbtex'])source=source.replace(`${engine}: ['-kpathsea-debug', '32', '-recorder']`,`${engine}: ['-kpathsea-debug', '32']`);

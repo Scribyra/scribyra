@@ -33,7 +33,7 @@ export function buildCoordinator(compile,stopCompiler,onBusy=()=>{}){
     // The telemetry parent is an identity-scoped capability, not project data.
     check();const {telemetryParent,...data}=inputs,owned={...structuredClone(data),telemetryParent};
     const live=()=>session.current()&&!session.signal.aborted&&isActive();
-    const result=await compile({...owned,jobId:session.id},message=>{if(live())progress(message);},entry=>{if(live())output(entry);});
+    const result=await compile({...owned,jobId:session.id,projectId:session.projectId},message=>{if(live())progress(message);},entry=>{if(live())output(entry);});
     check();const value=await destination(result,session);check();return value;
   }
   return{start,publish,cancel:()=>sessions.cancel(),close(){sessions.close();onBusy(false);},

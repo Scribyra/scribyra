@@ -8,6 +8,7 @@ import { BusyTexRunner } from 'texlyre-busytex';
 import { bibliographyOptions } from './latex.js';
 import {CompileTimeoutError,boundedText} from './build-errors.js';
 import {packageLabel} from './tex-environment.js';
+import {projectRequests} from './tex-requirements.js';
 
 // Cumulative compiler-execution budget per job. A 250-page thesis with Biber
 // needs four or five full LuaLaTeX passes, measured at 4–6 minutes in
@@ -40,6 +41,14 @@ export class LuaRunner extends BusyTexRunner {
     const listener=({data})=>{if(Array.isArray(data.scribyraTelemetry)&&data.scribyraTelemetry.length<=4)for(const event of data.scribyraTelemetry)span.accept(event);};
     worker.postMessage=sendObserved;worker.addEventListener('message',listener);
     this.initializationCleanup=()=>{if(worker.postMessage===sendObserved)worker.postMessage=send;worker.removeEventListener('message',listener);};
+  }
+  // Which of these TeX file names the engine already has (bundled tree or installed packages).
+  presentFiles(names){
+    const worker=this.worker;if(!worker||!names.length)return Promise.resolve(names.map(()=>false));
+    return new Promise((resolve,reject)=>{
+      worker.onmessage=({data})=>{if(Array.isArray(data.scribyra_present))resolve(data.scribyra_present);else if(data.exception)reject(new Error(data.exception));};
+      worker.postMessage({scribyra_probe:names});
+    });
   }
   async initializeWorker(){
     const span=observe('worker_startup',this.telemetryParent),signal=this.telemetrySignal;
@@ -88,7 +97,10 @@ export function executionBudget(budget,phase,onExpired){
 //  output: compileOutput();
 //  execute(fn): runs one compiler call within the budget; current(): whether this compile still
 //  owns the live log; where: the live-progress label.
-export async function runPasses({files,mainFile,runner,packages,record,installed,downloaded=[],output,progress,execute,signal,current=()=>!signal.aborted,telemetryParent,prepareBiber,where='Compiling on your device'}){
+//  known: package names to install before the first pass (the project's previous successful
+//  compile); prepare: whether to install known and source-named packages up front (not for a
+//  locked environment, whose packages are preloaded).
+export async function runPasses({files,mainFile,runner,packages,record,installed,downloaded=[],output,progress,execute,signal,current=()=>!signal.aborted,telemetryParent,prepareBiber,where='Compiling on your device',known=[],prepare=true}){
   const { bibtex, biber } = bibliographyOptions(files, mainFile);
   runner.telemetryParent=telemetryParent;
   runner.telemetrySignal=signal;
@@ -98,6 +110,17 @@ export async function runPasses({files,mainFile,runner,packages,record,installed
   const onPrint=raw=>{if(!current())return;const label=output.print(raw);if(label)progress(`${prefix()} · ${label}…`);};active.onPrint=onPrint;
   let result,engineMemoryBytes=0;
   try{
+    // Before the first pass: the packages this project needed last time, then those its source
+    // names that the engine lacks, with their declared dependencies, in one round.
+    if(prepare)await observed('package_prepare',async()=>{
+      const installer=packages();
+      try{
+        if(known.length){output.step(`Installing the ${known.length} TeX ${known.length===1?'package':'packages'} this project used last time`);downloaded.push(...record(await installer.preinstall(known,active)));}
+        const wanted=projectRequests(files),present=wanted.length?await active.presentFiles(wanted):[],absent=wanted.filter((_,i)=>!present[i]);
+        if(absent.length){output.step(`Looking up ${absent.length} TeX ${absent.length===1?'file':'files'} the project names in the TeX package catalog`);downloaded.push(...record(await installer.resolveFiles(absent,active)));}
+      }catch(error){if(signal.aborted)throw error;output.note(`Packages could not be prepared before compiling (${error.message}); LuaLaTeX will find them as it runs.`);}
+    },{parent:telemetryParent});
+    signal.throwIfAborted();
     for (let pass = 0; pass < MAX_ATTEMPTS; pass++) {
       if(pass){const retry=observe('retry',telemetryParent);retry.end('success',undefined,[{name:'count',value:1}]);}
       output.attempt(pass);progress(pass ? 'Compiling with downloaded packages…' : `${where}…`);

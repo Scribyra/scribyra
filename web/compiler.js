@@ -3,8 +3,9 @@ import {observed} from './observability.js';
 import {CompileTimeoutError} from './build-errors.js';
 import { texPackages } from './tex-packages.js';
 import {compileOutput} from './compile-log.js';
-import {TEX_ASSETS,TEX_ASSET_BASE} from './tex-environment.js';
+import {TEX_ASSETS,TEX_ASSET_BASE,TEX_RUNTIME} from './tex-environment.js';
 import {LuaRunner,COMPILE_BUDGET_MS,executionBudget,runPasses} from './compile-driver.js';
+import {rememberedPackages,rememberPackages} from './project-packages.js';
 export {COMPILE_BUDGET_MS};
 const base = TEX_ASSET_BASE;
 // On a fresh install, WebKit can start the compiler before the service worker
@@ -33,7 +34,7 @@ export function cancelCompile(reason=new DOMException('Compilation cancelled','A
 }
 // onOutput receives the live log ({text,kind}) while the compile runs. It is
 // local display data only; the returned log is the authoritative final one.
-export async function compileProject({ files, mainFile, engine, jobId, environment=null,telemetryParent }, onProgress, onOutput=()=>{}) {
+export async function compileProject({ files, mainFile, engine, jobId, projectId=null, environment=null,telemetryParent }, onProgress, onOutput=()=>{}) {
   if (engine !== 'lualatex') throw new Error('Scribyra currently supports LuaLaTeX only.');
   // A locked run starts from the immutable baseline, never a warm superset.
   if(environment!==null||runnerLocked)cancelCompile();
@@ -63,7 +64,10 @@ export async function compileProject({ files, mainFile, engine, jobId, environme
     }
     abort.signal.throwIfAborted();
     const downloaded = environment!==null?record(await getPackages().preload(environment,runner)):[];
-    const result=await runPasses({files,mainFile,runner,packages:getPackages,record,installed:()=>[...runnerPackages.keys()],downloaded,output,progress,execute,signal:abort.signal,current:()=>token===generation,telemetryParent,prepareBiber:parent=>warmRuntime(abort.signal,progress,'biber',parent)});
+    // An unlocked project starts from what it needed last time on this device.
+    const snapshot=TEX_RUNTIME?.snapshot,known=environment===null?rememberedPackages(projectId,snapshot).filter(name=>!runnerPackages.has(name)):[];
+    const result=await runPasses({files,mainFile,runner,packages:getPackages,record,installed:()=>[...runnerPackages.keys()],downloaded,output,progress,execute,signal:abort.signal,current:()=>token===generation,telemetryParent,prepareBiber:parent=>warmRuntime(abort.signal,progress,'biber',parent),known,prepare:environment===null});
+    if(result.success&&environment===null)rememberPackages(projectId,snapshot,[...runnerPackages.keys()]);
     return { ...result, jobId, cold, durationMs: performance.now() - started };
   })();
   const interruption = new Promise((_, reject) => { rejectActive = reject; });

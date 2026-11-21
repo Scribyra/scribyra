@@ -31,6 +31,9 @@ export function packageOperations({ready,assets=TEX_ASSETS,base=TEX_ASSET_BASE,r
   else if(kind==='prepare-metadata'){const names=await api.lockedNames(input.lock,observe);await api.metadataAssets(names,observe);result=await api.metadataStatus(names,observe);}
   else if(kind==='encode-environment'){const names=await api.lockedNames(input.lock,observe),metadata=await api.metadataAssets(names,observe);result=catalog.encode_portable_environment(JSON.stringify(input.lock),JSON.stringify(input.runtime),input.archives,metadata.map(info=>[info.path,info.bytes]));}
   else if(kind==='packages'){await api.ensure(input.names,observe);result=JSON.parse(catalog.package_info(JSON.stringify(input.names)));}
+  // Catalog entries for the names it knows (a remembered package set may predate the catalog).
+  else if(kind==='known-packages'){await api.ensure(input.names,observe);result=input.names.flatMap(name=>{try{return JSON.parse(catalog.package_info(JSON.stringify([name])));}catch{return[];}});}
+  else if(kind==='package-files')result=await api.texFiles(input.names,observe);
   else if(kind==='unpack'){await api.ensure([input.name],observe);result=catalog.unpack(input.name,input.bytes).map(([name,content])=>({name,content,format:-1}));}
   else throw new Error('Unknown package operation.');
   reply(result,kind==='unpack'?result.map(file=>file.content.buffer):kind==='encode-environment'?[result.buffer]:kind==='decode-environment'?result.archives.map(bytes=>bytes.buffer):[]);

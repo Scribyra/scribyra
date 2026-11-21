@@ -40,11 +40,14 @@ export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=nu
  if(root.dependencyGraph&&(root.dependencyGraph.path!==`metadata/${root.dependencyGraph.sha256}.json`||!Number.isSafeInteger(root.dependencyGraph.size)||root.dependencyGraph.size<=0||root.dependencyGraph.size>2*1024*1024||!/^[a-f0-9]{64}$/.test(root.dependencyGraph.sha256)))throw new Error('Invalid dependency manifest descriptor.');
  if(root.compatibility)Catalog.validate_compatibility(JSON.stringify(root.compatibility),JSON.stringify(runtime),JSON.stringify(binary));
  const catalog=new Catalog(JSON.stringify({snapshot:root.snapshot,packages:{}})),loaded=new Map();
+ // Runtime file names (basenames under tex/) of the packages in loaded shards, for deciding
+ // whether a declared dependency is already in the engine's tree before installing it.
+ const texFiles=new Map();
  async function part(info,kind,observer){
   if(!info)return kind==='filenames'?{}:null;
   if(!loaded.has(info.path))loaded.set(info.path,(async()=>{
    const text=await read(info,2*1024*1024,observer);
-   if(kind==='packages'){catalog.merge(text);return null;}
+   if(kind==='packages'){catalog.merge(text);for(const[name,info]of Object.entries(JSON.parse(text).packages||{}))if(Array.isArray(info?.files))texFiles.set(name,[...new Set(info.files.filter(path=>typeof path==='string'&&path.startsWith('tex/')).map(path=>path.slice(path.lastIndexOf('/')+1)))].slice(0,4096));return null;}
    const names=JSON.parse(text);if(!object(names))throw new Error('Invalid filename metadata.');
    for(const[key,packages]of Object.entries(names))if(!key||key.includes('/')||!Array.isArray(packages)||packages.length>10000||packages.some(name=>!packageName(name)))throw new Error('Invalid filename metadata entry.');
    return names;
@@ -59,6 +62,7 @@ export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=nu
  async function lockedNames(lock,observer){const names=JSON.parse(Catalog.environment_packages(JSON.stringify(lock),JSON.stringify(runtime)));await ensure(names,observer);return names;}
  return{
   catalog,ensure,lockedNames,
+  async texFiles(names,observer){await ensure(names,observer);return Object.fromEntries(names.filter(name=>texFiles.has(name)).map(name=>[name,texFiles.get(name)]));},
   async dependencyGraph(observer){if(!root.dependencyGraph)throw new Error('This compiler catalog does not include a declared dependency manifest.');return raw(root.dependencyGraph,2*1024*1024,observer);},
   async metadataAssets(names,observer){
    await ensure(names,observer);const paths=[...new Set(names.map(name=>root.packages[Catalog.metadata_bucket(name)]?.path).filter(Boolean))].sort();
