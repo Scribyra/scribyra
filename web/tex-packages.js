@@ -16,8 +16,12 @@ export async function downloadArchive(packageInfo,signal,onProgress=()=>{},paren
 }
 // progress() receives one message per package step (no byte counters, so a
 // polite status is not re-announced many times a second); note() gets details.
-export function texPackages(signal,progress=()=>{},existing=[],parent,note=()=>{}){
- const worker=new Worker(new URL('./tex-packages-worker.js',import.meta.url),{type:'module'});
+// `host` lets the server's compile runner supply the package worker (`worker()`, anything with
+// postMessage/onmessage/onerror/terminate) and its archive store (`cachedArchive`,
+// `cacheArchive`, `downloadArchive`, same contracts as below); the browser uses its own.
+const browserHost={worker:()=>new Worker(new URL('./tex-packages-worker.js',import.meta.url),{type:'module'}),cachedArchive,cacheArchive,downloadArchive:(...args)=>downloadArchive(...args)};
+export function texPackages(signal,progress=()=>{},existing=[],parent,note=()=>{},host=browserHost){
+ const {cachedArchive,cacheArchive,downloadArchive}=host,worker=host.worker();
  const pending=new Map(),installed=new Set(existing.map(p=>p.name));let lastCandidates=[];let id=0,count=existing.length,total=existing.reduce((n,p)=>n+p.size,0),closed=false,allowed=null;
  const close=()=>{closed=true;worker.terminate();for(const task of pending.values()){clearTimeout(task.timeout);task.span.end('cancelled');task.reject(new DOMException('Package operation cancelled','AbortError'));}pending.clear();signal.removeEventListener('abort',close);};
  worker.onmessage=({data})=>{const task=pending.get(data.id);if(!task)return;if(Array.isArray(data.telemetry)&&data.telemetry.length<=4)for(const event of data.telemetry)task.span.accept(event);if(!Object.hasOwn(data,'result')&&!Object.hasOwn(data,'error'))return;pending.delete(data.id);clearTimeout(task.timeout);task.span.end(data.error?'failure':'success',data.error?'worker':undefined);data.error?task.reject(new Error(data.error)):task.resolve(data.result);};

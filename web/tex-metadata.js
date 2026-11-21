@@ -9,20 +9,23 @@ async function eachLimited(values,fn){let index=0,failure;await Promise.all(Arra
 function downloadQueue(){let running=0;const waiting=[];return async task=>{if(running>=4)await new Promise(resolve=>waiting.push(resolve));else running++;try{return await task();}finally{const next=waiting.shift();if(next)next();else running--;}};}
 
 // Rust retains package contents/indexes; JS retains small routing/filename maps.
-export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=null,fetcher=globalThis.fetch,observe:initialObserver}){
- const download=downloadQueue();
+// `storage` replaces the browser's metadata cache and download manager (the server's compile
+// runner reads the pinned files of its read-only runtime instead); every byte is still checked.
+const browserStorage={cachedMetadata,cacheMetadata,fetchBytes:(asset,options)=>downloads.fetchBytes(asset,options)};
+export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=null,fetcher=globalThis.fetch,observe:initialObserver,storage=browserStorage}){
+ const download=downloadQueue(),{cachedMetadata:cached,cacheMetadata:save,fetchBytes}=storage;
  async function valid(info,bytes,observer){
   if(!(bytes instanceof Uint8Array))return false;
   const span=observeWith(observer,'verify');try{const ok=bytes instanceof Uint8Array&&bytes.length===info.size&&await sha256(bytes)===info.sha256;span.end(ok?'success':'failure',ok?undefined:'integrity',bytes?[{name:'bytes',value:bytes.byteLength}]:[]);return ok;}catch(error){finishError(span,error);throw error;}
  }
  async function raw(info,maximum,observer){
   if(!object(info)||!Number.isSafeInteger(info.size)||info.size<=0||info.size>maximum||!/^[a-f0-9]{64}$/.test(info.sha256))throw new Error('Invalid pinned TeX metadata descriptor.');
-  let bytes=await cachedMetadata(info.sha256);const hit=observeWith(observer,'cache');hit.end('success',undefined,[{name:'count',value:bytes?1:0}]);
+  let bytes=await cached(info.sha256);const hit=observeWith(observer,'cache');hit.end('success',undefined,[{name:'count',value:bytes?1:0}]);
   if(!await valid(info,bytes,observer)){
-   bytes=await download(async()=>{try{return await downloads.fetchBytes({kind:'metadata',label:'TeX metadata',size:info.size,hash:info.sha256,algorithm:'SHA-256'},{url:`${base}/${info.path}`,credentials:'same-origin',fetcher,observe:observer});}catch(error){throw new Error(`Required TeX metadata could not be fetched. Go online or import a matching package bundle. ${error.message}`,{cause:error});}});
+   bytes=await download(async()=>{try{return await fetchBytes({kind:'metadata',label:'TeX metadata',size:info.size,hash:info.sha256,algorithm:'SHA-256'},{url:`${base}/${info.path}`,credentials:'same-origin',fetcher,observe:observer});}catch(error){throw new Error(`Required TeX metadata could not be fetched. Go online or import a matching package bundle. ${error.message}`,{cause:error});}});
    if(!await valid(info,bytes,observer))throw new Error('TeX metadata checksum differs from the pinned runtime.');
   }
-  await cacheMetadata(info,bytes,observer);return bytes;
+  await save(info,bytes,observer);return bytes;
  }
  const text=bytes=>new TextDecoder('utf-8',{fatal:true}).decode(bytes);
  const read=async(info,maximum,observer)=>text(await raw(info,maximum,observer));
@@ -65,7 +68,7 @@ export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=nu
   },
   async metadataStatus(names,observer){
    const pins=[rootInfo,...(root.dependencyGraph?[root.dependencyGraph]:[]),...new Map(names.map(name=>root.packages[Catalog.metadata_bucket(name)]).filter(Boolean).map(info=>[info.path,info])).values()],missing=[];
-   for(const info of pins)if(!await valid(info,await cachedMetadata(info.sha256),observer))missing.push(info.path);
+   for(const info of pins)if(!await valid(info,await cached(info.sha256),observer))missing.push(info.path);
    return{ready:missing.length===0,missing};
   },
   async resolve(missing,log,observer){
