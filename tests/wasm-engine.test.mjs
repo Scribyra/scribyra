@@ -1,6 +1,6 @@
 // The real WebAssembly engine under Node (server/compile/runner.mjs through the shared driver),
 // offline, with packages only from the bundled components: pass counts, packages installed
-// before the first pass and the remembered package set.
+// before the first pass, the remembered package set, and the raised memory ceiling.
 // Each compile runs in its own process (scripts/compile-benchmark-node.mjs --one).
 import {test,before,after} from 'node:test';
 import assert from 'node:assert/strict';
@@ -63,3 +63,18 @@ test('a package the source names only through a macro is found by a failing pass
  assert.match(again.log,/Installing the 1 TeX package this project used last time/);assert.doesNotMatch(again.log,/Missing packages are being fetched/);
 });
 
+// About 1 GiB of Lua strings kept until the end of the run.
+const hold=count=>`\\documentclass{article}\n\\directlua{scribyra_big={} scribyra_n=0 for i=1,${count} do scribyra_n=i scribyra_big[i]=string.rep(string.char(65+math.fmod(i,26)),1048576) end}\n\\begin{document}Held \\directlua{tex.print(scribyra_n)} strings of one MiB.\\end{document}\n`;
+test('a document that needs about 1 GiB compiles (the pinned build stopped at 576 MiB)',async()=>{
+ const result=compile(project('one-gib',{'main.tex':hold(880)}));
+ assert.equal(result.status,'Success',result.log.slice(0,3000));
+ assert.ok(result.engineMemoryMiB>=1000&&result.engineMemoryMiB<2047,String(result.engineMemoryMiB));
+ assert.match((await pages(result.pdf))[0],/Held 880 strings of one MiB/);
+});
+
+test('a document that needs more than 2 GiB fails with the clear memory message',()=>{
+ const result=compile(project('too-big',{'main.tex':hold(2400)}));
+ assert.equal(result.status,'Failure');
+ assert.match(result.error,/needs more memory than the WebAssembly TeX engine can use \(2047 MiB/);
+ assert.match(result.log,/^The document needs more memory/m);
+});

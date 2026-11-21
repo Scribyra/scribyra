@@ -4,7 +4,7 @@ import {CompileTimeoutError} from './build-errors.js';
 import { texPackages } from './tex-packages.js';
 import {compileOutput} from './compile-log.js';
 import {TEX_ASSETS,TEX_ASSET_BASE,TEX_RUNTIME} from './tex-environment.js';
-import {LuaRunner,COMPILE_BUDGET_MS,executionBudget,runPasses} from './compile-driver.js';
+import {LuaRunner,COMPILE_BUDGET_MS,executionBudget,runPasses,engineMemoryLimit} from './compile-driver.js';
 import {rememberedPackages,rememberPackages} from './project-packages.js';
 export {COMPILE_BUDGET_MS};
 const base = TEX_ASSET_BASE;
@@ -59,7 +59,7 @@ export async function compileProject({ files, mainFile, engine, jobId, projectId
       abort.signal.throwIfAborted();
       runner = new LuaRunner({ busytexBasePath: base, engineMode: 'combined', preloadDataPackages: [`${base}/${TEX_ASSETS.loader.path}`], initRetries: 0, onDownloadProgress: p => { if (token === generation) progress(p.percent?`Preparing LuaLaTeX · ${p.percent}%`:'Preparing LuaLaTeX…'); } });
       step('Preparing LuaLaTeX and bundled packages…');
-      runner.telemetrySignal=abort.signal;
+      runner.telemetrySignal=abort.signal;runner.memoryBytes=engineMemoryLimit();
       await observed('startup',async parent=>{runner.telemetryParent=parent;await runner.initialize(true);},{parent:telemetryParent});
     }
     abort.signal.throwIfAborted();

@@ -82,16 +82,18 @@ export function cacheHost({cache,fill,operations}){
  };
 }
 
-// Engine memory: this BusyTeX build caps its WebAssembly heap (Emscripten's getHeapMax); a
+// Engine memory: the engine's WebAssembly heap stops at the ceiling the runner sets (default
+// 2 GiB - 64 KiB, the most this BusyTeX build can address; scripts/wasm-memory.mjs); a
 // document that needs more makes the Emscripten runtime report one of these on the engine's
 // stderr channel ("<program> stderr: …"), or throw them. TeX's own terminal output, which a
 // document controls (\typeout), never counts.
 const OOM=/Cannot enlarge memory|Failed to grow the heap|Aborted\(OOM\)|Cannot allocate Wasm memory/;
 const engineOom=raw=>/^\/bin\/\S+ stderr: /.test(raw)&&OOM.test(raw);
 
+export const ENGINE_MEMORY_MIB=32767*65536/1048576; // 2 GiB - 64 KiB
 // `packages`: names the project's previous successful compile installed (the service keeps them
-// with the project), installed before the first pass.
-export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},onOutput=()=>{},budgetMs=600_000,packages:known=[]}){
+// with the project), installed before the first pass. `memoryMib`: the engine's heap ceiling.
+export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},onOutput=()=>{},budgetMs=600_000,packages:known=[],memoryMib=ENGINE_MEMORY_MIB}){
  const info=JSON.parse(readFileSync(join(runtime,'runtime.json'),'utf8'));
  globalThis.__TEX_RUNTIME__=info.runtime;globalThis.__TEX_ASSETS__=info.assets;
  const root=join(runtime,'public/core/busytex'),quiet={log(){},info(){},debug(){},warn(){},error(){}};
@@ -117,7 +119,7 @@ export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},onOut
  const step=(message,label=message.replace(/…$/,''))=>{progress(message);output.step(label);};
  const budget=executionBudget(budgetMs,()=>phase,error=>abort.abort(error));
  const runner=new LuaRunner({busytexBasePath:RUNTIME_BASE,engineMode:'combined',preloadDataPackages:[`${RUNTIME_BASE}/${info.assets.loader.path}`],initRetries:0});
- runner.budget=budgetMs;runner.telemetrySignal=signal;
+ runner.budget=budgetMs;runner.telemetrySignal=signal;runner.memoryBytes=Math.round(memoryMib*1048576);
  const installed=new Map(),record=receipts=>{for(const receipt of receipts)installed.set(receipt.name,receipt);return receipts;};
  let packages;const getPackages=()=>packages||=texPackages(signal,step,[],undefined,note=>output.note(note),host);
  const started=performance.now();
@@ -125,7 +127,7 @@ export async function compile({runtime,cache,work,main,fill,onEvent=()=>{},onOut
   step('Preparing LuaLaTeX and bundled packages…');
   await runner.initialize(true);
   const original=output.print.bind(output);output.print=raw=>{if(engineOom(String(raw)))memory=true;return original(raw);};
-  const result=await runPasses({files,mainFile:main,runner,packages:getPackages,record,installed:()=>[...installed.keys()],output,progress,execute:fn=>budget.run(fn),signal,telemetryParent:undefined,where:'Compiling on server',known:Array.isArray(known)?known:[]});
+  const result=await runPasses({files,mainFile:main,runner,packages:getPackages,record,installed:()=>[...installed.keys()],output,progress,execute:fn=>budget.run(fn),signal,telemetryParent:undefined,where:'Compiling on server',known:Array.isArray(known)?known:[],memoryMessage:bytes=>memoryMessage(Math.floor(bytes/1048576))});
   return {...result,passes,memory,durationMs:performance.now()-started};
  }catch(error){
   error.passes=passes;error.memory=memory||OOM.test(String(error?.message).split('\nStack:')[0]);throw error;
@@ -140,7 +142,7 @@ export function serverLog(result){
 }
 
 export function memoryMessage(limitMib){
- return `The document needs more memory than the WebAssembly TeX engine can use (${limitMib} MiB in this build of BusyTeX; wasm32 itself stops at 4 GB). Simplify the document, split it, or ask the administrator to compile it with the native engine.`;
+ return `The document needs more memory than the WebAssembly TeX engine can use (${limitMib} MiB; this build of BusyTeX addresses at most 2 GiB, wasm32 itself stops at 4 GB). Simplify the document, split it, or ask the administrator to compile it with the native engine.`;
 }
 
 // TeX's log, bounded to its last `bytes` (UTF-8), behind the diagnostics.
@@ -153,7 +155,7 @@ async function main(){
  const a=args(process.argv.slice(2));
  const status=fd(a.status),pdfOut=fd(a.pdf),logOut=fd(a.log);
  const fill=a.fill?fillChannel(fd(a.fill),fd(a.reply)):null;
- const limit=Number(a['engine-memory-mib']||576),logBytes=Number(a['log-bytes']||1<<20);
+ const limit=Math.min(ENGINE_MEMORY_MIB,Number(a['engine-memory-mib']||ENGINE_MEMORY_MIB)),logBytes=Number(a['log-bytes']||1<<20);
  const known=String(a.packages||'').split(',').filter(name=>/^[A-Za-z0-9._-]{1,128}$/.test(name)).slice(0,64);
  let done=false;
  const finish=(outcome,log,pdf)=>{
@@ -172,10 +174,10 @@ async function main(){
  // throwing from a callback; they end the job with a result rather than a crash.
  process.on('uncaughtException',failed);process.on('unhandledRejection',failed);
  try{
-  const result=await compile({runtime:a.runtime,cache:a.cache,work:a.work,main:a.main,fill,budgetMs:Number(a['budget-ms']||600_000),packages:known});
+  const result=await compile({runtime:a.runtime,cache:a.cache,work:a.work,main:a.main,fill,budgetMs:Number(a['budget-ms']||600_000),packages:known,memoryMib:limit});
   const ok=result.success&&result.pdf?.byteLength>4&&String.fromCharCode(...result.pdf.subarray(0,5))==='%PDF-';
   let log=boundedLog(result,logBytes);
-  if(!ok&&result.memory)log=`${memoryMessage(limit)}\n\n${log}`;
+  if(!ok&&result.memory&&!log.includes(memoryMessage(limit)))log=`${memoryMessage(limit)}\n\n${log}`;
   finish({event:'result',status:ok?'success':result.memory?'memory':'tex_error',passes:result.passes,diagnostic:result.diagnostic||null,packages:result.packages.map(p=>p.name)},log,ok?result.pdf:null);
  }catch(error){failed(error);}
 }

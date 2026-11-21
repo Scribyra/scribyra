@@ -14,6 +14,7 @@ import { scribyraInstallTex } from './tex-runtime.mjs';
 import {patchRuntimeDownload} from './runtime-download-observation.mjs';
 import {patchCompilerWorker} from './patch-compiler-worker.mjs';
 import {scribyraTexPasses} from './tex-passes.mjs';
+import {scribyraHeapBytes,scribyraPatchMemory,scribyraWasmWithMemory} from './wasm-memory.mjs';
 
 // Small, reproducible fixes to the pinned 1.4.1 wrapper, not the WASM engine.
 // Fail on unexpected upstream changes rather than silently applying half a fix.
@@ -73,6 +74,18 @@ export async function patchBusytex() {
 
 `+source.slice(stop);
   }
+  // The engine's memory ceiling (scripts/wasm-memory.mjs): the worker passes the limit it
+  // chose (self.scribyraMemoryBytes); the module's declared maximum is rewritten as it streams
+  // in and the glue's heap ceiling follows Module.scribyraHeapMax.
+  const fetchWasm="return WebAssembly.compileStreaming ? WebAssembly.compileStreaming(response) : response.arrayBuffer().then(WebAssembly.compile);";
+  const fetchLimited="return WebAssembly.compileStreaming ? scribyraWasmWithMemory(response, this.scribyra_heap_max).then(limited => WebAssembly.compileStreaming(limited)) : response.arrayBuffer().then(bytes => WebAssembly.compile(scribyraPatchMemory(new Uint8Array(bytes), this.scribyra_heap_max / 65536)));";
+  const heapAt="        this.wasm_module_promise = fetch(busytex_wasm).then(response => {",heapSet="        this.scribyra_heap_max = scribyraHeapBytes(self.scribyraMemoryBytes);\n";
+  if(!source.includes(fetchLimited)){
+    if(source.split(fetchWasm).length!==2||source.split(heapAt).length!==2)throw new Error('Unexpected BusyTeX module loading; cannot apply the memory limit.');
+    source=source.replace(fetchWasm,fetchLimited).replace(heapAt,heapSet+heapAt);
+  }
+  const moduleAt="            noInitialRun: true,\n",moduleSet="            scribyraHeapMax: this.scribyra_heap_max,\n";
+  if(!source.includes(moduleSet)){if(source.split(moduleAt).length!==2)throw new Error('Unexpected BusyTeX module options.');source=source.replace(moduleAt,moduleAt+moduleSet);}
   // Which TeX files the engine already has (bundled tree, installed packages), by name, so
   // packages a project names are installed before the first pass only when they are missing.
   const presentAt="    async write_texlive_remote_files(files) {";
@@ -107,7 +120,7 @@ export async function patchBusytex() {
   for(const[before,after]of bridge){if(source.includes(before))source=source.replace(before,after);else if(!source.includes(after))throw new Error('Unexpected Biber project bridge.');}
 
   const begin='// BEGIN SCRIBYRA VIRTUAL FS GUARD',end='// END SCRIBYRA VIRTUAL FS GUARD';
-  const guard=`${begin}\n${scribyraProjectWrites.toString()}\n${scribyraInstallTex.toString()}\n${scribyraTexPasses.toString()}\n${end}\n`;
+  const guard=`${begin}\n${scribyraProjectWrites.toString()}\n${scribyraInstallTex.toString()}\n${scribyraTexPasses.toString()}\n${scribyraHeapBytes.toString()}\n${scribyraPatchMemory.toString()}\n${scribyraWasmWithMemory.toString()}\n${end}\n`;
   if(source.startsWith(begin)){const stop=source.indexOf(end);if(stop<0)throw new Error('Invalid filesystem guard patch.');source=source.slice(stop+end.length).replace(/^\n/,'');}
   source=guard+source;
   new Script(source,{filename:path});
@@ -121,6 +134,10 @@ export async function patchBusytex() {
     if (engine.split(fetchStart).length !== 2) throw new Error('Unexpected BusyTeX missing-file hook');
     engine = engine.replace(fetchStart, hook);
   }
+  // Heap growth stops at the limit the pipeline chose (scripts/wasm-memory.mjs), which matches
+  // the maximum it declared for the module; 576 MiB is the build's own MAXIMUM_MEMORY.
+  const heapMax="      603979776;\n  var _emscripten_get_heap_max",heapLimited="      (Module['scribyraHeapMax'] || 603979776);\n  var _emscripten_get_heap_max";
+  if(!engine.includes(heapLimited)){if(engine.split(heapMax).length!==2)throw new Error('Unexpected BusyTeX heap ceiling.');engine=engine.replace(heapMax,heapLimited);}
   new Script(engine, {filename:enginePath});
   await writeFile(enginePath, engine);
 
