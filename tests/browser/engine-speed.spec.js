@@ -40,9 +40,9 @@ test('a package found by a failing pass is installed before the first pass after
  await expect(page.locator('.cm-content')).toBeVisible();
  const again=await compile(page);
  expect(again.success,again.log.slice(0,3000)).toBe(true);expect(again.passes).toBe(2);expect(again.packages).toEqual(['dist--booktabs']);
- await page.getByRole('button',{name:'Show compilation log',exact:true}).click();
- await expect(page.locator('#live-compile-log')).toContainText('Installing the 1 TeX package this project used last time');
- await expect(page.locator('#live-compile-log')).not.toContainText('Missing packages are being fetched');
+ // Installed before the first pass from this device's package cache: no failing pass looked for it.
+ expect(again.log).toMatch(/TeX packages installed for this compile:\nbooktabs · bundled component · cache\n/);
+ expect(again.log.match(/^\$ luahblatex /gm)).toHaveLength(2);
 });
 
 // Lua strings of one MiB each, kept until the end of the run.

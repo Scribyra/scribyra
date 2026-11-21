@@ -21,7 +21,7 @@ const LABEL=process.env.SCRIBYRA_BENCH_LABEL||'browser',SCENARIOS=(process.env.S
 const RUNS=Number(process.env.SCRIBYRA_COMPILE_BENCHMARK_RUNS||1);
 function zip(doc,browserName){
  const files={},walk=dir=>{for(const name of readdirSync(dir)){const path=join(dir,name);if(statSync(path).isDirectory())walk(path);else files[`${doc}/${relative(join(DOCS,doc),path)}`]=new Uint8Array(readFileSync(path));}};
- walk(join(DOCS,doc));const path=join(OUT,LABEL,`${doc}-${browserName}.zip`);writeFileSync(path,zipSync(files));return path;
+ walk(join(DOCS,doc));mkdirSync(join(OUT,LABEL,browserName),{recursive:true});const path=join(OUT,LABEL,browserName,`${doc}.zip`);writeFileSync(path,zipSync(files));return path;
 }
 const saved=page=>expect(page.locator('.save-indicator')).toHaveText('Saved locally',{timeout:600000});
 async function compile(page){
