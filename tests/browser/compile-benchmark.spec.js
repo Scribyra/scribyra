@@ -19,9 +19,9 @@ const OUT=process.env.SCRIBYRA_COMPILE_BENCHMARK,DOCS=resolve(process.env.SCRIBY
 const NAMES=(process.env.SCRIBYRA_COMPILE_BENCHMARK_ONLY||'sample,article,beamer,tikz,thesis').split(',');
 const LABEL=process.env.SCRIBYRA_BENCH_LABEL||'browser',SCENARIOS=(process.env.SCRIBYRA_COMPILE_BENCHMARK_SCENARIOS||'cold,reopen,recompile').split(',');
 const RUNS=Number(process.env.SCRIBYRA_COMPILE_BENCHMARK_RUNS||1);
-function zip(doc){
+function zip(doc,browserName){
  const files={},walk=dir=>{for(const name of readdirSync(dir)){const path=join(dir,name);if(statSync(path).isDirectory())walk(path);else files[`${doc}/${relative(join(DOCS,doc),path)}`]=new Uint8Array(readFileSync(path));}};
- walk(join(DOCS,doc));const path=join(OUT,LABEL,`${doc}.zip`);writeFileSync(path,zipSync(files));return path;
+ walk(join(DOCS,doc));const path=join(OUT,LABEL,`${doc}-${browserName}.zip`);writeFileSync(path,zipSync(files));return path;
 }
 const saved=page=>expect(page.locator('.save-indicator')).toHaveText('Saved locally',{timeout:600000});
 async function compile(page){
@@ -42,14 +42,14 @@ async function importDoc(page,file){
  await expect(page.locator('.cm-content')).toBeVisible({timeout:120000});await saved(page);
 }
 async function reopen(page,doc){
- await page.reload();const card=page.getByRole('button',{name:new RegExp(`^${doc}.*files?`)}).first();await expect(card).toBeVisible({timeout:120000});
+ await page.reload();const card=page.getByRole('button',{name:new RegExp(` ${doc} \\d+ files?`)}).first();await expect(card).toBeVisible({timeout:120000});
  await card.click();await expect(page.locator('.cm-content')).toBeVisible({timeout:120000});await saved(page);
 }
 test.skip(!OUT,'set SCRIBYRA_COMPILE_BENCHMARK to run the compile benchmark');
 for(const doc of NAMES)test(`compile benchmark in the browser: ${doc}`,async({browser,browserName},info)=>{
  const options={baseURL:info.project.use.baseURL,viewport:info.project.use.viewport};
  test.setTimeout(6*3600000);mkdirSync(join(OUT,LABEL),{recursive:true});
- const file=zip(doc),runs=doc==='thesis'?Math.min(RUNS,3):RUNS,record=(cache,run,values)=>{const line={doc,engine:LABEL,browser:browserName,cache,run,...values};appendFileSync(join(OUT,`${LABEL}.jsonl`),JSON.stringify(line)+'\n');console.log(JSON.stringify(line));};
+ const file=zip(doc,browserName),runs=doc==='thesis'?Math.min(RUNS,3):RUNS,record=(cache,run,values)=>{const line={doc,engine:LABEL,browser:browserName,cache,run,...values};appendFileSync(join(OUT,`${LABEL}.jsonl`),JSON.stringify(line)+'\n');console.log(JSON.stringify(line));};
  let last;
  // Each cold run gets its own profile; the last one is kept for the warm scenarios.
  for(let i=0;i<runs;i++){

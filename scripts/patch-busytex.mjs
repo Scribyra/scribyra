@@ -13,6 +13,7 @@ import {scribyraBiberProject} from './biber-project.mjs';
 import { scribyraInstallTex } from './tex-runtime.mjs';
 import {patchRuntimeDownload} from './runtime-download-observation.mjs';
 import {patchCompilerWorker} from './patch-compiler-worker.mjs';
+import {scribyraTexPasses} from './tex-passes.mjs';
 
 // Small, reproducible fixes to the pinned 1.4.1 wrapper, not the WASM engine.
 // Fail on unexpected upstream changes rather than silently applying half a fix.
@@ -50,6 +51,28 @@ export async function patchBusytex() {
     if ((!count&&applied>=expected)||(after.includes(before)&&count===applied&&applied>=expected))continue;
     throw new Error('Unexpected BusyTeX wrapper version; cannot apply compilation fixes.');
   }
+  // Passes as latexmk decides them (scripts/tex-passes.mjs) instead of BusyTeX's fixed
+  // initial + bibliography + up to three reruns on log warnings + an extra final pass.
+  source=source.replace("return { exit_code: effective_exit_code, log };","return { exit_code: effective_exit_code, log, stdout };");
+  if(!source.includes('// SCRIBYRA PASSES')){
+    const start=source.indexOf("        let exit_code = 0;\n        let last_log = '';\n\n        ({ exit_code, log: last_log } = run(initial, this.error_messages_fatal));");
+    const stop=source.indexOf("        if (exit_code == 0 && dvi) {",start);
+    if(start<0||stop<0||!source.slice(start,stop).includes('this._needs_rerun(last_log)'))throw new Error('Unexpected BusyTeX pass loop; cannot apply the rerun policy.');
+    source=source.slice(0,start)+`        // SCRIBYRA PASSES: rerun only while a file LuaLaTeX reads changed (scripts/tex-passes.mjs).
+        let exit_code = 0;
+        let last_log = '';
+        const rerun_enabled = rerun === null ? true : rerun;
+        const scribyra_inputs = new Set(files.filter(f => f.contents != null).map(f => PATH.join(this.project_dir, f.path)));
+        const scribyra_bibliography = !bibtex ? null : bib_backend == 'biber' && this.biber != null
+            ? { kind: 'biber', bcf: tex_path.replace(/\\.tex$/i, '.bcf'), bbl: PATH.join(source_dir, bbl_path), run: () => this._run_biber(FS, tex_path, files, verbose_args_for('biber'), logs) }
+            : { kind: 'bibtex', aux: aux_path, bbl: PATH.join(source_dir, bbl_path), cmd: bibtex8_cmd };
+        const scribyra_index = (makeindex === null ? true : makeindex) ? { idx: idx_path, ind: PATH.join(source_dir, ind_path), cmd: makeindex_cmd } : null;
+        ({ exit_code, last_log } = await scribyraTexPasses({ FS, projectDir: this.project_dir, inputs: scribyra_inputs, run, tex: final_cmd, fatal: this.error_messages_fatal, all: this.error_messages_all, bibliography: scribyra_bibliography, index: scribyra_index,
+            consulted: () => ({ paths: new Set(Module.scribyraInputs || []), truncated: !Module.scribyraInputs || !!Module.scribyraInputsTruncated, missing: [...Module.scribyraMissing.values()].map(entry => String(entry.name)) }),
+            maxPasses: rerun_enabled ? this.max_tex_passes + 2 : 1, print: this.print }));
+
+`+source.slice(stop);
+  }
   // Undo the earlier info-only recorder switch: authoritative input evidence is
   // collected at successful virtual-FS opens, including Lua's own file reads.
   for(const engine of ['luatex','luahbtex'])source=source.replace(`${engine}: ['-kpathsea-debug', '32', '-recorder']`,`${engine}: ['-kpathsea-debug', '32']`);
@@ -66,7 +89,7 @@ export async function patchBusytex() {
   for(const[before,after]of bridge){if(source.includes(before))source=source.replace(before,after);else if(!source.includes(after))throw new Error('Unexpected Biber project bridge.');}
 
   const begin='// BEGIN SCRIBYRA VIRTUAL FS GUARD',end='// END SCRIBYRA VIRTUAL FS GUARD';
-  const guard=`${begin}\n${scribyraProjectWrites.toString()}\n${scribyraInstallTex.toString()}\n${end}\n`;
+  const guard=`${begin}\n${scribyraProjectWrites.toString()}\n${scribyraInstallTex.toString()}\n${scribyraTexPasses.toString()}\n${end}\n`;
   if(source.startsWith(begin)){const stop=source.indexOf(end);if(stop<0)throw new Error('Invalid filesystem guard patch.');source=source.slice(stop+end.length).replace(/^\n/,'');}
   source=guard+source;
   new Script(source,{filename:path});

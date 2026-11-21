@@ -35,10 +35,12 @@ async function one(){
   copyFileSync(source,target);
  };
  const started=performance.now();let result,error;
- try{result=await compile({runtime,cache:job.cache,work:job.work,main:'main.tex',fill,packages:job.packages||undefined,budgetMs:1_800_000});}
+ const notes=[];try{result=await compile({runtime,cache:job.cache,work:job.work,main:'main.tex',fill,onOutput:entry=>{if(entry.kind==='note'||entry.kind==='step')notes.push(entry.text);},packages:job.packages||undefined,budgetMs:1_800_000});}
  catch(e){error=e;}
+ finally{if(job.pdf)writeFileSync(job.pdf.replace(/\.pdf$/,'.log'),`${notes.join('\n')}\n\n${result?.log??error?.stack??''}`);}
  const wallMs=performance.now()-started,maxRssKiB=process.resourceUsage().maxRSS;
  if(result?.success&&job.pdf)writeFileSync(job.pdf,result.pdf);
+
  process.stdout.write(JSON.stringify({status:result?.success?'Success':error?'Error':'Failure',passes:result?.passes??error?.passes??0,wallMs,maxRssMiB:Math.round(maxRssKiB/1024),engineMemoryMiB:result?.engineMemoryBytes?Math.round(result.engineMemoryBytes/1048576):null,packages:(result?.packages||[]).map(p=>p.name),error:error?String(error.message||error).slice(0,500):result?.success?undefined:result?.diagnostic})+'\n');
  process.exit(0);
 }
