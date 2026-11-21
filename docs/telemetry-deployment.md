@@ -298,11 +298,11 @@ Never place secret values in Nix expressions/the Nix store.
 Grafana management credentials belong only to the operator's acceptance process.
 The launcher generates the separate ingress-only token at
 `/var/lib/scribyra-ingestion/ingress.token` with mode 0600; distribute it privately
-to explicitly authorized browser users and the protected CI file variable.
+to explicitly authorized browser users.
 This ingress currently has one shared ingest token, not per-user/CI identities.
-Source fields classify activity; authenticated GitLab artifact checks establish
-actual CI provenance separately. Decide whether a separate CI ingress/token is
-needed before widening access.
+Source fields classify activity; on their own they do not prove that a CI job
+ran. Decide whether a separate CI ingress/token is needed before giving CI a
+token.
 
 After selecting the host flake and installing the DNS A/AAAA records:
 
@@ -316,55 +316,33 @@ test "$(curl --silent --output /dev/null --write-out '%{http_code}' "https://$IN
 ```
 
 Define `HOST_FLAKE`, `INGEST_HOST` and `APP_ORIGIN` explicitly in the architect's
-shell; none is inferred by the app. Verify DNS TXT ownership for the private app
-domains separately with [domain operations](pages-domains.md). ACME ingestion
-certificates and those Pages domain certificates are independent.
+shell; none is inferred by the app. The app domains' DNS records are in
+[delivery](delivery.md#hosting). ACME ingestion certificates and the GitHub
+Pages domain certificates are independent.
 
 ## Continuous CI publication
 
-The CI suite (`.github/workflows/suite.yml`) runs `ci-telemetry.py` for build, Rust,
-JavaScript and Chromium Pages suites; on GitHub no ingress variables are set, so
-it keeps the summaries as one-day artifacts. The variable commands below are for
-the former GitLab project. With both variables present the helper
-publishes each closed-schema summary to `/v1/runs`. Without them it saves safe
-local artifacts. A failed suite still publishes its summary; later suites after
-that failure are not claimed to have run. Unavailable ingestion is best effort
-and does not change the suite's exit status. Preserve maintainer-only access,
-one-day expiry and the disabled latest-successful-artifact retention override.
-Never upload raw stdout, traces, screenshots, tokens or document fixtures.
+Not enabled. The CI suite (`.github/workflows/suite.yml`) runs `ci-telemetry.py`
+for the build, Rust, JavaScript and Chromium Pages suites. The job receives no
+secrets and no ingress variables, so nothing is published: each closed-schema
+summary is uploaded as a workflow artifact (`telemetry-<attempt>`) and kept for
+one day. A failed suite still writes its summary; later suites after that
+failure are not claimed to have run. The repository is public, so any signed-in
+GitHub user can read these artifacts. They hold counts, outcome and revision
+only. Never upload raw stdout, traces, screenshots, tokens or document fixtures.
 
-The architect can create the two **protected, production-scoped** variables with
-the following commands. `GITLAB_OPERATOR_CURL_CONFIG` is an operator-owned 0600
-curl configuration containing the authentication header; `CI_INGEST_TOKEN_FILE`
-is an owner-only copy of the ingress-only token, without a trailing newline.
-The commands deliberately discard GitLab's response, which contains variable
-values. They create variables once; use GitLab's protected variable editor for
-later rotation or an explicit PUT to the individual variable endpoint.
+`ci-telemetry.py` publishes each summary to `/v1/runs` only when both
+`SCRIBYRA_CI_INGRESS_ENDPOINT` and `SCRIBYRA_CI_INGRESS_TOKEN_FILE` are set, and
+stops if only one is. The token file must be owner-only. Unavailable ingestion is
+best effort and does not change the suite's exit status. Nothing sets these on
+GitHub Actions. Setting them would hand the ingest token to the job that runs
+`npm` and the build scripts, which [delivery](delivery.md#workflows) rules out,
+so publication from GitHub needs its own design first. A passing operator import
+alone does not prove continuous direct publication.
 
-```sh
-test -n "$GITLAB_PROJECT_ID" && test -n "$INGEST_HOST"
-curl --fail --silent --show-error --config "$GITLAB_OPERATOR_CURL_CONFIG" --request POST --form 'key=SCRIBYRA_CI_INGRESS_ENDPOINT' --form "value=https://$INGEST_HOST/v1/runs" --form 'protected=true' --form 'environment_scope=production' --output /dev/null "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/variables"
-curl --fail --silent --show-error --config "$GITLAB_OPERATOR_CURL_CONFIG" --request POST --form 'key=SCRIBYRA_CI_INGRESS_TOKEN_FILE' --form "value=<$CI_INGEST_TOKEN_FILE" --form 'variable_type=file' --form 'protected=true' --form 'masked=true' --form 'environment_scope=production' --output /dev/null "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/variables"
-curl --fail --silent --show-error --config "$GITLAB_OPERATOR_CURL_CONFIG" --request POST --form "ref=$DEFAULT_BRANCH" --output /dev/null "https://gitlab.com/api/v4/projects/$GITLAB_PROJECT_ID/pipeline"
-```
-
-Use the protected default branch after the architect merges; no push/deployment
-was performed locally. Confirm that the runner-created file is owner-only (the
-publisher rejects broader permissions), all four job summaries report
-`delivery: accepted`, and the exact run IDs/revision appear in Grafana. Then run
-the authenticated artifact/retained-query check, once for each completed deploy
-job, following [CI evidence](telemetry-ci-evidence.md):
-
-```sh
-nix develop -c node --test tests/telemetry-ci-storage.test.mjs
-SCRIBYRA_TEST_CI_READBACK_ONLY=1 nix develop -c node --test tests/telemetry-ci-storage.test.mjs
-```
-
-These commands require explicit `SCRIBYRA_TEST_STORAGE_STATE`, port base,
-`SCRIBYRA_TEST_CI_JOB` and private GitLab token-file binding as documented there;
-Cloud readback also requires its separate Grafana URL and management binding.
-A passing operator import alone does not prove continuous direct publication:
-read the CI job's delivery result and query its original IDs before importing.
+The authenticated artifact and retained-query check made while the project was
+on GitLab is recorded in [CI evidence](telemetry-ci-evidence.md). It has no
+GitHub Actions equivalent.
 
 ## Acceptance, restart and upgrades
 
