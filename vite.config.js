@@ -15,7 +15,7 @@ try{identity.revision=execFileSync('git',['rev-parse','HEAD'],{encoding:'utf8',s
 // The deployed release name (web-<pipeline IID>, or dev-<pipeline IID>-<short sha> for
 // the staging site), so an open tab can tell a newer deployment from its own. Builds
 // outside a pipeline carry none.
-const releaseName=process.env.SCRIBYRA_RELEASE||(process.env.CI_PIPELINE_IID?`web-${process.env.CI_PIPELINE_IID}`:null);
+const releaseName=process.env.SCRIBYRA_RELEASE||null;
 if(releaseName!==null&&!/^web-[1-9]\d{0,11}$|^dev-[1-9]\d{0,11}-[a-f0-9]{7,40}$/.test(releaseName))throw new Error('SCRIBYRA_RELEASE must look like web-<number> or dev-<number>-<short sha>.');
 // Staging builds never carry a telemetry collector address.
 if(releaseName?.startsWith('dev-')&&Object.keys(process.env).some(name=>name.startsWith('VITE_TELEMETRY_')))throw new Error('Staging builds must not configure telemetry.');

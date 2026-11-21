@@ -77,7 +77,6 @@ jobs:
           node scripts/staging-pages.mjs check .cache/staging
       - name: Push to the staging repository
         env:
-          SCRIBYRA_PAGES_FORGE: github
           SCRIBYRA_STAGING_DEPLOY_KEY: ${{ secrets.SCRIBYRA_STAGING_DEPLOY_KEY }}
           SCRIBYRA_STAGING_REPOSITORY: git@github.com:${{ github.repository_owner }}/scribyra-staging.git
           CI_COMMIT_SHA: ${{ github.sha }}

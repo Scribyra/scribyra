@@ -1,10 +1,9 @@
-// Generates the changelog for a release merge request (dev → main): every merge
+// Generates the changelog for a release pull request (dev → main): every pull
 // request merged into dev since the latest web-<N> release tag, from the merge
-// commits. GitLab writes "Merge branch 'x' into 'dev'", then the MR title, then "See
-// merge request group/project!N"; GitHub writes "Merge pull request #N from owner/x",
-// then the pull request title (repository setting: merge commit message = pull
-// request title). A range may hold both kinds around the move. Read-only: it only
-// runs git log/tag.
+// commits. GitHub writes "Merge pull request #N from owner/x", then the pull request
+// title (repository setting: merge commit message = pull request title). Any other
+// commit on dev's first-parent history is listed as a direct commit. Read-only: it
+// only runs git log/tag.
 //
 //   node scripts/release-changelog.mjs [--from web-N] [--to origin/dev] [--main origin/main] [--tests FILE]
 import {execFileSync} from 'node:child_process';
@@ -18,21 +17,13 @@ export function latestRelease(tags){
  return best;
 }
 const TRAILER=/^(Co-authored-by|Signed-off-by|Reviewed-by|Approved-by|Merged-by):/i;
-// One merge commit → {branch, target, title, mr, ref} or null for anything else. A
-// GitHub merge commit does not name its target branch: `target` is the branch whose
-// first-parent history is being read.
+// One merge commit → {branch, target, title, mr, ref} or null for anything else. The
+// merge commit does not name its target branch: `target` is the branch whose
+// first-parent history is being read. `mr` is the pull request number.
 export function parseMergeCommit(subject,body='',{target=null}={}){
- const pull=/^Merge pull request #(\d+) from [^/\s]+\/(\S+)$/.exec(subject.trim());
- if(pull){
-  const title=body.split('\n').map(line=>line.trim()).find(line=>line&&!TRAILER.test(line))||pull[2];
-  return{branch:pull[2],target,title,mr:Number(pull[1]),ref:`#${pull[1]}`};
- }
- const match=/^Merge branch '([^']+)' into '([^']+)'$/.exec(subject.trim());if(!match)return null;
- const lines=body.split('\n').map(line=>line.trim());
- const reference=lines.map(line=>/^See merge request (\S+)?!(\d+)$/.exec(line)).find(Boolean);
- const title=lines.find(line=>line&&!/^See merge request /.test(line)&&!TRAILER.test(line))||match[1];
- const mr=reference?Number(reference[2]):null;
- return{branch:match[1],target:match[2],title,mr,ref:mr===null?null:`!${mr}`};
+ const pull=/^Merge pull request #(\d+) from [^/\s]+\/(\S+)$/.exec(subject.trim());if(!pull)return null;
+ const title=body.split('\n').map(line=>line.trim()).find(line=>line&&!TRAILER.test(line))||pull[2];
+ return{branch:pull[2],target,title,mr:Number(pull[1]),ref:`#${pull[1]}`};
 }
 export function category(branch){
  if(/^feature\//.test(branch))return'Features';
@@ -46,18 +37,18 @@ export function renderChangelog(entries,{since=null,target='dev',tests=null,dire
  for(const entry of entries){if(entry.target!==target)continue;const name=category(entry.branch);if(!groups.has(name))groups.set(name,[]);groups.get(name).push(entry);}
  if(direct.length)groups.set('Direct commits',direct.map(title=>({title,mr:null,branch:null})));
  const out=[`## Changes since ${since||'the first commit'}`,''];
- if(!groups.size)out.push('No merge requests were merged since the last release.','');
+ if(!groups.size)out.push('No pull requests were merged since the last release.','');
  for(const name of ORDER){
   const items=groups.get(name);if(!items)continue;
   out.push(`### ${name}`,'');
   for(const item of items){
-   const ref=item.ref||(item.mr?`!${item.mr}`:null);
+   const ref=item.ref||(item.mr?`#${item.mr}`:null);
    if(item.branch==='main'){out.push(`- Production fixes merged back into ${target}${ref?` (${ref})`:''}`);continue;}
    out.push(`- ${item.title}${ref?` (${ref})`:''}`);
   }
   out.push('');
  }
- out.push('## Test results','',tests?tests.trim():'_Link the passing pipeline (or workflow run) and any manual checks here._','');
+ out.push('## Test results','',tests?tests.trim():'_Link the passing workflow run and any manual checks here._','');
  return out.join('\n');
 }
 

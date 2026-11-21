@@ -4,10 +4,10 @@ The presentation uses `https://scribyra.com/`; the application uses
 `https://app.scribyra.com/`. Both serve the same release from two GitHub Pages
 sites (`app.scribyra.com`: the `Scribyra/scribyra` repository; `scribyra.com`:
 `Scribyra/scribyra-site`), and the generated host router opens the appropriate
-shell. The application also stays available at its address from before the custom
-domains, `https://scribyra-aca39a.gitlab.io/app/` (the project's former GitLab
-Pages deployment). Pages settings, the Cloudflare DNS records and certificates are
-in [delivery](delivery.md), "Hosting".
+shell. The application's address from before the custom domains,
+`https://scribyra-aca39a.gitlab.io/app/` (the project's former GitLab Pages
+deployment), now redirects to a GitLab sign-in. Pages settings, the Cloudflare DNS
+records and certificates are in [delivery](delivery.md), "Hosting".
 
 ## Mail addresses
 
@@ -39,9 +39,10 @@ app, compilation and offline reload at `https://app.scribyra.com/`. Pages needs 
 sign-in. Release and environment links now use that address. The hostname routing is already present in the artifact
 so it can be checked before promoting those links.
 
-Projects are browser-local and scoped to their origin. Export a project ZIP from
-the old address and import it at the new address; changing domains does not move
-browser storage. Preserve the old URL for that migration.
+Projects are browser-local and scoped to their origin; changing domains does not
+move browser storage. A project still stored under the old address has to be
+exported there as a ZIP and imported at the new address, which is only possible
+while the old address serves the app. It currently asks for a GitLab sign-in.
 
 Browser coverage in `tests/browser/pages-domains.spec.js` uses two loopback
 hostnames to exercise the real root app, compiler, and offline service worker.

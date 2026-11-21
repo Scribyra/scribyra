@@ -325,9 +325,12 @@ No publication is enabled by default. To publish, add an explicit HTTPS
 loopback HTTP is accepted for local validation. The token file must contain the
 64-hex ingest token and have owner-only permissions. Credentials never enter the
 artifact. Transport has three finite attempts and does not override the suite exit
-status. `GITLAB_CI=true` requires numeric `CI_PROJECT_ID`, `CI_PIPELINE_ID` and
-`CI_JOB_ID`; it marks reported context, not authenticated proof of CI execution.
-CI integration and Grafana test views are described below; live GitLab execution remains unverified.
+status. In CI a run needs its full numeric identity or it stops. On GitHub
+Actions (`GITHUB_ACTIONS=true`) that is `GITHUB_REPOSITORY_ID`, `GITHUB_RUN_ID`
+and `SCRIBYRA_CI_JOB_ID`, which the workflow exports because Actions has no
+job-id variable. This marks reported context, not authenticated proof of CI
+execution.
+CI integration and Grafana test views are described below.
 
 ### Test dashboard, safe CI artifacts and stored verification
 
@@ -342,23 +345,26 @@ Sparse counter stats use the latest sample in the selected range. Retained
 readback queries use the recorded observation time; querying a long-idle run at
 now can otherwise yield no series from Prometheus's instant lookback.
 
-The Pages job uses `scripts/ci-telemetry.py` for build/Rust/JavaScript and a
-Chromium `browser-pages` smoke check against the assembled Pages tree. The
-separate browser cache follows `package-lock.json` using GitLab's supported
-[lockfile cache key](https://docs.gitlab.com/ci/caching/); the existing compiler/
-toolchain cache key is preserved to avoid unnecessary TeX downloads. The helper
-starts/stops a quiet loopback HTTP server for the latter. It retains safe summaries
-as maintainer-only, one-day JSON/JUnit artifacts, including failures. Build/native
-prerequisites must succeed before the test wrappers run. Configure these optional
-GitLab variables only when a persistent authenticated ingress is ready:
+The `suite` workflow (`.github/workflows/suite.yml`) uses
+`scripts/ci-telemetry.py` for build/Rust/JavaScript and a Chromium
+`browser-pages` smoke check against the assembled Pages tree. The helper
+starts/stops a quiet loopback HTTP server for the latter. The npm cache follows
+`package-lock.json`; the BusyTeX asset cache has its own key, so a dependency
+change does not download the compiler again. The workflow uploads the safe
+summaries as one-day JSON/JUnit artifacts, including after failures. The
+repository is public, so any signed-in GitHub user can read them. Build/native
+prerequisites must succeed before the test wrappers run. The helper publishes
+only when both of these environment variables are set, and the GitHub workflow
+sets neither (see `docs/telemetry-deployment.md`, "Continuous CI publication"):
 
 - `SCRIBYRA_CI_INGRESS_ENDPOINT`: the HTTPS `/v1/runs` destination.
-- `SCRIBYRA_CI_INGRESS_TOKEN_FILE`: a protected/masked **file-type** variable whose
-  file contains the private 64-hex ingest token with owner-only permissions.
+- `SCRIBYRA_CI_INGRESS_TOKEN_FILE`: the path of a file that contains the private
+  64-hex ingest token, with owner-only permissions.
 
 Both variables are required together. No destination is inferred and no default
 remote collection is enabled. A failed collector cannot change suite exit status.
-No actual GitLab pipeline execution is claimed until its job/artifacts are checked.
+Reported CI context does not prove that a workflow run happened until the run
+itself is checked.
 
 For repeatable local stored-query checks, start `telemetry-stack.py --grafana`,
 then run with Rust tools available on PATH:
@@ -375,7 +381,9 @@ For the rendered link check, use the same state variable with
 `npx playwright test tests/browser/telemetry-runs.spec.js --project=chromium`.
 Raw test output and credential-bearing browser traces are not retained.
 
-Self-hosted Loki provisions the two named run links automatically. On managed
+Self-hosted Loki provisions the two named run links automatically. The
+"CI job" link opens the GitHub Actions job a CI record names; its summaries are
+on that run's page for one day. On managed
 Grafana, dashboard deployment needs no datasource edit. Optional
 `telemetry-grafana.py --apply --run-links` also needs Loki datasource-write access;
 the current token's PUT is denied with HTTP 403, so Cloud log shortcuts remain
@@ -386,8 +394,8 @@ preserved. The correlated traces panel and safe run IDs remain available.
 
 Application alerts exclude local tests, CI and synthetic assertions. The separate
 CI rule requires a typed run ID and counts failed CI suite records from the last
-hour. It reports received metadata; confirm the actual GitLab job/artifact before
-claiming a pipeline ran. Failure rules and overview failure counts use safe Loki
+hour. It reports received metadata; confirm the actual workflow run and its
+artifacts before claiming a CI run happened. Failure rules and overview failure counts use safe Loki
 records, including a first sparse observation that a metric increase could miss.
 
 With an explicitly started private test stack, verify source isolation and the

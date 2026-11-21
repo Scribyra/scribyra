@@ -48,10 +48,9 @@ jobs:
       CARGO_INCREMENTAL: '0'
       CARGO_PROFILE_DEV_DEBUG: '0'
       CARGO_TERM_COLOR: never
-      # Read by the build scripts under their GitLab names (scripts/ci-pages.mjs,
-      # scripts/build-pages.mjs, scripts/deploy-staging.mjs). CI_COMMIT_SHA is set
-      # after checkout. CI_PIPELINE_IID stays unset: the release label comes from
-      # SCRIBYRA_RELEASE.
+      # Read by the build scripts (scripts/ci-pages.mjs, scripts/build-pages.mjs,
+      # scripts/deploy-staging.mjs); the names date from GitLab. CI_COMMIT_SHA is set
+      # after checkout. The release label comes from SCRIBYRA_RELEASE.
       CI_PIPELINE_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       # The image ships about 30 GB of toolchains this job never uses; the job needs

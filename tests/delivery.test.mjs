@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {latestRelease,parseMergeCommit,renderChangelog,collect} from '../scripts/release-changelog.mjs';
-import {pendingCommits,backMergeRequest,githubPullRequest,run,MISSING_TOKEN_EXIT} from '../scripts/back-merge.mjs';
+import {pendingCommits,githubPullRequest,run,MISSING_TOKEN_EXIT} from '../scripts/back-merge.mjs';
 import {stagingHtml,prepare,check,NOINDEX,BANNER_ATTRIBUTE,ROBOTS} from '../scripts/staging-pages.mjs';
 import {publish,decodeKey,sshCommand,commitMessage,target} from '../scripts/deploy-staging.mjs';
 import {isStagingRelease,stagingMarker,STAGING_TITLE_PREFIX} from '../web/staging-marker.js';
@@ -15,35 +15,33 @@ test('the latest release is the highest web-<N>, not the newest string',()=>{
  assert.equal(latestRelease(['web-9','web-12','web-100','dev-5','web-0','notes']),'web-100');
  assert.equal(latestRelease([]),null);
 });
-test('GitLab merge commits become changelog entries',()=>{
- assert.deepEqual(parseMergeCommit("Merge branch 'feature/outline' into 'dev'",'Add the outline panel\n\nLonger text.\n\nSee merge request urundead-labs/scribyra!42\n'),{branch:'feature/outline',target:'dev',title:'Add the outline panel',mr:42,ref:'!42'});
+test('the changelog groups entries by branch kind and lists only merges into dev',()=>{
  assert.equal(parseMergeCommit('Fix a typo'),null);
- assert.equal(parseMergeCommit("Merge branch 'feature/x' into 'dev'",'').title,'feature/x');
- const text=renderChangelog([{branch:'feature/a',target:'dev',title:'A',mr:1},{branch:'hotfix/b',target:'main',title:'B',mr:2},{branch:'main',target:'dev',title:'x',mr:3},{branch:'chore/c',target:'dev',title:'C',mr:null}],{since:'web-7',tests:'Pipeline #9 passed'});
- assert.match(text,/## Changes since web-7/);assert.match(text,/### Features\n\n- A \(!1\)/);assert.doesNotMatch(text,/- B/,'merges into other branches are not listed');
- assert.match(text,/### Fixes from production\n\n- Production fixes merged back into dev \(!3\)/);assert.match(text,/### Other changes\n\n- C\n/);assert.match(text,/## Test results\n\nPipeline #9 passed/);
+ assert.equal(parseMergeCommit("Merge branch 'feature/x' into 'dev'",'T'),null,'only pull request merges are entries');
+ const text=renderChangelog([{branch:'feature/a',target:'dev',title:'A',mr:1},{branch:'hotfix/b',target:'main',title:'B',mr:2},{branch:'main',target:'dev',title:'x',mr:3},{branch:'chore/c',target:'dev',title:'C',mr:null}],{since:'web-7',tests:'Run #9 passed'});
+ assert.match(text,/## Changes since web-7/);assert.match(text,/### Features\n\n- A \(#1\)/);assert.doesNotMatch(text,/- B/,'merges into other branches are not listed');
+ assert.match(text,/### Fixes from production\n\n- Production fixes merged back into dev \(#3\)/);assert.match(text,/### Other changes\n\n- C\n/);assert.match(text,/## Test results\n\nRun #9 passed/);
 });
-test('GitHub merge commits become changelog entries, alongside GitLab ones',()=>{
+test('pull request merge commits become changelog entries',()=>{
  assert.deepEqual(parseMergeCommit('Merge pull request #42 from scribyra/feature/outline','Add the outline panel\n\nCo-authored-by: A <a@example.invalid>\n',{target:'dev'}),{branch:'feature/outline',target:'dev',title:'Add the outline panel',mr:42,ref:'#42'});
  assert.equal(parseMergeCommit('Merge pull request #7 from someone/hotfix/x','',{target:'dev'}).title,'hotfix/x');
  assert.equal(parseMergeCommit('Merge pull request #7 from someone/main','Back-merge main into dev: x',{target:'dev'}).branch,'main');
- assert.equal(parseMergeCommit("Merge branch 'feature/x' into 'dev'",'T\n\nSee merge request g/p!3').ref,'!3');
- const text=renderChangelog([{branch:'feature/a',target:'dev',title:'A',mr:9,ref:'!9'},{branch:'feature/b',target:'dev',title:'B',mr:12,ref:'#12'},{branch:'main',target:'dev',title:'x',mr:13,ref:'#13'}],{since:'web-95'});
- assert.match(text,/### Features\n\n- A \(!9\)\n- B \(#12\)/);assert.match(text,/- Production fixes merged back into dev \(#13\)/);
+ const text=renderChangelog([{branch:'feature/a',target:'dev',title:'A',mr:9,ref:'#9'},{branch:'feature/b',target:'dev',title:'B',mr:12,ref:'#12'},{branch:'main',target:'dev',title:'x',mr:13,ref:'#13'}],{since:'web-95'});
+ assert.match(text,/### Features\n\n- A \(#9\)\n- B \(#12\)/);assert.match(text,/- Production fixes merged back into dev \(#13\)/);
 });
-test('the changelog reads GitHub pull requests merged into dev',async()=>{
+test('the changelog reads a pull request merged into dev',async()=>{
  const{dir,git}=await repository();
  try{
   git('checkout','-q','-b','feature/one','dev');git('commit','-q','--allow-empty','-m','work');git('checkout','-q','dev');
-  git('merge','-q','--no-ff','feature/one','-m','Merge pull request #21 from scribyra/feature/one','-m','First feature on GitHub');
+  git('merge','-q','--no-ff','feature/one','-m','Merge pull request #21 from scribyra/feature/one','-m','First feature');
   const previous=process.cwd();process.chdir(dir);
-  try{const{entries}=collect({to:'dev',main:'main'});assert.deepEqual(entries,[{branch:'feature/one',target:'dev',title:'First feature on GitHub',mr:21,ref:'#21'}]);}
+  try{const{entries}=collect({to:'dev',main:'main'});assert.deepEqual(entries,[{branch:'feature/one',target:'dev',title:'First feature',mr:21,ref:'#21'}]);}
   finally{process.chdir(previous);}
  }finally{await rm(dir,{recursive:true,force:true});}
 });
-test('on GitHub the back-merge opens one pull request with GITHUB_TOKEN, labels it, and reuses an open one',async()=>{
+test('the back-merge opens one pull request with GITHUB_TOKEN, labels it, and reuses an open one',async()=>{
  const git=args=>{if(args[0]==='merge-base'||args[0]==='diff')throw Error('differs');if(args[0]==='log'&&args[1]==='-1')return'Merge pull request #5 from scribyra/hotfix/crash\n';if(args[0]==='log')return'abc Fix\n';return'';};
- const env={GITHUB_ACTIONS:'true',GITHUB_SHA:'f'.repeat(40),GITHUB_REPOSITORY:'scribyra/scribyra',GITHUB_API_URL:'https://api.github.example.invalid',GITHUB_SERVER_URL:'https://github.example.invalid',GITHUB_RUN_ID:'77',GITHUB_TOKEN:'t',SCRIBYRA_BACKMERGE_ASSIGNEES:'paul, bad name ,architect'};
+ const env={GITHUB_SHA:'f'.repeat(40),GITHUB_REPOSITORY:'scribyra/scribyra',GITHUB_API_URL:'https://api.github.example.invalid',GITHUB_SERVER_URL:'https://github.example.invalid',GITHUB_RUN_ID:'77',GITHUB_TOKEN:'t',SCRIBYRA_BACKMERGE_ASSIGNEES:'paul, bad name ,architect'};
  const calls=[],logs=[];
  const fetcher=async(url,options={})=>{calls.push({url,method:options.method||'GET',auth:options.headers?.Authorization,body:options.body?JSON.parse(options.body):null});
   if(url.endsWith('/pulls')&&options.method==='POST')return{ok:true,status:201,json:async()=>({number:9,html_url:'https://x/pull/9'})};
@@ -69,12 +67,12 @@ async function repository(){
  git('init','-q','-b','main');git('commit','-q','--allow-empty','-m','root');git('tag','web-3');git('branch','dev');
  return{dir,git};
 }
-test('the changelog reads merge requests merged into dev since the last release',async()=>{
+test('the changelog reads every pull request merged into dev since the last release',async()=>{
  const{dir,git}=await repository();
  try{
   for(const[name,title,mr]of [['feature/one','First feature',11],['feature/two','Second feature',12]]){
    git('checkout','-q','-b',name,'dev');git('commit','-q','--allow-empty','-m','work on '+name);git('checkout','-q','dev');
-   git('merge','-q','--no-ff',name,'-m',`Merge branch '${name}' into 'dev'`,'-m',title,'-m',`See merge request urundead-labs/scribyra!${mr}`);
+   git('merge','-q','--no-ff',name,'-m',`Merge pull request #${mr} from scribyra/${name}`,'-m',title);
   }
   const previous=process.cwd();process.chdir(dir);
   try{const{since,entries,direct}=collect({to:'dev',main:'main'});assert.equal(since,'web-3');assert.deepEqual(entries.map(entry=>entry.mr),[11,12]);assert.deepEqual(direct,[]);}
@@ -98,24 +96,16 @@ test('a back-merge is needed only when main has changes dev lacks',async()=>{
   assert.deepEqual(pendingCommits(g,'main','dev'),[]);
  }finally{await rm(dir,{recursive:true,force:true});}
 });
-test('the back-merge request never deletes main and never squashes',()=>{
- const body=backMergeRequest({subject:"Merge branch 'hotfix/crash' into 'main'",commits:['abc123 Fix the crash'],assignees:[7]});
- assert.equal(body.source_branch,'main');assert.equal(body.target_branch,'dev');assert.equal(body.remove_source_branch,false);assert.equal(body.squash,false);
- assert.deepEqual(body.assignee_ids,[7]);assert.match(body.description,/abc123 Fix the crash/);
-});
-test('the back-merge job opens one merge request, reuses an open one, and falls back without a token',async()=>{
+test('without a token the back-merge prints the manual command, and it does nothing when dev is current',async()=>{
  const git=args=>{if(args[0]==='merge-base'||args[0]==='diff')throw Error('differs');if(args[0]==='log'&&args[1]==='-1')return'Merge hotfix\n';if(args[0]==='log')return'abc Fix\n';return'';};
- const env={CI_COMMIT_SHA:'f'.repeat(40),CI_API_V4_URL:'https://gitlab.example.invalid/api/v4',CI_PROJECT_ID:'5',SCRIBYRA_BACKMERGE_TOKEN:'t'};
- const calls=[],logs=[];
- const fetcher=async(url,options={})=>{calls.push([url,options.method||'GET',options.headers?.['PRIVATE-TOKEN']]);return options.method==='POST'?{ok:true,json:async()=>({web_url:'https://x/mr/1'})}:{ok:true,json:async()=>[]};};
- assert.equal(await run({env,git,fetcher,log:line=>logs.push(line)}),0);
- assert.deepEqual(calls.map(call=>call[1]),['GET','POST']);assert.ok(calls.every(call=>call[2]==='t'));assert.match(logs.at(-1),/Opened back-merge/);
- const reuse=async()=>({ok:true,json:async()=>[{web_url:'https://x/mr/0'}]});
- assert.equal(await run({env,git,fetcher:reuse,log:line=>logs.push(line)}),0);assert.match(logs.at(-1),/already open/);
- assert.equal(await run({env:{...env,SCRIBYRA_BACKMERGE_TOKEN:''},git,fetcher:()=>assert.fail('no API call without a token'),log:line=>logs.push(line)}),MISSING_TOKEN_EXIT);
- assert.match(logs.at(-1),/glab mr create --source-branch main --target-branch dev/);
- const same=args=>args[0]==='merge-base'?'':'';
- assert.equal(await run({env,git:same,fetcher:()=>assert.fail('no API call when dev is current'),log:()=>{}}),0);
+ const env={GITHUB_SHA:'f'.repeat(40),GITHUB_REPOSITORY:'scribyra/scribyra',GITHUB_TOKEN:''},logs=[];
+ assert.equal(await run({env,git,fetcher:()=>assert.fail('no API call without a token'),log:line=>logs.push(line)}),MISSING_TOKEN_EXIT);
+ assert.match(logs.at(-1),/gh pr create --head main --base dev/);
+ // A dry run prints the request and calls nothing.
+ assert.equal(await run({env,git,dry:true,fetcher:()=>assert.fail('no API call in a dry run'),log:line=>logs.push(line)}),0);
+ assert.deepEqual({head:JSON.parse(logs.at(-1)).head,base:JSON.parse(logs.at(-1)).base},{head:'main',base:'dev'});
+ const same=()=>'';
+ assert.equal(await run({env:{...env,GITHUB_TOKEN:'t'},git:same,fetcher:()=>assert.fail('no API call when dev is current'),log:()=>{}}),0);
 });
 
 test('staging pages get noindex, a banner and robots, and no sitemap, without touching linked build inputs',async()=>{
@@ -162,27 +152,27 @@ test('the staging deploy commits the site as public/ on top of the last deployme
   execFileSync('git',['init','-q','--bare','-b','main',remote]);
   await mkdir(join(root,'site/app'),{recursive:true});
   await writeFile(join(root,'site/index.html'),'one');await writeFile(join(root,'site/release.json'),JSON.stringify({release:'dev-5-1a2b3c4d'}));
-  const env={...process.env,SCRIBYRA_STAGING_DEPLOY_KEY:'',CI_COMMIT_SHA:'c'.repeat(40)};
+  const env={...process.env,SCRIBYRA_STAGING_DEPLOY_KEY:'',CI_COMMIT_SHA:'c'.repeat(40),GITHUB_REPOSITORY:'scribyra/scribyra'};
+  await assert.rejects(publish({root,checkout,env,dry:true,log:()=>{}}),/address is required/,'there is no default repository');
   // Dry runs commit locally without a key; push by hand to emulate the first deployment.
   assert.equal(await publish({root,checkout,remote,env,dry:true,log:()=>{}}),true);
   execFileSync('git',['-C',checkout,'push','-q','origin','HEAD:refs/heads/main']);
   const tree=execFileSync('git',['-C',remote,'ls-tree','-r','--name-only','main'],{encoding:'utf8'}).trim().split('\n');
-  assert.deepEqual(tree.sort(),['.gitlab-ci.yml','README.md','public/index.html','public/release.json']);
-  assert.match(execFileSync('git',['-C',remote,'log','-1','--format=%B','main'],{encoding:'utf8'}),/^Staging dev-5-1a2b3c4d\n\nBuilt from urundead-labs\/scribyra@c{40}/);
-  assert.match(await readFile(join(checkout,'.gitlab-ci.yml'),'utf8'),/publish: public/);
+  assert.deepEqual(tree.sort(),['README.md','public/index.html','public/release.json']);
+  assert.match(execFileSync('git',['-C',remote,'log','-1','--format=%B','main'],{encoding:'utf8'}),/^Staging dev-5-1a2b3c4d\n\nBuilt from scribyra\/scribyra@c{40}/);
   // An unchanged site makes no new commit.
   assert.equal(await publish({root,checkout,remote,env,dry:true,log:()=>{}}),false);
  }finally{await rm(root,{recursive:true,force:true});}
 });
-test('the deploy key must be a base64 OpenSSH private key, and SSH pins gitlab.com',async()=>{
+test('the deploy key must be a base64 OpenSSH private key, and SSH checks the pinned host key',()=>{
  const key='-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n';
  assert.equal(decodeKey(Buffer.from(key).toString('base64')),key);
  assert.throws(()=>decodeKey('bm90IGEga2V5'));assert.throws(()=>decodeKey(''));
  const ssh=sshCommand('/k','/h');assert.match(ssh,/StrictHostKeyChecking=yes/);assert.match(ssh,/IdentitiesOnly=yes/);
- assert.match(await readFile('ops/staging/known_hosts','utf8'),/^gitlab\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAfuCHKVTjquxvt6CM6tdG4SLp1Btn\/nOeHHE5UOzRdf\n$/);
- assert.match(commitMessage({release:'dev-1-aaaaaaa',sha:null}),/@unknown/);
+ assert.match(ssh,/UserKnownHostsFile=\/h/);
+ assert.match(commitMessage({release:'dev-1-aaaaaaa',sha:null}),/Built from Scribyra\/scribyra@unknown/);
 });
-test('on GitHub a deploy publishes public/ and README.md, keeps the target workflow, and pins github.com',async()=>{
+test('a production deploy publishes public/ and README.md, keeps the target workflow, and pins github.com',async()=>{
  const root=await mkdtemp(join(tmpdir(),'scribyra-pages-')),remote=join(root,'remote.git'),checkout=join(root,'checkout');
  try{
   execFileSync('git',['init','-q','--bare','-b','main',remote]);
@@ -194,15 +184,15 @@ test('on GitHub a deploy publishes public/ and README.md, keeps the target workf
   await mkdir(join(root,'site/app'),{recursive:true});
   await writeFile(join(root,'site/index.html'),'one');await writeFile(join(root,'site/release.json'),JSON.stringify({release:'dev-5-1a2b3c4d'}));
   const env={...process.env,SCRIBYRA_SITE_DEPLOY_KEY:'',CI_COMMIT_SHA:'c'.repeat(40),GITHUB_REPOSITORY:'scribyra/scribyra'};
-  await assert.rejects(publish({root,checkout,remote,env,dry:true,log:()=>{},forge:'github',channel:'production'}),/checked production build/,'production takes only web-N');
+  await assert.rejects(publish({root,checkout,remote,env,dry:true,log:()=>{},channel:'production'}),/checked production build/,'production takes only web-N');
   await writeFile(join(root,'site/release.json'),JSON.stringify({release:'web-1001'}));
   execFileSync('git',['clone','-q',remote,checkout],{stdio:'ignore'});
-  assert.equal(await publish({root,checkout,remote,env,dry:true,log:()=>{},forge:'github',channel:'production'}),true);
+  assert.equal(await publish({root,checkout,remote,env,dry:true,log:()=>{},channel:'production'}),true);
   const tree=execFileSync('git',['-C',checkout,'ls-tree','-r','--name-only','HEAD'],{encoding:'utf8'}).trim().split('\n');
   assert.deepEqual(tree.sort(),['.github/workflows/pages.yml','README.md','public/index.html','public/release.json']);
   assert.match(execFileSync('git',['-C',checkout,'log','-1','--format=%B'],{encoding:'utf8'}),/^Production web-1001\n\nBuilt from scribyra\/scribyra@c{40}/);
-  assert.equal(target('github','staging').key,'SCRIBYRA_STAGING_DEPLOY_KEY');assert.equal(target('github','production').key,'SCRIBYRA_SITE_DEPLOY_KEY');
-  assert.throws(()=>target('gitlab','production'));
+  assert.equal(target('staging').key,'SCRIBYRA_STAGING_DEPLOY_KEY');assert.equal(target('production').key,'SCRIBYRA_SITE_DEPLOY_KEY');
+  assert.throws(()=>target('preview'));assert.throws(()=>target('constructor'));
   assert.match(await readFile('ops/github/known_hosts','utf8'),/^github\.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl\n$/);
  }finally{await rm(root,{recursive:true,force:true});}
 });
@@ -213,11 +203,4 @@ test('only staging releases show the staging badge',()=>{
  assert.equal(stagingMarker('web-3',{document:doc}),null);assert.equal(appended.length,0);
  const badge=stagingMarker('dev-3-1a2b3c4',{document:doc});assert.equal(badge.textContent,'Staging');assert.equal(appended.length,1);
  assert.equal(doc.title,STAGING_TITLE_PREFIX+'Scribyra');assert.equal(doc.documentElement.dataset.scribyraStaging,'1');
-});
-
-test('staging CI script lines never read as YAML mappings',async()=>{
-  // GitLab refused the staging pipeline when an unquoted script line held ": ".
-  const text=await readFile(new URL('../ops/staging/gitlab-ci.yml',import.meta.url),'utf8');
-  const script=text.split(/^  script:\n/m)[1].split(/^  \S/m)[0];
-  for(const line of script.split('\n')){const item=line.match(/^\s+- (.*)$/);if(item&&!/^["']/.test(item[1]))assert.doesNotMatch(item[1],/: /,line);}
 });
