@@ -99,6 +99,19 @@ The Outline panel used to put every heading into the UI state that is serialised
 
 Firefox and WebKit round `performance.measure` to whole milliseconds. The spec fails if the median update reaches 16 ms or any update or toggle reaches 50 ms. With Expand all, fewer than 70 rows are in the DOM. The long single file (902 sections, 3 MiB) was not measured: its re-read goes to the worker, so the main thread pays for reading the text out of the document and posting it, plus rebuilding and repainting the tree, but that was not timed.
 
+## Compile time after the engine fixes (November 21, 2026)
+
+The engine changes of [compile engines](compile-engines.md#engine-speed-and-memory-november-21-2026) (latexmk-style reruns, packages installed before the first pass and remembered per project, a 2 GiB memory ceiling) cut the thesis from eight LuaLaTeX passes to three, the same as native TeX Live, with identical output (305 pages, the same text on every page). Median of 3, seconds, measured with `tests/browser/compile-benchmark.spec.js` on the same shared host (the three browsers ran at the same time):
+
+| Thesis (305 pages, Biber) | Chromium | Firefox | WebKit | Node (server) |
+| --- | --- | --- | --- | --- |
+| First compile, fresh profile | 277.9 → **221.4** | 305.1 → **237.8** | 291.5 → **222.4** | 230.8 → **167.8** |
+| After reopening the project | 211.4 → **161.4** | 230.4 → **176.9** | 277.5 → **211.2** | 224.5 → **167.3** (warm cache) |
+| Recompile in the same tab | 202.1 → **155.2** | 206.8 → **163.7** | 263.2 → **203.3** | |
+| LuaLaTeX passes | 8 (first), 4 (recompile) → **3** | | | 8 → **3** |
+
+The thesis's engine heap stays at 229 MiB; the old 576 MiB ceiling was never the limit for it. A document whose Lua or TeX memory needs about 1 GiB now compiles in all three browsers and on the server (desktop browsers and the server allow 2 GiB − 64 KiB, phones and tablets 1 GiB); past that the compile ends with "The document needs more memory than the TeX engine can use…".
+
 ## Bottlenecks and what was fixed
 
 1. **A 250-page thesis could not compile at all (fixed).** Each LuaLaTeX pass of the 305-page thesis takes 45–55 s in Chromium and Firefox and 50–85 s in WebKit. With Biber and cross-references, a compile needs four or five passes. Two 180-second limits stopped it in every engine. One was Scribyra's own cumulative compile budget. The other was a fixed timer in the pinned `texlyre-busytex` wrapper, which rejected every compile call after 180 s whatever the budget.
@@ -213,13 +226,13 @@ The bound is enforced honestly and nothing already saved is lost. Two rough edge
 
 - **Project size:** up to about **40 MB of figures and 1.5 MB of source**, around 300 pages, works in all three engines. The hard bound is 64 MiB, and it includes deleted files, which stay recoverable. There is no way to purge them, so replacing large figures by deleting and re-adding them uses up the bound. Use **Replace file** instead, or export a source ZIP and import it as a new project.
 - **Single file:** a 3 MiB file edits smoothly. Splitting chapters into files keeps search, diff and history cheaper.
-- **Compile time:** expect about **4 minutes** for the first compile and **3–4 minutes** for each recompile of a 300-page thesis with Biber, in all three engines on this server-class CPU. Every compile starts from scratch. Use `\includeonly` while writing, and compile the whole document when needed. Compiles stop after 10 minutes.
+- **Compile time:** expect about **4 minutes** for the first compile and **3 minutes** for each recompile of a 300-page thesis with Biber, in all three engines on this server-class CPU (since November 21: three LuaLaTeX passes, as native TeX Live). Every compile starts from scratch. Use `\includeonly` while writing, and compile the whole document when needed. Compiles stop after 10 minutes.
 - **History:** no manual clean-up is needed any more (Clean up history never increases storage). Stored history grows by about 3 bytes per typed character; automatic versions are thinned to every version from the last hour, then one per hour, day and week; named versions are kept forever and each costs a full copy of the project (so name versions for milestones, not every hour). Projects from before November 11, 2026 are compacted the first time they are opened, with a recovery copy kept until the result is verified.
 - **Backups:** a complete backup is about the size of the project plus its retained history: 39 MiB for the thesis, 31 MiB for the cleaned-up heavy history. Restoring one takes 15–70 s.
 
 ## Untested
 
-- Real Mac hardware and Safari (WebKit here is Playwright's Linux build with software GL), Windows, and low-end or mobile hardware. Low-memory devices are the biggest unknown: Chromium's JS heap reached about 230 MiB after compiling the thesis and 290 MiB on the heavy history.
+- Real Mac hardware and Safari (WebKit here is Playwright's Linux build with software GL), Windows, and low-end or mobile hardware. Low-memory devices are the biggest unknown (the engine stops at 1 GiB on phones and tablets by design, but how close an iPhone lets a tab get to that was not measured): Chromium's JS heap reached about 230 MiB after compiling the thesis and 290 MiB on the heavy history.
 - GPU-accelerated PDF rendering. All three engines used software rendering.
 - Real typing by people over weeks. The typing simulation types every character as its own transaction at a modelled human pace with virtual time; real pauses, editing patterns and multi-tab use will differ.
 - Compiling the 3 MiB single file, and projects near 512 files.

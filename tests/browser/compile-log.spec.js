@@ -5,7 +5,8 @@ test.use({actionTimeout:15000});
 // Forty \directlua busy steps with a \write16 each and a forward \pageref:
 // several seconds per pass, so output and steps can be observed mid-compile.
 const slow=readFileSync(new URL('../fixtures/compile-log/slow-passes.tex',import.meta.url),'utf8');
-// Final logs recorded from main before live logging, identical in all three engines.
+// Final logs recorded from main before live logging, identical in all three engines; re-recorded on
+// November 21, 2026 for the latexmk-style pass policy (two passes instead of three, all writing a PDF).
 const golden={cold:readFileSync(new URL('../fixtures/compile-log/slow-passes.cold.log',import.meta.url),'utf8'),warm:readFileSync(new URL('../fixtures/compile-log/slow-passes.warm.log',import.meta.url),'utf8')};
 const normalize=log=>log.split('\n').map(line=>line.replace(/^[0-9]{9,11} /,'T ').replace(/[0-9]{1,2} [A-Z]{3} [0-9]{4} [0-9]{2}:[0-9]{2}/,'DATE')).join('\n');
 const shots=process.env.SCRIBYRA_SCREENSHOTS;
@@ -117,8 +118,18 @@ test('a missing-package compile shows lookup and fetch steps live',async({page},
  await page.getByRole('button',{name:'Show compilation log',exact:true}).click();
  await start(page);
  await expect.poll(()=>page.evaluate(()=>window.__held.length),{timeout:120000}).toBe(1);
- // TeX halts at the first missing file, so each package is its own lookup round.
+ // The source names algpseudocode, so its package is fetched before the first pass.
+ await expect(status(page)).toContainText('Fetching TeX package algorithmicx (1 of 1)');
+ await expect(live(page)).toContainText('▸ Looking up 1 TeX file the project names in the TeX package catalog');
+ await expect(live(page)).toContainText('▸ Fetching TeX package algorithmicx (1 of 1)');
+ await expect(live(page)).not.toContainText('LuaLaTeX pass 1');
+ expect(await page.evaluate(()=>window.__held[0].name)).toBe('algorithmicx.tar.xz');
+ await page.evaluate(()=>window.__held.shift().resolve());
+ await expect(live(page)).toContainText(/Installed TeX package algorithmicx r\d+/);
+ // The Romanian language is an option, not a file the source names: TeX halts on it once.
+ await expect.poll(()=>page.evaluate(()=>window.__held.length),{timeout:120000}).toBe(1);
  await expect(status(page)).toContainText('Fetching TeX package babel-romanian (1 of 1)');
+ await expect(live(page)).toContainText('▸ LuaLaTeX pass 1');
  await expect(live(page)).toContainText(/▸ Looking up \d+ missing files? in the TeX package catalog/);
  await expect(live(page)).toContainText('▸ Fetching TeX package babel-romanian (1 of 1)');
  // The stopped pass is expected: its fatal and exit lines stay, styled neutrally, with a calm marker.
@@ -128,19 +139,13 @@ test('a missing-package compile shows lookup and fetch steps live',async({page},
  await expect(live(page).locator('.log-error')).toHaveCount(0);
  await expect(page.locator('#compilation-issues > .diagnostics-header > span')).toHaveText('Compilation log');
  if(shots)await page.screenshot({path:`${shots}/fetch-step-light-${info.project.name}.png`});
+ await page.getByRole('button',{name:'Toggle theme',exact:true}).click();await expect(page.locator(':root')).toHaveAttribute('data-theme','dark');
+ if(shots)await page.screenshot({path:`${shots}/fetch-step-dark-${info.project.name}.png`});
  expect(await page.evaluate(()=>window.__held[0].name)).toBe('babel-romanian.tar.xz');
+ expect(await unfinished(page)).toBe(true);
  await page.evaluate(()=>window.__held.shift().resolve());
  await expect(live(page)).toContainText(/Installed TeX package babel-romanian r\d+/);
  await expect(live(page)).toContainText('▸ LuaLaTeX pass 2 · with downloaded packages');
- await expect.poll(()=>page.evaluate(()=>window.__held.length),{timeout:120000}).toBe(1);
- await expect(status(page)).toContainText('Fetching TeX package algorithmicx (1 of 1)');
- await expect(live(page).locator('.log-error')).toHaveCount(0);
- await page.getByRole('button',{name:'Toggle theme',exact:true}).click();await expect(page.locator(':root')).toHaveAttribute('data-theme','dark');
- if(shots)await page.screenshot({path:`${shots}/fetch-step-dark-${info.project.name}.png`});
- await expect(live(page)).toContainText('▸ Fetching TeX package algorithmicx (1 of 1)');
- expect(await unfinished(page)).toBe(true);
- await page.evaluate(()=>window.__held.shift().resolve());
- await expect(live(page)).toContainText('▸ LuaLaTeX pass 3 · with downloaded packages');
  const result=await finished(page);expect(result.success,result.log).toBe(true);
  expect(result.log).toMatch(/^TeX packages installed for this compile:\n/);
  await expect(status(page)).toContainText('2 TeX packages installed');

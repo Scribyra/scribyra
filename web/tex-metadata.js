@@ -9,20 +9,23 @@ async function eachLimited(values,fn){let index=0,failure;await Promise.all(Arra
 function downloadQueue(){let running=0;const waiting=[];return async task=>{if(running>=4)await new Promise(resolve=>waiting.push(resolve));else running++;try{return await task();}finally{const next=waiting.shift();if(next)next();else running--;}};}
 
 // Rust retains package contents/indexes; JS retains small routing/filename maps.
-export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=null,fetcher=globalThis.fetch,observe:initialObserver}){
- const download=downloadQueue();
+// `storage` replaces the browser's metadata cache and download manager (the server's compile
+// runner reads the pinned files of its read-only runtime instead); every byte is still checked.
+const browserStorage={cachedMetadata,cacheMetadata,fetchBytes:(asset,options)=>downloads.fetchBytes(asset,options)};
+export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=null,fetcher=globalThis.fetch,observe:initialObserver,storage=browserStorage}){
+ const download=downloadQueue(),{cachedMetadata:cached,cacheMetadata:save,fetchBytes}=storage;
  async function valid(info,bytes,observer){
   if(!(bytes instanceof Uint8Array))return false;
   const span=observeWith(observer,'verify');try{const ok=bytes instanceof Uint8Array&&bytes.length===info.size&&await sha256(bytes)===info.sha256;span.end(ok?'success':'failure',ok?undefined:'integrity',bytes?[{name:'bytes',value:bytes.byteLength}]:[]);return ok;}catch(error){finishError(span,error);throw error;}
  }
  async function raw(info,maximum,observer){
   if(!object(info)||!Number.isSafeInteger(info.size)||info.size<=0||info.size>maximum||!/^[a-f0-9]{64}$/.test(info.sha256))throw new Error('Invalid pinned TeX metadata descriptor.');
-  let bytes=await cachedMetadata(info.sha256);const hit=observeWith(observer,'cache');hit.end('success',undefined,[{name:'count',value:bytes?1:0}]);
+  let bytes=await cached(info.sha256);const hit=observeWith(observer,'cache');hit.end('success',undefined,[{name:'count',value:bytes?1:0}]);
   if(!await valid(info,bytes,observer)){
-   bytes=await download(async()=>{try{return await downloads.fetchBytes({kind:'metadata',label:'TeX metadata',size:info.size,hash:info.sha256,algorithm:'SHA-256'},{url:`${base}/${info.path}`,credentials:'same-origin',fetcher,observe:observer});}catch(error){throw new Error(`Required TeX metadata could not be fetched. Go online or import a matching package bundle. ${error.message}`,{cause:error});}});
+   bytes=await download(async()=>{try{return await fetchBytes({kind:'metadata',label:'TeX metadata',size:info.size,hash:info.sha256,algorithm:'SHA-256'},{url:`${base}/${info.path}`,credentials:'same-origin',fetcher,observe:observer});}catch(error){throw new Error(`Required TeX metadata could not be fetched. Go online or import a matching package bundle. ${error.message}`,{cause:error});}});
    if(!await valid(info,bytes,observer))throw new Error('TeX metadata checksum differs from the pinned runtime.');
   }
-  await cacheMetadata(info,bytes,observer);return bytes;
+  await save(info,bytes,observer);return bytes;
  }
  const text=bytes=>new TextDecoder('utf-8',{fatal:true}).decode(bytes);
  const read=async(info,maximum,observer)=>text(await raw(info,maximum,observer));
@@ -37,11 +40,14 @@ export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=nu
  if(root.dependencyGraph&&(root.dependencyGraph.path!==`metadata/${root.dependencyGraph.sha256}.json`||!Number.isSafeInteger(root.dependencyGraph.size)||root.dependencyGraph.size<=0||root.dependencyGraph.size>2*1024*1024||!/^[a-f0-9]{64}$/.test(root.dependencyGraph.sha256)))throw new Error('Invalid dependency manifest descriptor.');
  if(root.compatibility)Catalog.validate_compatibility(JSON.stringify(root.compatibility),JSON.stringify(runtime),JSON.stringify(binary));
  const catalog=new Catalog(JSON.stringify({snapshot:root.snapshot,packages:{}})),loaded=new Map();
+ // Runtime file names (basenames under tex/) of the packages in loaded shards, for deciding
+ // whether a declared dependency is already in the engine's tree before installing it.
+ const texFiles=new Map();
  async function part(info,kind,observer){
   if(!info)return kind==='filenames'?{}:null;
   if(!loaded.has(info.path))loaded.set(info.path,(async()=>{
    const text=await read(info,2*1024*1024,observer);
-   if(kind==='packages'){catalog.merge(text);return null;}
+   if(kind==='packages'){catalog.merge(text);for(const[name,info]of Object.entries(JSON.parse(text).packages||{}))if(Array.isArray(info?.files))texFiles.set(name,[...new Set(info.files.filter(path=>typeof path==='string'&&path.startsWith('tex/')).map(path=>path.slice(path.lastIndexOf('/')+1)))].slice(0,4096));return null;}
    const names=JSON.parse(text);if(!object(names))throw new Error('Invalid filename metadata.');
    for(const[key,packages]of Object.entries(names))if(!key||key.includes('/')||!Array.isArray(packages)||packages.length>10000||packages.some(name=>!packageName(name)))throw new Error('Invalid filename metadata entry.');
    return names;
@@ -56,6 +62,7 @@ export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=nu
  async function lockedNames(lock,observer){const names=JSON.parse(Catalog.environment_packages(JSON.stringify(lock),JSON.stringify(runtime)));await ensure(names,observer);return names;}
  return{
   catalog,ensure,lockedNames,
+  async texFiles(names,observer){await ensure(names,observer);return Object.fromEntries(names.filter(name=>texFiles.has(name)).map(name=>[name,texFiles.get(name)]));},
   async dependencyGraph(observer){if(!root.dependencyGraph)throw new Error('This compiler catalog does not include a declared dependency manifest.');return raw(root.dependencyGraph,2*1024*1024,observer);},
   async metadataAssets(names,observer){
    await ensure(names,observer);const paths=[...new Set(names.map(name=>root.packages[Catalog.metadata_bucket(name)]?.path).filter(Boolean))].sort();
@@ -65,7 +72,7 @@ export async function openMetadata({Catalog,root:rootInfo,base,runtime,binary=nu
   },
   async metadataStatus(names,observer){
    const pins=[rootInfo,...(root.dependencyGraph?[root.dependencyGraph]:[]),...new Map(names.map(name=>root.packages[Catalog.metadata_bucket(name)]).filter(Boolean).map(info=>[info.path,info])).values()],missing=[];
-   for(const info of pins)if(!await valid(info,await cachedMetadata(info.sha256),observer))missing.push(info.path);
+   for(const info of pins)if(!await valid(info,await cached(info.sha256),observer))missing.push(info.path);
    return{ready:missing.length===0,missing};
   },
   async resolve(missing,log,observer){
