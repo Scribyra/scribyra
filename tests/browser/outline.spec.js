@@ -192,3 +192,18 @@ test('the thesis outline stays within the typing budget',async({page},testInfo)=
   expect(update.median).toBeLessThan(16);expect(update.max).toBeLessThan(50);
   expect(toggle.count).toBe(8);expect(toggle.max).toBeLessThan(50);
 });
+
+test('jumping to a section places its heading in the middle of the editor',async({page})=>{
+  const filler=n=>Array.from({length:n},(_,i)=>`Line ${i} of filler text.`).join('\n');
+  const main=`\\documentclass{article}\n\\begin{document}\n\\section{First}\n${filler(120)}\n\\section{Middle}\n${filler(120)}\n\\section{Last}\n${filler(40)}\n\\end{document}\n`;
+  await importProject(page,'outline-centre',{'main.tex':main});await showOutline(page,3);
+  for(const name of ['Middle','Last','First','Middle']){
+    await item(page,name).click();
+    await expect(page.locator('.cm-activeLine')).toHaveText(`\\section{${name}}`);
+    await expect.poll(()=>page.evaluate(()=>{const s=document.querySelector('.cm-scroller').getBoundingClientRect(),l=document.querySelector('.cm-activeLine').getBoundingClientRect();
+      const top=document.querySelector('.cm-scroller').scrollTop;
+      // A heading near the start of the file can't be centred; it then stays at its natural position.
+      return top<2?'top':Math.abs((l.top+l.height/2)-(s.top+s.height/2))<s.height*0.12?'centred':`off by ${Math.round((l.top+l.height/2)-(s.top+s.height/2))}px`;}))
+      .toBe(name==='First'?'top':'centred');
+  }
+});

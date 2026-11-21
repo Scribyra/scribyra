@@ -167,16 +167,19 @@ const accessibleHighlight=HighlightStyle.define(defaultHighlightStyle.specs.map(
 function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>plugins?.completionIndex(completionIndex)??completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
 // Comments stay available in Viewing; anything that decides a suggestion or changes accepted source does not.
 const viewingRefuses=new Set(['suggestion.accept','suggestion.reject','suggestion.withdraw','review.acceptAll','review.acceptSet','review.propose','review.retry','review-accept-visible','review-reject-visible','change.undo','change.redo']);
+// Jumps (outline, search, PDF, comments) put the target in the middle of the editor, like other editors do.
+const centred=pos=>EditorView.scrollIntoView(pos,{y:'center'});
 function activateFile(id,start,end=start) {
   collaboration?.review.beforeLeave();
   if(!projectFiles(doc).some(f=>f.id===id))return;state.active=id;revealNode(id);mountEditor();
-  if(editor&&start!==undefined){const max=editor.state.doc.length;editor.dispatch({selection:{anchor:Math.min(collaboration?.review.toDisplay(start,-1)??start,max),head:Math.min(collaboration?.review.toDisplay(end,1)??end,max)},annotations:revealedSelection.of(true),scrollIntoView:true});}editor?.focus();
+  if(editor&&start!==undefined){const max=editor.state.doc.length,anchor=Math.min(collaboration?.review.toDisplay(start,-1)??start,max);editor.dispatch({selection:{anchor,head:Math.min(collaboration?.review.toDisplay(end,1)??end,max)},annotations:revealedSelection.of(true),effects:centred(anchor)});}editor?.focus();
 }
 function selectSourceLine(line){
   if(!editor||!mountedFile)return;
   const lines=doc.getText(`text:${mountedFile}`).toString().split('\n'),number=Math.min(lines.length,Math.max(1,line||1));
   const start=lines.slice(0,number-1).reduce((offset,text)=>offset+text.length+1,0),end=start+lines[number-1].length;
-  editor.dispatch({selection:{anchor:collaboration?.review.toDisplay(start,-1)??start,head:collaboration?.review.toDisplay(end,1)??end},annotations:revealedSelection.of(true),scrollIntoView:true});editor.focus();
+  const anchor=collaboration?.review.toDisplay(start,-1)??start;
+  editor.dispatch({selection:{anchor,head:collaboration?.review.toDisplay(end,1)??end},annotations:revealedSelection.of(true),effects:centred(anchor)});editor.focus();
 }
 function closeTab(id) {
   collaboration?.review.beforeLeave();
