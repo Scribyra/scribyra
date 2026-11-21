@@ -342,7 +342,7 @@ pub fn Panel(state: Signal<State>, comments: Signal<comments::State>, children: 
                 }>
                     <Show when=free_composer><div class="review-composer-card static" data-card-id="composer"><comments::InlineComposer state=comments/></div></Show>
                     <nav aria-label="Review files" class="review-files">
-                        <For each=move || files.get() key=|f| f.id.clone() children=move |f| {
+                        <For each={move || files.get().into_iter().filter(|f| f.count > 0).collect::<Vec<_>>()} key=|f| f.id.clone() children=move |f| {
                             let (group, jump, path) = (f.id.clone(), f.id.clone(), f.path.clone());
                             let count = { let id = f.id.clone(); move || files.with(|all| all.iter().find(|file| file.id == id).map_or(0, |file| file.count)) };
                             let (label_count, class_count, badge_count) = (count.clone(), count.clone(), count);
