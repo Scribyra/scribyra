@@ -41,6 +41,8 @@ function client(link,secret=link.account){
   return link.kind==='github'?githubClient({net,repository:link.repository,secret}):gitlabClient({net,origin:link.origin,repository:link.repository,secret});
 }
 const repoUrl=link=>`${hostOf(link).web}/${link.repository}`;
+/** owner/name, and the folder after › so it never reads as part of the repository's name. */
+const where=link=>`${link.repository}${link.subfolder?` › ${link.subfolder}`:''}`;
 
 // ---- The open project ---------------------------------------------------------------
 let link=null,records={},opened=false;
@@ -69,6 +71,8 @@ function modeBlocked(mode,doing){
 // ---- Status item ----------------------------------------------------------------------
 let statusTimer=null,statusRunning=false,statusAgain=false;
 function scheduleStatus(delay=800){clearTimeout(statusTimer);statusTimer=setTimeout(()=>void updateStatus(),delay);}
+/** Long repository, folder or branch names are cut to the host's limits rather than failing the update. */
+const fit=status=>status&&{...status,text:status.text.slice(0,160),title:(status.title||'').slice(0,300),actions:status.actions.map(action=>({...action,title:(action.title||'').slice(0,160)}))};
 async function updateStatus(){
   if(statusRunning){statusAgain=true;return;}
   statusRunning=true;
@@ -76,22 +80,23 @@ async function updateStatus(){
     if(!opened)return;
     if(!link){
       const source=await importSource();
-      if(source&&!await store.dismissed())await call('ui.status.set',{status:{label:STATUS_LABEL,text:`Imported from ${source.host}/${source.repo}${source.path?` (${source.path})`:''}`,title:'This project came from an Open in Scribyra link. Link it to that repository to pull and push.',tone:'neutral',actions:[{id:'link-source',label:'Link to this repository',title:`Link this project to ${source.host}/${source.repo}`,modes:['editing','reviewing'],blockedTitle:'Viewing is read only'},{id:'dismiss',label:'Not now'}]}});
+      if(source&&!await store.dismissed())await call('ui.status.set',{status:fit({label:STATUS_LABEL,text:`Imported from ${source.host}/${source.repo}${source.path?` (${source.path})`:''}`,title:'This project came from an Open in Scribyra link. Link it to that repository to pull and push.',tone:'neutral',actions:[{id:'link-source',label:'Link to this repository',title:`Link this project to ${source.host}/${source.repo}`,modes:['editing','reviewing'],blockedTitle:'Viewing is read only'},{id:'dismiss',label:'Not now'}]})});
       else await call('ui.status.set',{status:null});
       return;
     }
     const local=await localFiles(),excluded=await exclusions(local),count=countLocalChanges({records,local,excluded});
     const host=hostOf(link),sync=link.sync||{};
     const remote=!sync.commit?' · not pulled yet':typeof sync.behind==='number'&&sync.checkedAt?(sync.behind?` · ${plural(sync.behind,'new commit')} on ${host.name}`:` · up to date with ${host.name}`):'';
-    await call('ui.status.set',{status:{label:STATUS_LABEL,
-      text:`${link.repository}${link.subfolder?`/${link.subfolder}`:''} · ${link.branch} · ${count?plural(count,'local change'):'no local changes'}${remote}`,
-      title:`Linked to ${repoUrl(link)}, branch ${link.branch}${link.subfolder?`, folder ${link.subfolder}`:''}. Last sync ${ago(sync.at)}${sync.commit?` at ${short(sync.commit)}`:''}${sync.checkedAt?`; checked ${ago(sync.checkedAt)}`:''}.`,
+    const text=`${where(link)} · ${link.branch} · ${count?plural(count,'local change'):'no local changes'}${remote}`;
+    // The tooltip repeats the text, which a narrow window cuts short.
+    await call('ui.status.set',{status:fit({label:STATUS_LABEL,text,
+      title:`${text.slice(0,120)}. Linked to ${repoUrl(link)}, branch ${link.branch}${link.subfolder?`, folder ${link.subfolder}`:''}. Last sync ${ago(sync.at)}${sync.commit?` at ${short(sync.commit)}`:''}${sync.checkedAt?`; checked ${ago(sync.checkedAt)}`:''}.`,
       tone:sync.behind&&count?'attention':'neutral',
       actions:[
         {id:'pull',label:'Pull',title:`Bring in the latest commit of ${link.branch}; you review every change first`,modes:['editing','reviewing'],blockedTitle:'Viewing is read only. Switch to Editing to pull.'},
         {id:'push',label:'Push',title:`Commit your changes to ${link.branch} on ${host.name}`,modes:['editing','reviewing'],blockedTitle:'Viewing is read only. Switch to Editing to push.'},
         {id:'check',label:'Check',title:`Ask ${host.name} whether ${link.branch} has new commits`},
-      ]}});
+      ]})});
   }catch{/* the project closed or the plugin stopped */}
   finally{statusRunning=false;if(statusAgain){statusAgain=false;scheduleStatus(200);}}
 }
@@ -363,7 +368,7 @@ function pullDialog({items,contents,skipped,head,host,mode}){
     return {type:'group',legend:label(item.path),legendCode:true,tone:item.kind==='conflict'?'conflict':undefined,kind:item.kind,children};
   };
   const spec=()=>(budget=diffBudget(),{title:`Pull from ${host.name}`,wide:true,children:[
-    {type:'text',tone:'source',text:`${link.repository}${link.subfolder?`/${link.subfolder}`:''} · ${link.branch} · ${short(link.sync?.commit)||'first pull'} → ${short(head)}`},
+    {type:'text',tone:'source',text:`${where(link)} · ${link.branch} · ${short(link.sync?.commit)||'first pull'} → ${short(head)}`},
     ...(compact?[{type:'text',tone:'note',text:`Many files changed, so changes without a conflict are listed without their differences.`}]:[]),
     {type:'text',text:`${plural(items.length,'file')} changed on ${host.name} since your last sync${conflicts?`; ${plural(conflicts,'of them was','of them were')} also changed here. Choose for each conflict: nothing is overwritten unless you say so`:''}. Nothing changes until you apply.${mode==='reviewing'?' You are Reviewing: text changes become suggestions credited to this plugin; added, deleted and binary files wait for Editing.':''}`},
     ...(conflicts?[{type:'section',label:'Conflicts',children:items.map((item,i)=>item.kind==='conflict'?node(item,i):null).filter(Boolean)}]:[]),
@@ -409,9 +414,11 @@ async function push(){
   for(const item of plan.items){
     // Files stored as binary (no text extension: deploy.sh, Makefile…) are scanned too.
     const content=item.file?await readFile(item.file):null,problem=content?secretProblem(item.path,content.text??(content.bytes.length<=4*1024*1024?decodeText(content.bytes):null)):null;
+    // Those that are UTF-8 (.env, .scribyraignore…) are also shown as text; they are pushed byte for byte.
+    const shown=content?content.text??(content.bytes.length<=1024*1024?decodeText(content.bytes):null):null;
     let base=null;
-    if(item.record?.base&&(content?.text!==null||!item.file)&&items.length<60&&(!item.file||!item.file.binary)){try{const bytes=await remote.blob(item.record.base);base=decodeText(bytes);}catch{base=null;}}
-    items.push({...item,content,base,problem,tooLarge:content&&content.bytes.length>PUSH_FILE_BYTES});
+    if(item.record?.base&&(shown!==null||!item.file)&&items.length<60){try{const bytes=await remote.blob(item.record.base);base=bytes.length<=1024*1024?decodeText(bytes):null;}catch{base=null;}}
+    items.push({...item,content,shown,base,problem,tooLarge:content&&content.bytes.length>PUSH_FILE_BYTES});
   }
   const decision=await pushDialog({items,host,excludedPaths:plan.excluded,blocked:plan.blocked,head});
   if(!decision)return;
@@ -445,17 +452,17 @@ function pushDialog({items,host,excludedPaths,blocked,head}){
   const compact=items.length>COMPACT_AFTER;
   const OP={add:['Added here','added'],update:['Changed here','changed'],delete:['Deleted here','removed']};
   const spec=()=>(budget=diffBudget(),{title:`Push to ${host.name}`,wide:true,initialFocus:'message',children:[
-    {type:'text',tone:'source',text:`${link.repository}${link.subfolder?`/${link.subfolder}`:''} · ${link.branch} at ${short(head)||'—'}`},
+    {type:'text',tone:'source',text:`${where(link)} · ${link.branch} at ${short(head)||'—'}`},
     {type:'text',text:`Commits the files you tick as one commit on top of ${short(head)}. If anyone pushes before you, ${host.name} refuses it and nothing changes there: Scribyra never force-pushes. Comments, reviews and history stay on this device.`},
     {type:'field',id:'message',input:'text',label:'Commit message',value:message,placeholder:'Describe your changes'},
     {type:'choice',id:'target',label:'Where to push',options:[{value:'branch',label:`To ${link.branch}`},{value:'new',label:'To a new branch'}],value:target},
     ...(target==='new'?[{type:'field',id:'newbranch',input:'text',label:'New branch name',value:newBranch,placeholder:'scribyra/my-changes',help:`It starts at ${short(head)}; this project then follows it.`}]:[]),
     {type:'section',label:'Files',children:items.map((item,i)=>{
-      const [opLabel,tone]=OP[item.op],children=[{type:'badges',items:[{text:opLabel,tone},...(item.content&&item.content.text===null?[{text:'Binary',tone:'neutral'}]:[])]}];
+      const [opLabel,tone]=OP[item.op],children=[{type:'badges',items:[{text:opLabel,tone},...(item.content&&item.shown===null?[{text:'Binary',tone:'neutral'}]:[])]}];
       if(item.problem)children.push({type:'text',tone:'warning',text:item.problem.reason});
       if(item.tooLarge)children.push({type:'text',tone:'warning',text:`Larger than ${(PUSH_FILE_BYTES/1024/1024).toFixed(1)} MiB, more than Scribyra sends in one request. Push it with Git instead.`});
       if(compact){}
-      else if(item.content?.text!==null&&item.content?.text!==undefined)children.push(diffNode(`Changes to ${item.path}`,item.base??'',item.content.text,budget));
+      else if(item.shown!==null&&item.shown!==undefined)children.push(diffNode(`Changes to ${item.path}`,item.base??'',item.shown,budget));
       else if(item.op==='delete'&&item.base!==null)children.push(diffNode(`Changes to ${item.path}`,item.base,'',budget));
       else if(item.content)children.push({type:'text',tone:'summary',text:`Binary file, ${size(item.content.bytes.length)}.`});
       children.push({type:'field',id:`p${i}`,input:'checkbox',label:label(`Include ${item.path}`).slice(0,120),value:include[i],disabled:!!item.problem?.block||item.tooLarge});

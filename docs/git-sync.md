@@ -45,9 +45,10 @@ Tests:
 
    **Check access** verifies the token, the repository and the branch, and says what the
    token can do. **Link and pull** saves the link and starts the first pull.
-3. **Status.** A status item above the project shows `repository[/folder] · branch ·
+3. **Status.** A status item above the project shows `repository[ › folder] · branch ·
    N local changes`. After any contact with the host it also shows `· M new commits on
-   GitHub` or `· up to date`. Its tooltip gives the last sync time and commit. Its buttons
+   GitHub` or `· up to date`. Its tooltip repeats that text, which a narrow window cuts
+   short, and gives the last sync time and commit. Its buttons
    are **Pull**, **Push** and **Check**. Check asks the host for new commits without
    changing anything.
 4. **Pull** and **Push**, below. More tools → GitHub and GitLab also has:
@@ -214,6 +215,9 @@ pointer there.
    - Files whose names look like credentials start unticked: `.env*`, `*.pem`, `*.key`,
      `id_rsa`, `.netrc`, `credentials.json` and similar.
    - Files over 6 MiB cannot be ticked.
+   - Files the project stores as binary because their name has no text extension
+     (`.env`, `.scribyraignore`, `Makefile`) are shown as a text diff when they are UTF-8
+     and at most 1 MiB. They are still pushed byte for byte.
    - Excluded files are listed separately.
    - The commit message is required. The person chooses the linked branch or a new branch
      (validated against Git's ref-name rules).

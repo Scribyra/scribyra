@@ -121,7 +121,7 @@ test('GitHub: link a folder, pull, refuse a push when the branch moved, pull per
     expect(await source(page,'refs.bib')).toBe(BIB);expect(await source(page,'sections/intro.tex')).toBe('\\section{Intro}\nOld intro.\n');
     expect(await paths(page)).toEqual(['.env','.scribyraignore','build/out.log','figure.png','leak.tex','main.tex','notes.tex','refs.bib','sections/intro.tex']);
     // The status item: repository, folder, branch and local changes (build/ is excluded).
-    await expect(status(page)).toContainText('octo/paper/paper · main · 4 local changes · up to date with GitHub');
+    await expect(status(page)).toContainText('octo/paper › paper · main · 4 local changes · up to date with GitHub');
     await expect(status(page)).toContainText('GitHub and GitLab plugin');
     await shoot(page,'git-status-bar',page.locator('.editor-header'));
     // Someone pushes to the branch; Check finds it; a push is refused until a pull.
@@ -153,6 +153,9 @@ test('GitHub: link a folder, pull, refuse a push when the branch moved, pull per
     await expect(push.getByRole('group',{name:'Changes to main.tex'}).locator('li.is-added')).toContainText('Line 5, edited here.');
     await expect(push.getByLabel('Include main.tex')).toBeChecked();await expect(push.getByLabel('Include notes.tex')).toBeChecked();await expect(push.getByLabel('Include .scribyraignore')).toBeChecked();
     await expect(push.getByLabel('Include .env')).not.toBeChecked();await expect(push.getByRole('group',{name:'.env',exact:true})).toContainText('Its name looks like a key or credentials file');
+    // Stored as binary (no text extension) but UTF-8: shown as a text diff, not as "Binary".
+    const ignore=push.getByRole('group',{name:'.scribyraignore',exact:true});
+    await expect(ignore).toContainText('*.log');await expect(ignore).not.toContainText('Binary');
     await expect(push.getByLabel('Include leak.tex')).toBeDisabled();await expect(push.getByRole('group',{name:'leak.tex',exact:true})).toContainText('Contains what looks like a GitHub access token; Scribyra will not push it.');
     await expect(push).toContainText('1 excluded file (.scribyraignore or settings)');
     await expect(push).toContainText('Comments, reviews and history stay on this device.');
@@ -167,7 +170,7 @@ test('GitHub: link a folder, pull, refuse a push when the branch moved, pull per
     expect(Object.keys(remote).sort()).toEqual(['README.md','paper/.scribyraignore','paper/appendix.tex','paper/figure.png','paper/link.tex','paper/main.tex','paper/notes.tex','paper/sections/intro.tex','paper/vendor']);
     expect(remote['paper/main.tex']).toContain('Line 5, edited here.');expect(remote['paper/notes.tex']).toBe('Local notes.\n');expect(remote['paper/appendix.tex']).toBe('\\appendix\n');
     expect(repo.flatten(commit.tree).get('paper/link.tex').mode).toBe('120000');expect(repo.flatten(commit.tree).get('paper/vendor').mode).toBe('160000');
-    await expect(status(page)).toContainText('octo/paper/paper · main · 2 local changes · up to date with GitHub');
+    await expect(status(page)).toContainText('octo/paper › paper · main · 2 local changes · up to date with GitHub');
     // The change left for later is still offered.
     await status(page).getByRole('button',{name:'Pull'}).click();await expect(pull).toBeVisible();
     await expect(pull).toContainText('1 file changed on GitHub since your last sync.');await expect(pull.getByRole('group',{name:'appendix.tex',exact:true})).toBeVisible();
@@ -433,7 +436,7 @@ test('Open in Scribyra: an imported project is offered “Link to this repositor
     await pull.getByRole('button',{name:'Apply selected'}).click();await expect(pull).toBeHidden();
     expect(await source(page,'main.tex')).toBe(MAIN.replace('Line 3 of the paper.','Line 3, edited after import.').replace('Line 8 of the paper.','Line 8, from GitHub.'));
     expect(await source(page,'refs.bib')).toBe(BIB.replace('First title','First title, on GitHub'));
-    await expect(status(page)).toContainText('octo/paper/paper · main · 1 local change · up to date with GitHub');
+    await expect(status(page)).toContainText('octo/paper › paper · main · 1 local change · up to date with GitHub');
     expect(fake.outside).toEqual([]);
     expect(errors).toEqual([]);
   }finally{await fake.close();}

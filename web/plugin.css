@@ -106,7 +106,7 @@
 .plugin-origin code{overflow-wrap:anywhere}
 
 /* A plugin's status item above the open project (ui.status). */
-.plugin-status-item{display:flex;align-items:center;gap:6px;min-width:0;max-width:min(560px,46vw);border:1px solid var(--border);border-radius:7px;padding:2px 4px 2px 8px;background:var(--subtle);font-size:11px;color:var(--text)}
+.plugin-status-item{display:flex;align-items:center;gap:6px;min-width:0;max-width:min(720px,52vw);border:1px solid var(--border);border-radius:7px;padding:2px 4px 2px 8px;background:var(--subtle);font-size:11px;color:var(--text)}
 .plugin-status-item.tone-attention{border-color:var(--log-warning)}
 .plugin-status-item.tone-error{border-color:var(--log-error)}
 .plugin-status-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
