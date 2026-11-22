@@ -462,7 +462,7 @@ test('review: change globs need project.apply with a dialog confirmation; bound 
     expect(r.bind).toMatchObject({ok:true});expect(r.bindElsewhere).toMatchObject({ok:false,code:'network_denied'});expect(r.bindHeaderUnsafe).toMatchObject({ok:false,code:'invalid_request'});
     expect(r.getBound).toEqual({ok:true,value:null});
     expect(r.useBound).toMatchObject({ok:true});expect(r.useUnbound).toMatchObject({ok:false,code:'network_denied'});
-    expect(server.requests.find(request=>request.url==='/auth').authorization).toBe('Bearer bound-secret-value');
+    expect(server.requests.find(request=>request.url==='/auth'&&request.method==='GET').authorization).toBe('Bearer bound-secret-value');
     expect(server.requests.some(request=>request.url==='/auth2')).toBe(false);
     expect(r.statusHidden).toMatchObject({ok:false,code:'invalid_request'});expect(r.status).toMatchObject({ok:true});
     expect(r.ask).toEqual({ok:true,value:{granted:false,origin:'https://gitlab.example.org'}});

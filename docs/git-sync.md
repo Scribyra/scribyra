@@ -375,9 +375,29 @@ and in the specs above.
 - An imported project's recorded source is shown as recorded. Linking it still checks
   access with the host and, for a new origin, asks.
 
-## Verification results
+## Verification
 
-See [Verification](#verification) at the end.
+Results, November 22, 2026, on `feature/git-plugins`:
+
+- `npm test`: 1,331 JavaScript tests pass (6 skipped, as before), and the Rust tests.
+  `tests/git-sync.test.mjs` covers diff, merge, paths, plans, records and blob ids.
+- `tests/browser/git-sync.spec.js`, 5 tests, passes in Chromium, Firefox and WebKit,
+  against the fakes in `tests/helpers/fake-git-hosts.mjs`: a GitHub folder link, pull,
+  refused push after the branch moved, per-file pull, push with the secret scan and
+  excludes; conflicts (keep mine, combine, edit) and a racing push and a new branch;
+  Reviewing and Viewing; self-hosted GitLab with Scribyra's origin consent, scope
+  warnings, the commits API, a refused concurrent edit and origin removal deleting its
+  token; and an Open in Scribyra import linked to its source.
+- Also passing in all three engines: `plugins` (6, including the review regressions),
+  `zotero` (8), `open-link` (5), `workspace` (5) and `accessibility` (6). Axe finds no
+  violations in the link, origin, pull, conflict and push dialogs.
+- `npm run build`, `npm run build:pages` and `scripts/ci-telemetry.py browser-pages`
+  (14 of 14) pass.
+
+Screenshots, light and dark, reviewed and iterated (the folder now follows `›`, the
+status tooltip repeats the text, UTF-8 files stored as binary get a text diff), in
+`docs/screenshots/git-sync/`: `git-link-dialog`, `git-origin-consent`,
+`git-pull-diff`, `git-conflict`, `git-push-dialog`, `git-status-bar`.
 
 ## Limits
 
