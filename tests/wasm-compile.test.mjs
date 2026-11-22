@@ -72,7 +72,10 @@ test('the server log puts diagnostics naming files first and bounds TeX\u2019s l
  assert.equal(serverLog({...result,log:''}),'Diagnostics:\nch/a.tex:3: Undefined control sequence.\n\n');
  const log=boundedLog(result,100);
  assert(log.startsWith('Diagnostics:\nch/a.tex:3: Undefined control sequence.\n\n[log truncated to its last 100 bytes of 5003]\n')&&log.endsWith('END'),log);
- assert.match(memoryMessage(576),/576 MiB; this build of BusyTeX addresses at most 2 GiB, wasm32 itself stops at 4 GB/);
+ // At the build's ceiling the message names it; below it (the server's compile memory limit
+ // leaves less beside Node) it names the per-compile ceiling and the limit to raise.
+ assert.match(memoryMessage(2047),/\(2047 MiB; this build of BusyTeX addresses at most 2 GiB, wasm32 itself stops at 4 GB\)\. .*compile it with the native engine\.$/);
+ assert.match(memoryMessage(576),/on this server \(576 MiB per compile; this build of BusyTeX addresses at most 2047 MiB, wasm32 itself stops at 4 GB\)\. .*raise the compile memory limit\.$/);
 });
 
 test('importScripts cannot climb out of the runtime with encoded separators',()=>{
