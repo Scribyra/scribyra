@@ -541,7 +541,14 @@ async function tokenMissing(){
   }});
   return !saved;
 }
+/** A self-hosted origin the person removed in the Plugins manager: say so before asking for a token. */
+async function originRemoved(){
+  if(!link)return;
+  const {granted,added}=await call('net.origins');
+  if(![...granted,...added].includes(link.origin))throw new Error(`This plugin may not contact ${link.origin}: it was removed in the Plugins manager, with the token bound to it. Link to the repository again to allow it.`);
+}
 async function run(action){
+  if(['pull','push','check'].includes(action))await originRemoved();
   if(action==='pull'){if(!await tokenMissing())await pull();}
   else if(action==='push'){if(!await tokenMissing())await push();}
   else if(action==='check'){if(!await tokenMissing())await check();}

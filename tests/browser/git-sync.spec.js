@@ -383,7 +383,10 @@ test('self-hosted GitLab: Scribyra asks before a new origin, token scopes are ex
     await expect(manager.getByRole('status')).toContainText('GitHub and GitLab can no longer contact https://gitlab.example.org.');
     await manager.getByRole('button',{name:'Close',exact:true}).click();
     await status(page).getByRole('button',{name:'Check'}).click();
-    await expect(notice(page)).toContainText('This plugin may not contact https://gitlab.example.org.');
+    await expect(notice(page)).toContainText('This plugin may not contact https://gitlab.example.org: it was removed in the Plugins manager, with the token bound to it.');
+    await expect(page.getByRole('dialog',{name:'GitLab access token needed'})).toHaveCount(0);
+    // Removing the origin deleted the token bound to it.
+    expect((await browserTraces(page)).databases['scribyra-plugin-secrets']).not.toContain(GL_TOKEN);
     // Tokens went only to the self-hosted server, as PRIVATE-TOKEN.
     expect(fake.outside).toEqual([]);
     for(const request of fake.own.requests().filter(request=>request.method!=='OPTIONS'))expect([GL_TOKEN,GL_READ_TOKEN]).toContain(request.headers['private-token']);
