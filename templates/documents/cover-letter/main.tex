@@ -1,0 +1,65 @@
+% Cover letter. Change the details in the block below; the layout follows.
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.5cm]{geometry} % letterpaper for US Letter
+\usepackage[english]{babel}                 % sets the date format, too
+\usepackage{microtype}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+% ---- Your details --------------------------------------------------------------
+\newcommand{\sendername}{Your Name}
+\newcommand{\senderaddress}{Street 1\\ 12345 City\\ Country}
+\newcommand{\sendercontact}{you@example.org \quad|\quad +00 123 456 789}
+% ---- Their details -------------------------------------------------------------
+\newcommand{\recipient}{Ms Hiring Manager\\ Company Name\\ Street 2\\ 67890 City}
+\newcommand{\subjectline}{Application for the position of Job Title (ref.\ 1234)}
+
+\definecolor{accent}{RGB}{91,77,200}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.8em}
+
+\begin{document}
+
+% Letterhead
+{\LARGE\bfseries\color{accent}\sendername}\par
+\vspace{-0.4em}
+{\small\senderaddress\\ \sendercontact}\par
+\vspace{1.5em}
+
+% Recipient and date
+\begin{minipage}[t]{0.6\linewidth}
+  \recipient
+\end{minipage}%
+\begin{minipage}[t]{0.4\linewidth}
+  \raggedleft City, \today
+\end{minipage}
+
+\vspace{1.5em}
+\textbf{\subjectline}
+
+Dear Ms Hiring Manager,
+
+Open with the role you are applying for and one sentence on why you are a good
+fit. Mention where you saw the advertisement, or who referred you.
+
+In the second paragraph, give two or three concrete examples from your
+experience that match what the employer asks for. Numbers and results are more
+convincing than adjectives.
+
+In the third paragraph, explain why you want to work for this organisation in
+particular, and what you would bring to the team.
+
+Close by thanking the reader and saying that you look forward to discussing
+the role. Mention any enclosures.
+
+Yours sincerely,
+
+\vspace{2.5em}
+\sendername
+
+\vspace{1em}
+{\small Enclosure: curriculum vitae}
+
+\end{document}

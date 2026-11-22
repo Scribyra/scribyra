@@ -1,0 +1,83 @@
+% Thesis / dissertation.
+%
+% Layout of this project:
+%   main.tex            this file: settings and the order of the parts
+%   frontmatter/        title page, declaration, abstract, acknowledgements
+%   chapters/           one file per chapter
+%   appendices/         one file per appendix
+%   references.bib      your bibliography (biblatex + Biber)
+%
+% Check your university's rules for margins, line spacing, the title page and
+% the citation style, and change the settings below to match.
+\documentclass[12pt,a4paper,oneside]{report} % twoside for printed, bound copies
+
+% ---- Page layout ------------------------------------------------------------
+\usepackage[top=2.5cm,bottom=2.5cm,inner=3cm,outer=2.5cm]{geometry} % wider inner margin for binding
+\usepackage{setspace}
+\onehalfspacing             % or \doublespacing if your rules ask for it
+\usepackage[english]{babel}
+\usepackage{microtype}
+
+% ---- Content ----------------------------------------------------------------
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{tikz}
+\usetikzlibrary{positioning}
+\usepackage[font=small,labelfont=bf]{caption}
+
+% ---- Bibliography: biblatex with Biber ------------------------------------
+% Common styles: authoryear, numeric, apa (needs biblatex-apa), ieee (biblatex-ieee).
+\usepackage[style=authoryear,backend=biber,maxcitenames=2]{biblatex}
+\addbibresource{references.bib}
+\usepackage{csquotes}
+
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalise,noabbrev]{cleveref}
+
+\newtheorem{definition}{Definition}[chapter]
+
+% ---- Thesis details: change these -----------------------------------------
+\newcommand{\thesistitle}{The Title of Your Thesis}
+\newcommand{\thesisauthor}{Your Full Name}
+\newcommand{\thesisdegree}{Doctor of Philosophy}
+\newcommand{\thesisdepartment}{Department of Your Subject}
+\newcommand{\thesisuniversity}{Your University}
+\newcommand{\thesissupervisor}{Prof.\ Supervisor Name}
+\newcommand{\thesisdate}{Month 2026}
+
+\hypersetup{pdftitle={\thesistitle},pdfauthor={\thesisauthor}}
+
+% While writing, compile only the chapter you are working on (much faster):
+% \includeonly{chapters/method}
+
+\begin{document}
+
+% ---- Front matter (roman page numbers) -------------------------------------
+\pagenumbering{roman}
+\input{frontmatter/titlepage}
+\input{frontmatter/declaration}
+\input{frontmatter/abstract}
+\input{frontmatter/acknowledgements}
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+% ---- Chapters (arabic page numbers) ----------------------------------------
+\cleardoublepage
+\pagenumbering{arabic}
+\include{chapters/introduction}
+\include{chapters/background}
+\include{chapters/method}
+\include{chapters/results}
+\include{chapters/conclusion}
+
+% ---- Bibliography ----------------------------------------------------------
+\printbibliography[heading=bibintoc,title={References}]
+
+% ---- Appendices --------------------------------------------------------------
+\appendix
+\include{appendices/appendix-a}
+
+\end{document}

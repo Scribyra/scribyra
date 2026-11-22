@@ -1,0 +1,9 @@
+{
+  "id": "article",
+  "name": "Article",
+  "category": "papers",
+  "order": 10,
+  "description": "A research paper with abstract, sections, a figure, a table, cross-references and a biblatex bibliography.",
+  "keywords": ["paper", "journal", "research", "biblatex", "biber", "references"],
+  "main": "main.tex"
+}

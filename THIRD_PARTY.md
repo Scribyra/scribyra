@@ -19,6 +19,7 @@ Scribyra's application code is AGPL-3.0-only. Dependencies retain their own lice
 | TeX Live 2026 | Engines, packages, fonts and tools | Multiple component licenses; retain distribution notices |
 | Babel Romanian 1.2m | Downloaded language package and test fixture | LPPL-1.3-or-later; original runtime and sources in `vendor/tex/babel-romanian` |
 | Optional TeX language support | Unmodified Babel, encoding and hyphenation runtime/source archives | Component-specific; recipe, checksums and catalogue license identifiers in `scripts/tex-support.json`, original notices and sources in `vendor/tex/support` |
+| Document templates (`templates/documents/`) | Starting points in the New project gallery and on scribyra.com/templates/ | Written for Scribyra; no third-party template text or classes. They load packages from the TeX Live distribution above (biblatex, beamer, tikzposter, tcolorbox, siunitx, pgfplots …) under those packages' licences. Journal classes (IEEEtran, acmart, elsarticle: LPPL 1.3; llncs: CC BY 4.0) are not shipped; see `docs/templates.md` |
 | fflate / idb | ZIP handling / IndexedDB wrapper | MIT / ISC |
 | synctex-parser 0.1.1 | Rust SyncTeX queries, locally adapted for memory-only WASM | MIT; source, license and provenance in `vendor/synctex-parser` |
 | flate2 | Bounded SyncTeX gzip decompression | MIT OR Apache-2.0 |

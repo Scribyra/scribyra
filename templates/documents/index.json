@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "categories": [
+    {"id": "start", "name": "Start here"},
+    {"id": "papers", "name": "Papers and reports"},
+    {"id": "long", "name": "Books and theses"},
+    {"id": "slides", "name": "Slides and posters"},
+    {"id": "teaching", "name": "Teaching and coursework"},
+    {"id": "career", "name": "Career"}
+  ]
+}

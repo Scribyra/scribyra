@@ -1,0 +1,81 @@
+% Homework / problem set.
+% \begin{problem} numbers itself; \begin{solution} follows it.
+% To hand out the questions without solutions, set \showsolutionsfalse below.
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.5cm,headheight=14pt]{geometry}
+\usepackage[english]{babel}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage{enumitem}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+\usepackage[hidelinks]{hyperref}
+
+% ---- Course details: change these ------------------------------------------
+\newcommand{\course}{MATH 101: Course Name}
+\newcommand{\assignment}{Problem Set 1}
+\newcommand{\student}{Your Name}
+\newcommand{\due}{Due: Friday, 14 March 2026}
+
+% ---- Show or hide the solutions --------------------------------------------
+\newif\ifshowsolutions
+\showsolutionstrue % \showsolutionsfalse hides every solution
+
+% ---- Header and footer -----------------------------------------------------
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\course}
+\fancyhead[R]{\student}
+\fancyfoot[C]{\assignment\ -- page \thepage\ of \pageref*{LastPage}}
+
+% ---- Environments ----------------------------------------------------------
+\theoremstyle{definition}
+\newtheorem{problem}{Problem}
+\newenvironment{solution}
+  {\ifshowsolutions\begin{proof}[Solution]\else\setbox0\vbox\bgroup\fi}
+  {\ifshowsolutions\end{proof}\else\egroup\fi}
+
+\setlist[enumerate,1]{label=(\alph*)}
+
+\begin{document}
+
+\begin{center}
+  {\Large\bfseries \assignment}\par\smallskip
+  \course\par\smallskip
+  \due
+\end{center}
+
+\begin{problem}
+  Show that $\sqrt{2}$ is irrational.
+\end{problem}
+\begin{solution}
+  Suppose $\sqrt{2} = p/q$ with $p, q$ integers without a common factor.
+  Then $p^2 = 2q^2$, so $p$ is even; write $p = 2k$. Then $q^2 = 2k^2$,
+  so $q$ is even as well, a contradiction.
+\end{solution}
+
+\begin{problem}
+  Let $f(x) = x^3 - 3x$.
+  \begin{enumerate}
+    \item Find all critical points of $f$.
+    \item Classify each as a local maximum or minimum.
+  \end{enumerate}
+\end{problem}
+\begin{solution}
+  \begin{enumerate}
+    \item $f'(x) = 3x^2 - 3 = 0$ gives $x = \pm 1$.
+    \item $f''(x) = 6x$, so $x = -1$ is a local maximum and $x = 1$ a local minimum.
+  \end{enumerate}
+\end{solution}
+
+\begin{problem}
+  Evaluate $\displaystyle\sum_{k=1}^{n} k$.
+\end{problem}
+\begin{solution}
+  Pair the first and last terms: there are $n/2$ pairs, each summing to $n+1$, so
+  \[
+    \sum_{k=1}^{n} k = \frac{n(n+1)}{2}. \qedhere
+  \]
+\end{solution}
+
+\end{document}

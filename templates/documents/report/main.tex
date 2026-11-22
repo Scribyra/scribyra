@@ -1,0 +1,111 @@
+% Report: a technical or project report with chapters.
+% The report class numbers chapters; use \section inside them.
+\documentclass[11pt,a4paper]{report}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{fancyhdr}  % running headers and footers
+
+\usepackage[style=numeric,backend=biber]{biblatex}
+\addbibresource{references.bib}
+\usepackage{csquotes}
+\usepackage[hidelinks]{hyperref}
+
+% ---- Report details: change these ----------------------------------------
+\newcommand{\reporttitle}{Project Report Title}
+\newcommand{\reportsubtitle}{What was done, what was learned}
+\newcommand{\reportauthor}{Your Name}
+\newcommand{\reportorg}{Your Organisation}
+\newcommand{\reportnumber}{Report No.~2026-01}
+
+% Headers: report title on the left, chapter on the right.
+\pagestyle{fancy}
+\fancyhf{}
+\fancyhead[L]{\small\reporttitle}
+\fancyhead[R]{\small\leftmark}
+\fancyfoot[C]{\thepage}
+\setlength{\headheight}{14pt}
+
+\begin{document}
+
+% ---- Title page -------------------------------------------------------------
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\color{MidnightBlue}\rule{\linewidth}{1pt}\par}
+  \vspace{1cm}
+  {\Huge\bfseries \reporttitle\par}
+  \vspace{0.5cm}
+  {\Large \reportsubtitle\par}
+  \vspace{1cm}
+  {\color{MidnightBlue}\rule{\linewidth}{1pt}\par}
+  \vfill
+  {\large \reportauthor\par}
+  \vspace{0.3cm}
+  {\reportorg\par}
+  \vspace{0.3cm}
+  {\reportnumber\quad\textbullet\quad\today\par}
+\end{titlepage}
+
+% ---- Front matter -----------------------------------------------------------
+\pagenumbering{roman}
+\chapter*{Executive summary}
+\addcontentsline{toc}{chapter}{Executive summary}
+One page for busy readers: the purpose, the main findings and the
+recommendations. Write it last.
+
+\tableofcontents
+
+% ---- Main text --------------------------------------------------------------
+\cleardoublepage
+\pagenumbering{arabic}
+
+\chapter{Introduction}
+\label{ch:introduction}
+Explain the background, the goals and the scope of the work. Cite earlier
+reports where useful~\cite{lee2024}.
+
+\chapter{Approach}
+\label{ch:approach}
+\section{Requirements}
+List what the work had to achieve, and the tools you relied on~\cite{tools2025}.
+
+\section{Plan}
+Describe how you went about it. Refer to other chapters by label, for
+example Chapter~\ref{ch:results}.
+
+\chapter{Results}
+\label{ch:results}
+\begin{table}[htbp]
+  \centering
+  \caption{Milestones and their status.}
+  \begin{tabular}{llr}
+    \toprule
+    Milestone        & Status      & Effort (days) \\
+    \midrule
+    Requirements     & Complete    & 5 \\
+    Prototype        & Complete    & 12 \\
+    Evaluation       & In progress & 8 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\chapter{Recommendations}
+\begin{enumerate}
+  \item The first thing the reader should do.
+  \item The second thing.
+\end{enumerate}
+
+% ---- Back matter ------------------------------------------------------------
+\appendix
+\chapter{Supporting data}
+Put long tables, derivations or questionnaires here.
+
+\printbibliography[heading=bibintoc]
+
+\end{document}

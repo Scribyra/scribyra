@@ -1,0 +1,9 @@
+{
+  "id": "sample",
+  "name": "Sample paper",
+  "category": "start",
+  "order": 10,
+  "description": "A short article with an abstract, sections and equations. The quickest way to see Scribyra at work.",
+  "keywords": ["starter", "example", "article", "demo"],
+  "main": "main.tex"
+}
