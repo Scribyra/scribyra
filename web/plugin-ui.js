@@ -63,6 +63,29 @@ function confirmDialog({title,message,label,danger=false}){
   });
 }
 
+const privateHost=origin=>{const host=new URL(origin).hostname.replace(/^\[|\]$/g,'');return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd]|fe80:)/i.test(host)||host.endsWith('.local')||host.endsWith('.internal')||host.endsWith('.home.arpa');};
+/**
+ * A plugin with “network.ask” wants to contact one more origin (docs/plugins.md#network).
+ * Scribyra asks, not the plugin; resolves to true when the person allows it.
+ */
+export function originConsentDialog({plugin,origin,reason='',purpose=''}){
+  return new Promise(resolve=>{
+    const title=`Allow ${plugin.name} to contact ${new URL(origin).host}?`;
+    const dialog=el('dialog',{className:'modal plugin-consent plugin-origin','aria-label':title});restoreDialogFocus(dialog);
+    const finish=value=>{dialog.close();dialog.remove();resolve(value);};
+    dialog.append(...present(el('h2',{text:title}),
+      el('p',{className:'plugin-meta',text:`${plugin.name} plugin${plugin.source==='developer'?' · developer, unverified':''}`}),
+      el('p',{},'It asks to contact ',el('code',{text:origin}),purpose?` (${purpose})`:'','.'),
+      reason?el('p',{className:'plugin-text tone-note',text:`${plugin.name} says: ${reason}`}):null,
+      el('p',{className:'plugin-text',text:'Once allowed, it can send what it reads from the open project to this address, as it can to the addresses you allowed at install. Allow only a server you trust.'}),
+      privateHost(origin)?el('p',{className:'plugin-text tone-warning',role:'note',text:'This address is on your own computer or local network.'}):null,
+      el('p',{className:'plugin-text tone-muted',text:'You can remove it anytime in More tools → Plugins.'}),
+      el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button('Allow',()=>finish(true),{primary:true}))));
+    dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
+    document.body.append(dialog);dialog.showModal();dialog.querySelector('.button.secondary').focus();
+  });
+}
+
 /** A file a plugin asked the person to choose; resolves to {id, path} or null. */
 export function pickFileDialog({plugin,title,files,signal}){
   return new Promise(resolve=>{
@@ -132,6 +155,8 @@ export function pluginManager({system,catalog,fetchPackage,policy,notify}){
                   if(!await consentDialog({manifest:record.manifest,source:record.source,sourceUrl:record.sourceUrl,sha256:record.sha256,existing:{version:record.version},added:{[line.key]:record.manifest.permissions[line.key]},regrant:true}))return;
                   await system.grant(record.id,line.key);say(`${name} can again: ${line.text.toLowerCase()}.`);}),{'aria-label':`Grant again: ${line.text}`,'data-focus':`perm:${record.id}:${line.key}`,disabled:busy})));
           })),
+          (record.addedOrigins||[]).length&&record.manifest.permissions['network.ask']?el('ul',{className:'plugin-permissions','aria-label':`Addresses you allowed for ${name}`},record.addedOrigins.map(origin=>el('li',{'data-origin':origin},el('span',{text:`Also contact ${origin} (you allowed it)`}),
+            button('Remove',()=>void work(async()=>{await system.removeOrigin(record.id,origin);say(`${name} can no longer contact ${origin}.`);}),{'aria-label':`Remove ${origin}`,'data-focus':`origin:${record.id}:${origin}`,disabled:busy})))):null,
           el('div',{className:'plugin-card-actions'},
             newer?button(`Update to ${newer.version}`,()=>void work(()=>installOfficial(entry,newer)),{primary:true,'data-focus':`update:${record.id}`,disabled:busy}):null,
             record.previous?button(`Roll back to ${record.previous.version}`,()=>void work(async()=>{const next=await system.rollback(record.id);say(`${name} rolled back to ${next.version}.`);}),{'data-focus':`rollback:${record.id}`,disabled:busy}):null,

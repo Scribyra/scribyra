@@ -7,7 +7,7 @@ export const MAX_PACKAGE_BYTES=4*1024*1024;
 export const OFFICIAL_PREFIX='com.scribyra.';
 export const MODES=['editing','reviewing','viewing'];
 export const ICONS=['link','restore','book','download','upload','open','file-plus','check','eye','copy'];
-export const PERMISSIONS=['project.read','project.write','network','secrets','ui.dialog','ui.command','ui.fileAction','completion','bibliography'];
+export const PERMISSIONS=['project.read','project.write','network','network.ask','secrets','ui.dialog','ui.command','ui.fileAction','ui.status','completion','bibliography'];
 const RESERVED={'ui.panel':'“ui.panel” (a sandboxed iframe panel) is reserved and not available in plugin API 1. Use “ui.dialog”.'};
 
 export class PluginError extends Error{constructor(code,message){super(message);this.name='PluginError';this.code=code;}}
@@ -95,17 +95,32 @@ export function normalPermissions(value,{developer=false}={}){
     if(RESERVED[key])fail(RESERVED[key]);
     if(!PERMISSIONS.includes(key))fail(`Unknown permission “${key}”.`);
     switch(key){
-      case 'project.read':if(!isObject(grant))fail('“project.read” needs {"files": [patterns]}.');only(grant,['files'],'“project.read”');result[key]={files:globs(grant.files,'“project.read.files”')};break;
+      case 'project.read':{
+        if(!isObject(grant))fail('“project.read” needs {"files": [patterns]}.');only(grant,['files','binary'],'“project.read”');
+        if(grant.binary!==undefined&&typeof grant.binary!=='boolean')fail('“project.read.binary” must be true or false.');
+        // Binary files (images, PDFs…) are readable only when the manifest says so.
+        result[key]={files:globs(grant.files,'“project.read.files”'),...(grant.binary?{binary:true}:{})};break;
+      }
       case 'project.write':{
-        if(!isObject(grant))fail('“project.write” needs {"create": [patterns], "pick": true|false}.');only(grant,['create','pick'],'“project.write”');
+        if(!isObject(grant))fail('“project.write” needs {"create": [patterns], "pick": true|false}.');only(grant,['create','pick','change'],'“project.write”');
         const create=grant.create===undefined?[]:globs(grant.create,'“project.write.create”');
+        // `change`: existing files matching these patterns may be changed and deleted, not
+        // only the ones the plugin created or the person picked (multi-file changes the
+        // person confirms, applied with project.apply).
+        const change=grant.change===undefined?[]:globs(grant.change,'“project.write.change”');
         if(grant.pick!==undefined&&typeof grant.pick!=='boolean')fail('“project.write.pick” must be true or false.');
-        if(!create.length&&!grant.pick)fail('“project.write” must allow creating files or picking them.');
-        result[key]={create,pick:!!grant.pick};break;
+        if(!create.length&&!grant.pick&&!change.length)fail('“project.write” must allow creating, picking or changing files.');
+        result[key]={create,pick:!!grant.pick,...(change.length?{change}:{})};break;
       }
       case 'network':{
         if(!Array.isArray(grant)||!grant.length||grant.length>8)fail('“network” must list one to eight origins.');
         result[key]=[...new Set(grant.map(origin=>normalOrigin(origin,{developer})))].sort();break;
+      }
+      case 'network.ask':{
+        // The plugin may ask the person, in Scribyra's own dialog, to allow further https://
+        // origins (a self-hosted server). Each one needs that consent and can be removed.
+        if(!isObject(grant))fail('“network.ask” needs {"purpose": "what the addresses are for"}.');only(grant,['purpose'],'“network.ask”');
+        result[key]={purpose:text(grant.purpose,'“network.ask.purpose”',100)};break;
       }
       default:if(grant!==true)fail(`“${key}” must be true.`);result[key]=true;
     }
@@ -192,9 +207,13 @@ export function addedPermissions(granted,requested){
   for(const [key,grant]of Object.entries(requested)){
     const before=granted?.[key];
     if(before===undefined){added[key]=grant;continue;}
-    if(key==='project.read'){const extra=grant.files.filter(glob=>!before.files.includes(glob));if(extra.length)added[key]={files:extra};}
-    else if(key==='project.write'){const extra=grant.create.filter(glob=>!before.create.includes(glob));if(extra.length||grant.pick&&!before.pick)added[key]={create:extra,pick:grant.pick&&!before.pick};}
+    if(key==='project.read'){const extra=grant.files.filter(glob=>!before.files.includes(glob)),binary=!!grant.binary&&!before.binary;if(extra.length||binary)added[key]={files:extra.length?extra:grant.files,...(binary?{binary:true}:{})};}
+    else if(key==='project.write'){
+      const extra=grant.create.filter(glob=>!before.create.includes(glob)),change=(grant.change||[]).filter(glob=>!(before.change||[]).includes(glob));
+      if(extra.length||grant.pick&&!before.pick||change.length)added[key]={create:extra,pick:grant.pick&&!before.pick,...(change.length?{change}:{})};
+    }
     else if(key==='network'){const extra=grant.filter(origin=>!before.includes(origin));if(extra.length)added[key]=extra;}
+    else if(key==='network.ask'&&grant.purpose!==before.purpose)added[key]=grant;
   }
   return added;
 }
@@ -202,14 +221,17 @@ const privateOrigin=origin=>{const host=new URL(origin).hostname.replace(/^\[|\]
 const list=items=>items.length<=1?items.join(''):`${items.slice(0,-1).join(', ')} and ${items.at(-1)}`;
 /** Plain words for the consent dialog and the manager, one line per permission. */
 // Most consequential first: what it reads and changes, where it sends, what it keeps.
-const ORDER=['project.read','project.write','network','secrets','bibliography','completion','ui.dialog','ui.command','ui.fileAction'];
+const ORDER=['project.read','project.write','network','network.ask','secrets','bibliography','completion','ui.dialog','ui.command','ui.fileAction','ui.status'];
+const everything=globs=>globs.length===1&&globs[0]==='**';
 export function describePermissions(permissions){
   const lines=[];
   for(const [key,grant]of Object.entries(permissions).sort(([a],[b])=>ORDER.indexOf(a)-ORDER.indexOf(b))){
     switch(key){
-      case 'project.read':lines.push({key,text:`Read files in the open project matching ${list(grant.files)}`,detail:'Only the project you have open, never your other projects, history or comments.'});break;
-      case 'project.write':lines.push({key,text:[grant.create.length?`Create ${list(grant.create)} files and change the files it created`:'',grant.pick?'Change files you pick for it':''].filter(Boolean).join('; '),detail:'In Reviewing its changes become suggestions; in Viewing it cannot change anything.'});break;
+      case 'project.read':lines.push({key,text:everything(grant.files)?`Read every file in the open project${grant.binary?', including images and other binary files':''}`:`Read ${grant.binary?'files, including binary files,':'files'} in the open project matching ${list(grant.files)}`,detail:'Only the project you have open, never your other projects, history or comments.'});break;
+      case 'project.write':lines.push({key,text:[grant.change?.length?(everything(grant.change)?'Add, change and delete any file in the open project, in changes you confirm':`Change and delete files matching ${list(grant.change)}, in changes you confirm`):'',grant.create.length&&!(grant.change?.length&&everything(grant.create))?`Create ${list(grant.create)} files and change the files it created`:'',grant.pick?'Change files you pick for it':''].filter(Boolean).join('; '),detail:grant.change?.length?'Each change is applied at once after you confirm it, and deleted files can be restored. In Reviewing its changes become suggestions; in Viewing it cannot change anything.':'In Reviewing its changes become suggestions; in Viewing it cannot change anything.'});break;
       case 'network':lines.push({key,text:`Contact ${list(grant)}`,detail:`It can send what it reads from the open project there. No other address.${grant.some(privateOrigin)?' Some of these are on your own computer or local network.':''}`});break;
+      case 'network.ask':lines.push({key,text:`Ask you to allow other https:// addresses (${grant.purpose})`,detail:'Scribyra asks you about each address in its own dialog. You can remove them in More tools → Plugins.'});break;
+      case 'ui.status':lines.push({key,text:'Show a status item above the open project'});break;
       case 'secrets':lines.push({key,text:'Keep secrets such as API keys on this device',detail:'Never in projects, history, backups, exports, diagnostics or telemetry.'});break;
       case 'ui.dialog':lines.push({key,text:'Show dialogs'});break;
       case 'ui.command':lines.push({key,text:'Add items to More tools'});break;

@@ -87,4 +87,32 @@
 .bibliography-problems li{display:flex;gap:6px;align-items:baseline}
 .bibliography-problems li[data-severity=error] .bibliography-badge{border-color:var(--log-error);color:var(--log-error)}
 .bibliography-problems li[data-severity=warning] .bibliography-badge{border-color:var(--log-warning);color:var(--log-warning)}
+/* Line diffs in plugin dialogs (web/line-diff.js displayDiff) and multi-line fields. */
+:root{--diff-added:#e3f4ea;--diff-removed:#fbe7e9;--diff-gap:var(--subtle)}
+:root[data-theme=dark]{--diff-added:#1d3a2c;--diff-removed:#462329}
+.plugin-diff{border:1px solid var(--border);border-radius:6px;overflow:auto;max-height:320px;background:var(--surface);margin:2px 0 6px}
+.plugin-diff-lines{list-style:none;margin:0;padding:0;font:12px/1.55 "SFMono-Regular",Consolas,"Liberation Mono",monospace;min-width:max-content}
+.plugin-diff-lines li{display:grid;grid-template-columns:3.2em 3.2em 1.4em 1fr;align-items:baseline;white-space:pre;padding-right:10px}
+.plugin-diff-lines li.is-added{background:var(--diff-added)}
+.plugin-diff-lines li.is-removed{background:var(--diff-removed)}
+.plugin-diff-lines li.is-gap{background:var(--diff-gap);color:var(--muted);font-style:italic}
+.plugin-diff-lines code{font:inherit;color:var(--text)}
+.plugin-diff-lines li.is-gap code{color:var(--muted)}
+.plugin-diff-number{color:var(--muted);text-align:right;padding-right:6px;user-select:none}
+.plugin-diff-sign{text-align:center;color:var(--muted);user-select:none}
+.plugin-diff-lines li.is-added .plugin-diff-sign{color:var(--syntax-variable);font-weight:700}
+.plugin-diff-lines li.is-removed .plugin-diff-sign{color:var(--syntax-string);font-weight:700}
+.plugin-dialog .plugin-field textarea.input{font:12px/1.55 "SFMono-Regular",Consolas,"Liberation Mono",monospace;resize:vertical;min-height:7em;white-space:pre;overflow-wrap:normal;overflow:auto}
+.plugin-origin code{overflow-wrap:anywhere}
+
+/* A plugin's status item above the open project (ui.status). */
+.plugin-status-item{display:flex;align-items:center;gap:6px;min-width:0;max-width:min(560px,46vw);border:1px solid var(--border);border-radius:7px;padding:2px 4px 2px 8px;background:var(--subtle);font-size:11px;color:var(--text)}
+.plugin-status-item.tone-attention{border-color:var(--log-warning)}
+.plugin-status-item.tone-error{border-color:var(--log-error)}
+.plugin-status-text{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.plugin-status-item .plugin-chip{font-size:10px;white-space:nowrap}
+.plugin-status-item .button.compact{min-height:26px;padding:3px 9px;font-size:11px}
+@media (max-width:900px){.plugin-status-item .plugin-chip{display:none}}
+@media (max-width:740px){.plugin-status-item{max-width:42vw}.plugin-status-item .button.compact{font-size:11px;padding:3px 7px}}
+
 @media (max-width:560px){.plugin-list li,.plugin-permissions li{flex-direction:column;align-items:stretch}.linked-file-bar{flex-wrap:wrap}.linked-file-summary{white-space:normal}}

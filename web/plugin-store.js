@@ -3,13 +3,16 @@
 //
 //   scribyra-plugins
 //     plugins:  id → {id, version, manifest, sha256, source, sourceUrl, granted, enabled,
-//               installedAt, updatedAt, previous}
+//               installedAt, updatedAt, previous, addedOrigins}; addedOrigins are the
+//               https origins the person allowed later through "network.ask"
 //     packages: "<id>@<version>" → {id, version, bytes}
 //     data:     [pluginId, scope, key] → {pluginId, scope, key, value, size}; scope '' is the
 //               plugin's own storage, otherwise a project id (projectData)
 //     owned:    [pluginId, projectId, fileId] → files a plugin created or the person picked
 //   scribyra-plugin-secrets
-//     secrets:  [pluginId, name] → {pluginId, name, value}
+//     secrets:  [pluginId, name] → {pluginId, name, value, origin}; a secret with an origin is
+//               bound to it: the host adds it to requests to that origin only, and never
+//               hands it back to the plugin
 //
 // Plugins never see these records: the host reads and writes them for a plugin, keyed by
 // the plugin id from its own instance record. Nothing here is part of a project, so it
@@ -82,8 +85,9 @@ export const pluginStore={
     await deleteByIndex(database,'owned','project',projectId);
   },
   async secretGet(pluginId,name){return (await (await secretDb()).get('secrets',[pluginId,name]))?.value??null;},
+  async secretRecord(pluginId,name){return (await (await secretDb()).get('secrets',[pluginId,name]))||null;},
   async secretNames(pluginId){return (await (await secretDb()).getAllFromIndex('secrets','plugin',pluginId)).map(item=>item.name).sort();},
-  async secretSet(pluginId,name,value){await (await secretDb()).put('secrets',{pluginId,name,value});},
+  async secretSet(pluginId,name,value,origin=null){await (await secretDb()).put('secrets',{pluginId,name,value,...(origin?{origin}:{})});},
   async secretDelete(pluginId,name){await (await secretDb()).delete('secrets',[pluginId,name]);},
 };
 

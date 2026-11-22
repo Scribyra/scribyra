@@ -104,6 +104,19 @@ struct State {
     file_bar: Option<FileBar>,
     /// More tools items contributed by enabled plugins.
     plugin_commands: Vec<PluginCommand>,
+    /// Status items plugins show above the open project (ui.status), drawn here.
+    plugin_status: Vec<PluginStatus>,
+}
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+struct PluginStatus {
+    plugin: String,
+    plugin_name: String,
+    label: String,
+    text: String,
+    title: String,
+    tone: String,
+    actions: Vec<BarAction>,
 }
 #[derive(Clone, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase")]
@@ -289,6 +302,11 @@ fn App() -> impl IntoView {
                     <span class="brand-mark small">"s"</span><span class="header-divider"></span>
                     <button class="project-title" title="Rename project" on:click=move |_| action("rename-project", "")>{move || s.get().name}</button>
                     <span class="save-indicator">{move || s.get().save_status}</span>
+                    {move || s.get().plugin_status.into_iter().map(|item| { let tone = format!("plugin-status-item tone-{}", item.tone); view! {
+                        <div class=tone role="group" aria-label=item.label.clone() data-plugin=item.plugin.clone()><span class="plugin-status-text" title=item.title.clone()>{item.text.clone()}</span><span class="plugin-chip">{item.plugin_name.clone()}</span>
+                            {item.actions.into_iter().map(|a| { let value = format!("{}:{}", a.plugin, a.id); view! { <button class="button secondary compact" disabled=a.disabled title=a.title.clone() on:click=move |_| action("plugin-status", &value)>{a.label.clone()}</button> } }).collect::<Vec<_>>()}
+                        </div>
+                    } }).collect::<Vec<_>>()}
                     <div class="header-spacer"></div>
                     <Show when=move || s.get().upgrade_available><button class="button secondary compact" on:click=move |_| action("upgrade-project", "")>"Export before updating"</button></Show>
                     <Show when=move || s.get().recovery_available><button class="button secondary compact recover-button" title="Save recovered copy" on:click=move |_| action("recover-project", "")>"Save recovered copy"</button></Show>
