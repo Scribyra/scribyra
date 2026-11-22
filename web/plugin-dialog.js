@@ -8,7 +8,8 @@
 import {restoreDialogFocus} from './input.js';
 import {failure} from './plugin-errors.js';
 
-const MAX_NODES=2000,ID=/^[a-z][a-z0-9_-]{0,63}$/i;
+const MAX_NODES=2000,MAX_DIFF_LINES=6000,ID=/^[a-z][a-z0-9_-]{0,63}$/i;
+const DIFF_KINDS=new Set(['context','added','removed','gap']);
 const TONES=new Set(['note','warning','muted','privacy','blocked','source','summary','empty']);
 const BADGE_TONES=new Set(['added','changed','removed','conflict','cited','error','warning','neutral']);
 const isObject=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
@@ -32,7 +33,7 @@ function content(node,name){
 /** Validates and normalises a dialog spec; throws a coded error on anything unexpected. */
 export function validateDialogSpec(spec){
   if(!isObject(spec))throw failure('invalid_dialog','A dialog spec is an object.');
-  let count=0;const ids=new Set();
+  let count=0,diffLines=0;const ids=new Set();
   const id=(value,optional=false)=>{if(value===undefined&&optional)return undefined;if(typeof value!=='string'||!ID.test(value)||ids.has(value))throw failure('invalid_dialog',`Dialog ids must be unique words; “${value}” is not.`);ids.add(value);return value;};
   const button=item=>{if(!isObject(item))throw failure('invalid_dialog','A button is an object.');return {id:id(item.id),label:str(item.label,60,'Button label'),primary:!!item.primary,danger:!!item.danger,disabled:!!item.disabled,ariaLabel:str(item.ariaLabel,120,'Button name',{optional:true})};};
   const options=list=>{if(!Array.isArray(list)||list.length>500)throw failure('invalid_dialog','Options are a list of at most 500.');return list.map(option=>({value:str(option?.value,200,'Option value'),label:str(option?.label,200,'Option label')}));};
@@ -45,9 +46,9 @@ export function validateDialogSpec(spec){
       case 'text':{const tone=value.tone===undefined?undefined:TONES.has(value.tone)?value.tone:null;if(tone===null)throw failure('invalid_dialog','Unknown text tone.');return {type:'text',content:content(value,'Text'),tone};}
       case 'link':return {type:'link',href:https(value.href),text:str(value.text,200,'Link text')};
       case 'field':{
-        const input=['text','password','select','checkbox'].includes(value.input)?value.input:null;if(!input)throw failure('invalid_dialog','A field is text, password, select or checkbox.');
+        const input=['text','password','select','checkbox','textarea'].includes(value.input)?value.input:null;if(!input)throw failure('invalid_dialog','A field is text, password, select, checkbox or textarea.');
         return {type:'field',id:id(value.id),input,label:str(value.label,120,'Field label'),help:value.help===undefined?undefined:content({content:Array.isArray(value.help)?value.help:[value.help]},'Help'),
-          value:input==='checkbox'?!!value.value:str(value.value??'',4000,'Field value'),version:Number.isSafeInteger(value.version)?value.version:0,
+          value:input==='checkbox'?!!value.value:str(value.value??'',input==='textarea'?400000:4000,'Field value'),version:Number.isSafeInteger(value.version)?value.version:0,rows:input==='textarea'?Math.min(30,Math.max(3,Number.isSafeInteger(value.rows)?value.rows:10)):undefined,
           options:input==='select'?options(value.options??[]):undefined,placeholder:str(value.placeholder,120,'Placeholder',{optional:true}),disabled:!!value.disabled,submit:value.submit===undefined?undefined:str(value.submit,64,'Submit')};
       }
       case 'group':return {type:'group',id:id(value.id,true),legend:str(value.legend,200,'Legend'),legendCode:!!value.legendCode,disabled:!!value.disabled,tone:value.tone==='conflict'?'conflict':undefined,key:str(value.key,200,'Key',{optional:true}),kind:str(value.kind,40,'Kind',{optional:true}),children:children(value.children??[])};
@@ -59,6 +60,12 @@ export function validateDialogSpec(spec){
         return {type:'table',caption:str(value.caption,200,'Caption'),columns,rows:value.rows.map(row=>{if(!Array.isArray(row)||row.length!==columns.length)throw failure('invalid_dialog','Each row has one cell per column.');return row.map(cell=>str(cell,4000,'Cell'));}),tones:Array.isArray(value.tones)?value.tones.slice(0,columns.length).map(tone=>['before','after'].includes(tone)?tone:''):[]};
       }
       case 'details':return {type:'details',summary:str(value.summary,120,'Summary'),text:str(value.text,20000,'Details')};
+      // A line diff, drawn with +/- markers and line numbers (web/line-diff.js displayDiff).
+      case 'diff':{
+        if(!Array.isArray(value.lines)||value.lines.length>1000||(diffLines+=value.lines.length)>MAX_DIFF_LINES)throw failure('invalid_dialog',`A diff has at most 1000 lines, and a dialog ${MAX_DIFF_LINES}.`);
+        const line=item=>{if(!isObject(item)||!DIFF_KINDS.has(item.kind))throw failure('invalid_dialog','Diff lines are context, added, removed or gap.');const number=n=>Number.isSafeInteger(n)&&n>0?n:null;return {kind:item.kind,text:str(item.text??'',2000,'Diff line'),old:number(item.old),new:number(item.new)};};
+        return {type:'diff',label:str(value.label,200,'Diff label'),lines:value.lines.map(line),note:str(value.note,200,'Diff note',{optional:true})};
+      }
       case 'choice':return {type:'choice',id:id(value.id),label:str(value.label,200,'Choice label'),options:options(value.options),value:str(value.value??'',200,'Choice'),version:Number.isSafeInteger(value.version)?value.version:0};
       case 'status':return {type:'status',id:id(value.id??'status'),text:str(value.text??'',1000,'Status')};
       case 'list':{
@@ -131,11 +138,11 @@ export function openPluginDialog({plugin,spec,onEvent,onClosed=()=>{}}){
       case 'field':{
         let entry=keyed.get(node.id);
         if(!entry||entry.kind!=='field'||entry.input!==node.input){
-          const control=node.input==='select'?el('select',{className:'input'}):el('input',{className:'input',type:node.input,autocomplete:'off',spellcheck:'false'});
+          const control=node.input==='select'?el('select',{className:'input'}):node.input==='textarea'?el('textarea',{className:'input plugin-textarea',spellcheck:'false',autocomplete:'off'}):el('input',{className:'input',type:node.input,autocomplete:'off',spellcheck:'false'});
           if(node.input==='checkbox')control.className='plugin-checkbox';
           const fieldId=`plugin-field-${Math.random().toString(36).slice(2)}`;control.id=fieldId;
           control.addEventListener('change',()=>emit('change',node.id));
-          control.addEventListener('keydown',event=>{const submit=keyed.get(node.id)?.submit;if(event.key==='Enter'&&submit&&!event.isComposing){event.preventDefault();const target=keyed.get(submit);if(target?.kind==='button'&&!target.node.disabled)emit('click',submit);}});
+          control.addEventListener('keydown',event=>{const submit=keyed.get(node.id)?.submit;if(event.key==='Enter'&&submit&&!event.isComposing&&node.input!=='textarea'){event.preventDefault();const target=keyed.get(submit);if(target?.kind==='button'&&!target.node.disabled)emit('click',submit);}});
           const label=el('label',{for:fieldId});
           const help=el('small',{className:'plugin-help',id:`${fieldId}-help`});
           entry={kind:'field',input:node.input,control,label,help,version:null,node:el('div',{className:`plugin-field${node.input==='checkbox'?' checkbox':''}`})};
@@ -149,6 +156,7 @@ export function openPluginDialog({plugin,spec,onEvent,onClosed=()=>{}}){
         }
         if(entry.version!==node.version){if(node.input==='checkbox')control.checked=node.value;else control.value=node.value;entry.version=node.version;}
         if(node.placeholder!==undefined)control.placeholder=node.placeholder;else control.removeAttribute('placeholder');
+        if(node.rows)control.rows=node.rows;
         control.disabled=node.disabled;entry.submit=node.submit;
         entry.node.replaceChildren(...(node.input==='checkbox'?[control,label]:[label,control]),...(node.help?[help]:[]));
         keyed.set(node.id,entry);return entry.node;
@@ -163,6 +171,14 @@ export function openPluginDialog({plugin,spec,onEvent,onClosed=()=>{}}){
       case 'table':return el('table',{className:'plugin-table'},el('caption',{className:'sr-only',text:node.caption}),el('thead',{},el('tr',{},node.columns.map(column=>el('th',{scope:'col',text:column})))),
         el('tbody',{},node.rows.map(row=>el('tr',{},row.map((cell,i)=>i===0?el('th',{scope:'row',text:cell}):el('td',{className:node.tones[i]?`tone-${node.tones[i]}`:undefined,text:cell}))))));
       case 'details':return el('details',{className:'plugin-details'},el('summary',{text:node.summary}),el('pre',{text:node.text}));
+      case 'diff':{
+        const sign={added:'+',removed:'−',context:' ',gap:'⋯'},spoken={added:'Added: ',removed:'Removed: ',context:'',gap:''};
+        return el('div',{className:'plugin-diff',role:'group','aria-label':node.label},
+          el('ol',{className:'plugin-diff-lines'},node.lines.map(line=>el('li',{className:`is-${line.kind}`},
+            el('span',{className:'plugin-diff-number','aria-hidden':'true',text:line.old?String(line.old):''}),el('span',{className:'plugin-diff-number','aria-hidden':'true',text:line.new?String(line.new):''}),
+            el('span',{className:'plugin-diff-sign','aria-hidden':'true',text:sign[line.kind]}),spoken[line.kind]?el('span',{className:'sr-only',text:spoken[line.kind]}):null,el('code',{text:line.text||(line.kind==='gap'?'':'\u00a0')})))),
+          node.note?el('p',{className:'plugin-text tone-muted',text:node.note}):null);
+      }
       case 'choice':{
         let entry=keyed.get(node.id);
         if(!entry||entry.kind!=='choice'){entry={kind:'choice',version:null,name:`plugin-choice-${Math.random().toString(36).slice(2)}`,node:el('div',{className:'plugin-choices',role:'radiogroup'})};}
