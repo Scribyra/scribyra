@@ -49,20 +49,28 @@ required for matching packages available from the default mirror.
 
 ## Compile and cache flow
 
-1. Compile the unmodified project locally in the LuaLaTeX worker.
-2. On failure, resolve explicit missing-file/language/module/font diagnostics against
+1. Before the first pass, install what the project is known to need: the packages its
+   last successful compile on this device installed (remembered per project, names only;
+   on the server, passed with each job), then the classes, packages, Beamer themes, TikZ/PGF
+   libraries and BibTeX styles its source names literally (`\documentclass`, `\usepackage`,
+   `\RequirePackage`, …) that the engine's tree does not already contain, each with the
+   catalog's declared dependencies that the engine lacks, transitively. A dependency of which
+   any file is already in the tree is never installed over it.
+2. Compile the unmodified project locally in the LuaLaTeX worker.
+3. On failure, resolve explicit missing-file/language/module/font diagnostics against
    the pinned catalog. Structured Kpathsea missing lookups cover additional
    paths; LuaTeX bypasses the upstream hook in some cases. Nothing is downloaded
    after a successful compile merely because an optional probe failed.
-3. Fetch a package archive asynchronously, enforce download bounds, verify its
+4. Fetch package archives asynchronously, four at a time for one round, enforce download bounds, verify its
    SHA-512, decode XZ, and read TAR entries using Rust/WASM in a separate worker.
    Preserve catalogued TeX Directory Structure paths; never run install scripts,
    extract host files, follow links, or install native binaries.
-4. Install runtime files into a compiler-only TeX tree, then retry compilation.
-   Explicit prerequisites in the reviewed support recipe install first; other
-   dependencies are discovered through subsequent missing-file failures. This
-   is demand-driven file resolution, not a full `tlmgr` implementation.
-5. Store verified compressed archives in separate IndexedDB storage, keyed by
+5. Install runtime files into a compiler-only TeX tree, then retry compilation.
+   Explicit prerequisites in the reviewed support recipe install first, then
+   declared dependencies the engine lacks; anything else is discovered through
+   subsequent missing-file failures. This is demand-driven file resolution, not
+   a full `tlmgr` implementation.
+6. Store verified compressed archives in separate IndexedDB storage, keyed by
    checksum. Validate cached bytes again before installation. Reloaded projects
    can use cached packages offline. Storage failure permits the current compile
    but is reported in the package log; browser deletion/eviction loses caches.

@@ -1,0 +1,33 @@
+browser_tabs [309 chars] {"action": "list"}
+browser_snapshot [10454 chars] {}
+browser_click [403 chars] {"target": "e4"}
+browser_find [880 chars] {"regex": "/coastal|survey/i"}
+browser_click [403 chars] {"target": "e299"}
+browser_snapshot [8821 chars] {}
+browser_click [379 chars] {"target": "e456"}
+browser_find [2007 chars] {"regex": "/Line \\d+/"}
+browser_double_click [101 chars ERROR] {}
+browser_click [377 chars] {"target": "e584"}
+browser_press_key [116 chars] {"key": "Home"}
+browser_press_key [126 chars] {"key": "Shift+End"}
+browser_type [157 chars] {"target": "e579", "text": "\\date{December 2026}"}
+browser_find [708 chars] {"regex": "/Line \\d+/"}
+browser_press_key [126 chars] {"key": "Control+z"}
+browser_find [2007 chars] {"regex": "/Line \\d+/"}
+browser_click [377 chars] {"target": "e614"}
+browser_press_key [114 chars] {"key": "End"}
+browser_press_key [126 chars] {"key": "ArrowLeft"}
+browser_press_key [138 chars] {"key": "Shift+ArrowLeft"}
+browser_press_key [154 chars] {"key": "Control+Shift+ArrowLeft"}
+browser_press_key [154 chars] {"key": "Control+Shift+ArrowLeft"}
+browser_evaluate [160 chars] {"function": "() => window.getSelection().toString()"}
+browser_press_key [120 chars] {"key": "Delete"}
+browser_type [414 chars] {"target": "e579", "text": "December 2026", "slowly": true}
+browser_find [1412 chars] {"regex": "/Line [1-7]\"/"}
+browser_click [566 chars] {"target": "e445"}
+browser_wait_for [580 chars] {"time": 5}
+browser_find [3403 chars] {"regex": "/page|status|error|Compil/i"}
+browser_wait_for [584 chars] {"time": 15}
+browser_find [1966 chars] {"regex": "/of \\d+|pages?|Compilation status|Compiled|failed/i"}
+browser_wait_for [405 chars] {"time": 25}
+browser_find [2960 chars] {"regex": "/Compilation status|pages?\\b|Compiling|failed|error/i"}

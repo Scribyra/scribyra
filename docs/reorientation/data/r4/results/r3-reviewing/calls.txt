@@ -1,0 +1,23 @@
+browser_tabs [305 chars] {"action": "list"}
+browser_snapshot [11516 chars] {}
+browser_click [389 chars] {"target": "e145"}
+browser_press_key [116 chars] {"key": "Home"}
+browser_press_key [126 chars] {"key": "Shift+End"}
+browser_type [160 chars] {"target": "e137", "text": "\\author{Paul Schuldesz}"}
+browser_snapshot [1685 chars] {"target": "e94"}
+browser_press_key [126 chars] {"key": "Control+z"}
+browser_snapshot [4393 chars] {"target": "e94"}
+browser_click [406 chars] {"target": "e297"}
+browser_press_key [114 chars] {"key": "End"}
+browser_press_key [126 chars] {"key": "ArrowLeft"}
+browser_run_code_unsafe [246 chars] {"code": "async (page) => { for (let i=0;i<9;i++) await page.keyboard.press('Shift+ArrowLeft'); await page.keyboard.type('Paul Schuldesz'); return 'ok'; }"}
+browser_snapshot [3025 chars] {"target": "e137"}
+browser_click [92 chars ERROR] {"target": "e70"}
+browser_wait_for [417 chars] {"time": 5}
+browser_click [404 chars] {"target": "getByRole('button', { name: /^Compile/ }).first()"}
+browser_wait_for [591 chars] {"time": 8}
+browser_take_screenshot [230662 chars] {"scale": "css"}
+browser_wait_for [594 chars] {"time": 20}
+browser_take_screenshot [235481 chars] {"scale": "css"}
+browser_wait_for [441 chars] {"text": "Compiled", "time": 30}
+browser_take_screenshot [260689 chars] {"scale": "css"}

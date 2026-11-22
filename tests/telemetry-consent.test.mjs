@@ -53,6 +53,21 @@ test('anonymous exporter has no authorization header and revocation aborts and d
  }finally{transport.close();}
 });
 
+// docs/telemetry.md, docs/plugins.md and docs/zotero.md: bibliography import, the plugin
+// host and the Zotero plugin add no telemetry operation; their file changes are ordinary
+// local-only `command` work, and plugin failures are shown, never reported.
+test('bibliography, plugin and Zotero modules record nothing themselves',async()=>{
+ const {readFile,readdir}=await import('node:fs/promises');
+ const web=(await readdir(new URL('../web/',import.meta.url))).filter(name=>/^plugin.*\.js$/.test(name)||['bibtex.js','bib-text.js','bibliography-import.js'].includes(name)).map(name=>'web/'+name);
+ const zotero=(await readdir(new URL('../plugins/zotero/src/',import.meta.url))).filter(name=>name.endsWith('.js')).map(name=>'plugins/zotero/src/'+name);
+ assert.equal(web.length,14,web.join());assert.equal(zotero.length,6,zotero.join());
+ const packages=(await readdir(new URL('../plugins/dist/',import.meta.url))).map(name=>'plugins/dist/'+name);
+ for(const name of [...web,...zotero,...packages]){
+  const text=await readFile(new URL('../'+name,import.meta.url),'utf8');
+  assert.doesNotMatch(text,/observability|telemetry\.js|observe\(|observed\(|recorder/i,name);
+ }
+});
+
 // docs/telemetry.md: direct sessions add no telemetry operation. Their signalling,
 // identities, rooms and peers stay out of every record; their project changes are
 // ordinary local-only `command` and `storage_commit` work.
@@ -63,5 +78,17 @@ test('direct-session modules record nothing themselves',async()=>{
  for(const name of files){
   const text=await readFile(new URL('../web/'+name,import.meta.url),'utf8');
   assert.doesNotMatch(text,/observability|telemetry|observe\(|observed\(/,name);
+ }
+});
+
+// docs/telemetry.md and docs/open-links.md: open links add no telemetry operation. The
+// repository, host, ref, path, file names and sizes never reach the recorder.
+test('open-link modules record nothing themselves',async()=>{
+ const {readFile,readdir}=await import('node:fs/promises');
+ const files=[...(await readdir(new URL('../web/',import.meta.url))).filter(name=>/^open-link.*\.js$/.test(name)).map(name=>new URL('../web/'+name,import.meta.url)),new URL('../site/open-link-format.js',import.meta.url),new URL('../site/open.js',import.meta.url)];
+ assert.equal(files.length,5,files.join());
+ for(const file of files){
+  const text=await readFile(file,'utf8');
+  assert.doesNotMatch(text,/observability|telemetry|observe\(|observed\(|recorder|sendBeacon/i,file.pathname);
  }
 });

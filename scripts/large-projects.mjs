@@ -13,10 +13,12 @@
 import {mkdirSync,writeFileSync,readFileSync} from 'node:fs';
 import {deflateSync,crc32} from 'node:zlib';
 import {join,resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {zipSync,strToU8} from 'fflate';
 
+// Browser specs import the generators; only a direct run writes files.
+const direct=Boolean(process.argv[1])&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href;
 const out=resolve(process.argv[2]||'tmp/large-projects');
-mkdirSync(out,{recursive:true});
 
 // mulberry32: small, fast and fully deterministic.
 function rng(seed){return()=>{seed|=0;seed=seed+0x6D2B79F5|0;let t=Math.imul(seed^seed>>>15,1|seed);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -80,7 +82,8 @@ function bibliography(r,count){
 
 // ---------- thesis ----------
 const chapterNames=['introduction','background','related-work','methodology','theory','implementation','experiments','results','discussion','case-study','limitations','conclusion'];
-function thesis(){
+/** `images: false` leaves the figure files out (the source still references them) for specs that only read the text. */
+export function thesis({images=true}={}){
   const r=rng(2026),files={},bib=bibliography(r,400);files['references.bib']=strToU8(bib.text);
   let citeIndex=0,figure=0,table=0;const nextCite=()=>bib.keys[citeIndex++%bib.keys.length];
   let pngBytes=0,pdfBytes=0;
@@ -94,7 +97,7 @@ function thesis(){
         if(p===3){tex+=`\\begin{equation}\\label{eq:${ch}-${s}}\n  \\mathcal{L}_{${s}}(\\theta) = \\sum_{i=1}^{N} \\left( y_i - f_\\theta(x_i) \\right)^2 + \\lambda_{${c}} \\int_{\\Omega} \\lVert \\nabla f_\\theta \\rVert^2 \\, \\mathrm{d}x\n\\end{equation}\nEquation~\\eqref{eq:${ch}-${s}} ${paragraph(r,2)}\n\n\\begin{align}\n  a_{${s}} &= \\frac{\\partial \\mathcal{L}}{\\partial \\theta_{${s}}} + \\alpha \\sum_{k=0}^{\\infty} \\frac{x^k}{k!} \\\\\n  b_{${s}} &= \\int_0^1 e^{-t^2} \\cos(${s+1}\\pi t) \\, \\mathrm{d}t\n\\end{align}\n\n`;}
         if(p===5&&s<5){
           figure++;const pdfFig=figure%10===0,name=`figures/${ch}/figure-${String(figure).padStart(2,'0')}.${pdfFig?'pdf':'png'}`;
-          const bytes=pdfFig?pdfFigure(figure):png(figure,620,420,60);files[name]=bytes;pdfFig?pdfBytes+=bytes.length:pngBytes+=bytes.length;
+          if(images){const bytes=pdfFig?pdfFigure(figure):png(figure,620,420,60);files[name]=bytes;pdfFig?pdfBytes+=bytes.length:pngBytes+=bytes.length;}
           tex+=`\\begin{figure}[htbp]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{${name}}\n  \\caption{Generated ${pick(r,adjectives)} ${pick(r,nouns)} map number ${figure}.}\\label{fig:${figure}}\n\\end{figure}\nFigure~\\ref{fig:${figure}} ${paragraph(r,2)}\n\n`;
         }
         if(p===7&&s%3===0){
@@ -137,7 +140,7 @@ ${chapterNames.map((name,i)=>`\\input{chapters/${String(i+1).padStart(2,'0')}-${
 }
 
 // ---------- long single file ----------
-function longFile(target=3*1024*1024){
+export function longFile(target=3*1024*1024){
   const r=rng(77);let tex='\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n',section=0;
   const end='\\end{document}\n';
   while(tex.length<target-end.length-4000){
@@ -161,6 +164,8 @@ function zip(files){
   return zipSync(entries);
 }
 
+if(direct){
+mkdirSync(out,{recursive:true});
 const manifest={generatedBy:'scripts/large-projects.mjs'};
 {
   const t=thesis(),bytes=zip(t.files);writeFileSync(join(out,'thesis.zip'),bytes);
@@ -182,3 +187,4 @@ if(!process.env.SKIP_HISTORY){
 }
 writeFileSync(join(out,'manifest.json'),JSON.stringify(manifest,null,2)+'\n');
 console.log(JSON.stringify(manifest,null,2));
+}

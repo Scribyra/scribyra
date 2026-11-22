@@ -1,0 +1,1 @@
+In my Scribyra coastal-survey project, change the date on the title page to "December 2026", then compile and tell me the page count. Use only your browser tools on the browser I already have open; don't open a new browser.

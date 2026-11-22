@@ -13,6 +13,10 @@ import {inlineRename,installTreeMenus,moveDestinations,moveTarget,treeMenuItems}
 import {takeTexFragment,texLinkEntry} from './tex-link.js';
 import './tex-link.css';
 let initialTexLink=takeTexFragment(window);
+// "Open in Scribyra" links (docs/open-links.md): consumed before startup, only ever shown as a confirmation.
+import {takeOpenFragment,openLinkEntry} from './open-link-dialog.js';
+import './open-link.css';
+let initialOpenLink=takeOpenFragment(window);
 import {initializeCollaborationSchema} from './collaboration-schema.js';
 import {mountCollaboration} from './collaboration.js';
 import {agentCommands,localAgentOwner} from './agent-commands.js';
@@ -25,6 +29,13 @@ import {companionHost,CompanionOrigin} from './companion-host.js';
 import {connectCompanion} from './companion-connection.js';
 import {companionDialog} from './companion-dialog.js';
 import {environmentDialog} from './environment-dialog.js';
+import {checkImport} from './bibliography-import.js';
+import {pluginSystem} from './plugin-system.js';
+import {pluginManager,pickFileDialog} from './plugin-ui.js';
+import {openPluginDialog} from './plugin-dialog.js';
+import {normalPolicy} from './plugin-manifest.js';
+import {migrateLegacyZotero} from './plugin-migration.js';
+import './plugin.css';
 import {trackComposition,compositionInProgress,composingEvent,restoreDialogFocus} from './input.js';
 trackComposition(document);
 import init, { main as startApp, TelemetryRecorder } from './pkg/scribyra_app.js';
@@ -42,6 +53,8 @@ import './style.css';
 import './menu.css';
 import './review-editor.css';
 import {editorSearch} from './editor-search.js';
+import {wireSidebarDivider} from './sidebar-resize.js';
+import './outline.css';
 import {latexCompletion,prefetchCompletionData} from './latex-completion.js';
 import {latexIndex} from './latex-index.js';
 import './latex-completion.css';
@@ -53,9 +66,10 @@ import { searchKeymap, highlightSelectionMatches } from '@codemirror/search';
 import { StreamLanguage, syntaxHighlighting, defaultHighlightStyle, HighlightStyle, bracketMatching, indentUnit } from '@codemirror/language';
 import { stex } from '@codemirror/legacy-modes/mode/stex';
 import { yCollab, yUndoManagerKeymap, ySyncAnnotation } from 'y-codemirror.next';
-import { projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
+import { freePath, projectNodes, projectNode, treeRows, figureSnippet, validateProject, projectFiles, snapshot, importZip, exportZip, STARTER, MAX_BYTES, SCHEMA_VERSION } from './model.js';
 import * as storage from './storage.js';
 import { readBrowserFiles, readDirectory, readDroppedFiles } from './import-files.js';
+import {readBibliography} from './bibtex.js';
 import { assetBytes, cloneProject, installBlob } from './assets.js';
 import { compileProject, cancelCompile } from './compiler.js';
 import {buildFailure} from './build-errors.js';
@@ -79,7 +93,7 @@ let diagnostics,diagnosticsPanel,remoteDiagnostics,consentDiagnostics;
 const startupAt=performance.now(),dashboardTitle=document.title;
 let providerPanel;const providerConnections=new Map();
 let environmentPanel,companionPanel,companion;let pdfBuild=null,leavingProject=false;
-let allProjects = [], doc, projectId, editor, sync, pdfBytes, commands;
+let allProjects = [], doc, projectId, editor, sync, pdfBytes, commands, plugins = null;
 let collaboration,agent,agentOwner,transientProject=false,direct,openingDirectAttempt,completionIndex=null;
 let initialDirectInvite=location.hash.startsWith('#direct=')?location.href:'';
 if(initialDirectInvite)history.replaceState(null,'',location.pathname+location.search);
@@ -87,6 +101,9 @@ if(initialDirectInvite)history.replaceState(null,'',location.pathname+location.s
 window.addEventListener('hashchange',()=>{if(!location.hash.startsWith('#direct='))return;const text=location.href;history.replaceState(null,'',location.pathname+location.search);if(direct)direct.offerInvite(text);else notice('Open a project, then paste this invite in Share.');});
 const texLinks=texLinkEntry({initial:initialTexLink,create:source=>createProject('TeX link scratch',[{path:'main.tex',content:source}],{fromTexLink:true}),approve:acceptTexLink,compile:()=>agent.api.compile()});
 const startedFromTexLink=!!initialTexLink;initialTexLink=null;
+const openLinks=openLinkEntry({initial:initialOpenLink,projects:()=>allProjects,openExisting:id=>openProject(id),notify:message=>notice(message),
+  importProject:({name,entries,main,source})=>createProject(name,entries,{mainPath:main,importSource:source}),compile:()=>agent.api.compile()});
+initialOpenLink=null;
 let tabSession,localEdits=0,savedEdits=0;
 let autoPending=false;
 let revision = 0, saveTimer, autoTimer, saveChain = Promise.resolve(), mountedFile, renderFrame;
@@ -104,11 +121,33 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
 const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', remoteStatus: '', remoteDetail: '', editingPaused: '', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, compileServer: false, compileBlocked: false, serverPdf: '', storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
-const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
+const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...pluginRender(),...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
-const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision,emit,activate:activateFile,notify:notice,wireTree,mutate:run=>{assertUiMutation(collaboration?.review.state.mode);return run();}});
+const workspace = editorWorkspace({state,getDoc:()=>doc,getRevision:()=>revision,emit,activate:activateFile,notify:notice,wireTree,outlineKey:()=>projectId&&!transientProject?`scribyra:outline:${projectId}`:null,mutate:run=>{assertUiMutation(collaboration?.review.state.mode);return run();}});
 const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision,emit,notify:notice,showRectangle:showSourceRectangle,clearMarker:clearSourceHighlight,activate:(id,line)=>{activateFile(id);selectSourceLine(line);}});
+// Plugins (docs/plugins.md): installed per browser, each in its own sandbox, reaching
+// the open project only through the capability API. Zotero is one (plugins/zotero).
+// The policy is a build setting until organisation deployments deliver it.
+const pluginPolicy=normalPolicy(import.meta.env.VITE_SCRIBYRA_PLUGIN_POLICY);
+const pluginCatalog=()=>import('./plugin-catalog.js');
+let pluginMode=null,pluginActive=null;
+plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),changed:()=>emit(),env:{
+  project:()=>doc&&!leavingProject&&commands&&collaboration?{doc,projectId,commands,collaboration,owner:agentOwner,mode:collaboration.review.state.mode,transient:transientProject,activeFileId:state.active}:null,
+  notify:message=>notice(message),activate:id=>activateFile(id),
+  openDialog:options=>openPluginDialog(options),pickFile:options=>pickFileDialog(options),
+  fetch:(...args)=>globalThis.fetch(...args),
+}});
+// Links and keys of the former built-in Zotero move into its plugin (only if any exist).
+plugins.before(migrateLegacyZotero({catalog:pluginCatalog,policy:pluginPolicy}).then(moved=>{if(moved)notice(`Zotero is now a plugin. Your ${moved.links} Zotero ${moved.links===1?'link':'links'} and ${moved.keys} ${moved.keys===1?'key':'keys'} moved into it on this device; see More tools → Plugins.`);}));
+/** What plugins contribute to the next render; also tells them about mode and file changes. */
+function pluginRender(){
+  if(!plugins)return {fileBar:null,pluginCommands:[]};
+  const mode=collaboration?.review.state.mode||null,current=doc&&!leavingProject?state.active||null:null;
+  if(mode!==pluginMode){pluginMode=mode;if(mode)plugins.modeChanged(mode);}
+  if(current!==pluginActive){pluginActive=current;plugins.activeFileChanged(current);}
+  return {fileBar:current?plugins.bar(current,mode):null,pluginCommands:doc?plugins.commands():[]};
+}
 function persistWorkspace() {
   if (!projectId || !doc || transientProject) return;
   try { localStorage.setItem(`scribyra:workspace:${projectId}`,JSON.stringify({tabs:state.tabs.map(f=>f.id),active:state.active,fontSize:state.fontSize,tabSize:state.tabSize,wrap:state.wrap,auto:state.auto,autocomplete:state.autocomplete})); }
@@ -129,19 +168,22 @@ function captureSelection() {
 }
 const syntaxColors={'#708':'keyword','#219':'keyword','#05a':'special','#164':'variable','#a11':'string','#00f':'number','#085':'variable','#a50':'type','#777':'comment','#c00':'invalid'};
 const accessibleHighlight=HighlightStyle.define(defaultHighlightStyle.specs.map(style=>({...style,...(style.color?{color:syntaxColors[style.color]?`var(--syntax-${syntaxColors[style.color]})`:'var(--text)'}:{})})));
-function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
+function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>plugins?.completionIndex(completionIndex)??completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
 // Comments stay available in Viewing; anything that decides a suggestion or changes accepted source does not.
 const viewingRefuses=new Set(['suggestion.accept','suggestion.reject','suggestion.withdraw','review.acceptAll','review.acceptSet','review.propose','review.retry','review-accept-visible','review-reject-visible','change.undo','change.redo']);
+// Jumps (outline, search, PDF, comments) put the target in the middle of the editor, like other editors do.
+const centred=pos=>EditorView.scrollIntoView(pos,{y:'center'});
 function activateFile(id,start,end=start) {
   collaboration?.review.beforeLeave();
   if(!projectFiles(doc).some(f=>f.id===id))return;state.active=id;revealNode(id);mountEditor();
-  if(editor&&start!==undefined){const max=editor.state.doc.length;editor.dispatch({selection:{anchor:Math.min(collaboration?.review.toDisplay(start,-1)??start,max),head:Math.min(collaboration?.review.toDisplay(end,1)??end,max)},annotations:revealedSelection.of(true),scrollIntoView:true});}editor?.focus();
+  if(editor&&start!==undefined){const max=editor.state.doc.length,anchor=Math.min(collaboration?.review.toDisplay(start,-1)??start,max);editor.dispatch({selection:{anchor,head:Math.min(collaboration?.review.toDisplay(end,1)??end,max)},annotations:revealedSelection.of(true),effects:centred(anchor)});}editor?.focus();
 }
 function selectSourceLine(line){
   if(!editor||!mountedFile)return;
   const lines=doc.getText(`text:${mountedFile}`).toString().split('\n'),number=Math.min(lines.length,Math.max(1,line||1));
   const start=lines.slice(0,number-1).reduce((offset,text)=>offset+text.length+1,0),end=start+lines[number-1].length;
-  editor.dispatch({selection:{anchor:collaboration?.review.toDisplay(start,-1)??start,head:collaboration?.review.toDisplay(end,1)??end},annotations:revealedSelection.of(true),scrollIntoView:true});editor.focus();
+  const anchor=collaboration?.review.toDisplay(start,-1)??start;
+  editor.dispatch({selection:{anchor,head:collaboration?.review.toDisplay(end,1)??end},annotations:revealedSelection.of(true),effects:centred(anchor)});editor.focus();
 }
 function closeTab(id) {
   collaboration?.review.beforeLeave();
@@ -412,7 +454,7 @@ async function leaveProject({save=true,directAttempt}={}) {
   try{if(save)await flushSave();}catch(error){leavingProject=false;throw error;}
   agent?.close();agent=null;window.scribyra.agent=null;
   tabSession?.close();tabSession=null; persistWorkspace(); workspace.leave(); navigation.clear(); selections.clear(); clearTimeout(autoTimer); autoPending=false; builds.close(); state.busy = false;
-  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;
+  texLinks.close();transientProject=false;completionIndex?.close();completionIndex=null;plugins.projectClosed();
   clearAsset(); collapsed.clear(); sourcePositions.clear(); lastSource=null;
   sync?.close(); sync = null; editor?.destroy(); editor = null; mountedFile = null;
   for (const manager of undoManagers.values()) manager.destroy(); undoManagers.clear();
@@ -461,9 +503,9 @@ async function openProject(id,{saveCurrent=true,transientDoc,directAttempt}={}) 
     decide:command=>collaboration.commands.execute({version:2,requestId:crypto.randomUUID(),projectId:id,expectedRevision:collaboration.commands.revision(),command},undefined,{uiGuard:uiCollaborationGuard(()=>collaboration.review.state.mode)})});
   initialDirectInvite='';
   Object.assign(state,collaboration.state);
-  agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
+  agent=agentCommands({doc:target,projectId:id,commands:collaboration.commands,owner:agentOwner,ensureUndo:sourceUndo,compile:signal=>runCompile({signal}),isBusy:()=>state.busy,getState:()=>state,getPdf:()=>pdfBytes?{bytes:pdfBytes.slice(),build:pdfBuild,stale:state.stale}:null,download,isActive:()=>doc===target&&!leavingProject,mode:()=>collaboration?.review.state.mode,build:typeof __SCRIBYRA_BUILD__==='undefined'?null:__SCRIBYRA_BUILD__});
   window.scribyra.agent=agent.api;
-  loadWorkspace();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
+  loadWorkspace();workspace.open();void plugins.projectOpened();texLinks.open(id,doc);completionIndex?.close();completionIndex=latexIndex(target);prefetchCompletionData(); doc.on('update', onUpdate);if(!transientProject)scheduleMaintenance(id,8000);
   const previousEngine = doc.getMap('meta').get('engine');
   // A shared project's reviewers and viewers do not change its settings (only editors write).
   if(previousEngine!=='lualatex'&&(!roleModes||roleModes.includes('editing'))) { commands.run({op:'project.configure',engine:'lualatex'}); if(previousEngine) notice(`This project now uses LuaLaTeX (previously ${previousEngine}). Its source files are unchanged.`); }
@@ -475,18 +517,21 @@ function watchLocalProject(target,id){
   tabSession=localTabs({doc:target,projectId:id,read:storage.readCommittedProject,preserve:storage.preserveRecoveryProject,onRecovery:()=>{if(doc===target)notice('A competing binary version was saved in a separate recovery project. Both versions are preserved.');},isActive:()=>doc===target&&!leavingProject,isComposing:composingSource,onStatus:message=>{if(doc===target&&state.tabSyncStatus!==message){state.tabSyncStatus=message;emit();}},onMissing:kind=>{if(doc!==target)return;disconnectProjectTools();state.upgradeAvailable=kind==='upgraded';state.recoveryAvailable=true;state.saveStatus='Not saved · export a backup';notice(kind==='upgraded'?'Reload to update Scribyra. Export your open copy or save a recovered copy first; it includes your unsaved source.':kind==='deleted'?'This project was deleted in another tab. Export your open copy or save a recovered copy.':'This project is missing from local storage. Export your open copy or save a recovered copy.');},onError:error=>{if(doc===target)notice(error.message+' Your open source is preserved.');}});
 }
 
-async function createProject(name, files = [{ path: 'main.tex', content: STARTER }],{fromTexLink=false,directAttempt}={}) {
+async function createProject(name, files = [{ path: 'main.tex', content: STARTER }],{fromTexLink=false,directAttempt,mainPath,importSource}={}) {
   if (!name) return;
   const newDoc = new Y.Doc(),id=crypto.randomUUID(),client=projectCommands({doc:newDoc,projectId:id});
   try {
     client.run({op:'project.configure',name:name.slice(0,160),engine:'lualatex',mainFile:''});
     if(files.length){const added=entryCommand(files);client.run(added.command,client.revision(),added.attachments);}
-    const list=projectFiles(newDoc),main=list.find(f=>f.path==='main.tex')||list.find(f=>f.path.endsWith('/main.tex'))||list.find(f=>f.path.toLowerCase().endsWith('.tex'));
+    const list=projectFiles(newDoc),main=mainPath!==undefined?list.find(f=>f.path===mainPath&&!f.binary):list.find(f=>f.path==='main.tex')||list.find(f=>f.path.endsWith('/main.tex'))||list.find(f=>f.path.toLowerCase().endsWith('.tex'));
     client.run({op:'project.configure',mainFile:main?.id||''});
+    // Where an open link imported it from (public facts only), for a later Git plugin.
+    if(importSource)newDoc.getMap('meta').set('importSource',importSource);
     if(fromTexLink){texLinks.mark(newDoc);await openProject(id,{transientDoc:newDoc,directAttempt});return;}
     await storage.saveProject(id,newDoc);
   }finally{client.close();if(doc!==newDoc)newDoc.destroy();}
   await refreshProjects();directAttempt?.signal.throwIfAborted();await openProject(id,{directAttempt});
+  return id;
 }
 function sourceUndo(id){
   let undo=undoManagers.get(id);if(!undo){undo=new Y.UndoManager(doc.getText(`text:${id}`),{trackedOrigins:new Set([null,CompanionOrigin,AgentOrigin])});undoManagers.set(id,undo);}return undo;
@@ -495,7 +540,7 @@ function mountEditor() {
   const host = document.getElementById('code-editor');
   if (!state.current || !doc) return;
   if (!host) { renderFrame = requestAnimationFrame(mountEditor); return; }
-  wireDivider();
+  wireDivider();wireSidebarDivider();
   if (mountedFile === state.active && (editor?.dom.isConnected || (host.querySelector('.asset-message') && mountedBytes === doc.getMap('assets').get(state.active) && mountedAssetPath === projectNode(doc, state.active)?.path))) return;
   collaboration?.review.beforeLeave();
   captureSelection();
@@ -540,6 +585,8 @@ function mountEditor() {
       if(!command)return false;void action(...command);return true;
     }},...(collaboration?.review.state.mode!=='editing'?[]:yUndoManagerKeymap), ...defaultKeymap, ...searchKeymap, indentWithTab]), StreamLanguage.define(stex), syntaxHighlighting(accessibleHighlight), bracketMatching(), highlightSelectionMatches(), editorSearch(),
     ...(collaboration?.review.state.mode==='reviewing'?[]:[yCollab(text, sync?.awareness || null, { undoManager: collaboration?.review.state.mode==='viewing'?false:undo })]),
+    // The outline highlights the section that holds the cursor.
+    EditorView.updateListener.of(update=>{if(update.selectionSet||update.docChanged)reportCursor(update.view);}),
     EditorView.contentAttributes.of({ 'aria-label': 'LaTeX source', spellcheck: 'false' }),
     // Online-only deployment without a recent answer from its server: read only until it answers.
     ...(state.editingPaused?[EditorState.readOnly.of(true),EditorView.contentAttributes.of({'aria-readonly':'true'}),EditorView.domEventHandlers({beforeinput(event){event.preventDefault();return true;}}),EditorState.transactionFilter.of(tr=>tr.docChanged&&!tr.annotation(ySyncAnnotation)?[]:tr)]:[]),
@@ -548,7 +595,9 @@ function mountEditor() {
   editor.scrollDOM.tabIndex=0;editor.scrollDOM.setAttribute('role','region');editor.scrollDOM.setAttribute('aria-label','LaTeX source scroll area');
   host.style.setProperty('--editor-font-size',`${state.fontSize}px`);
   if(saved)editor.scrollDOM.scrollTop=saved.scroll;
+  reportCursor(editor);
 }
+function reportCursor(view){if(mountedFile&&view===editor){const head=view.state.selection.main.head;workspace.cursor(mountedFile,collaboration?.review.toSource(head)??head);}}
 function imageMime(path) {
   return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', avif: 'image/avif' })[path.split('.').pop().toLowerCase()];
 }
@@ -596,6 +645,18 @@ function importEntries(targetDoc,entries,client,expected,destination) {
   if(firstFile)state.active=firstFile;
   revealNode(firstFile||ids[0]);notice(`Imported ${entries.filter(e=>!e.folder).length} files and ${entries.filter(e=>e.folder).length} folders.`);
 }
+/** Import bibliography: .bib files (BibTeX, BibLaTeX, Zotero or Better BibTeX exports), checked first and kept byte for byte. */
+async function importBibliography(client=commands,expected) {
+  const blocked=treeEditBlocked();if(blocked)throw new Error(blocked);
+  const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('.bib',true);if(!files.length)return;
+  const wrong=files.find(file=>!/\.bib$/i.test(file.name));if(wrong)throw new Error(`“${wrong.name}” is not a .bib file. Export BibTeX or BibLaTeX from Zotero or your reference manager, then import that file.`);
+  const entries=await readBrowserFiles(files,directory),renamed=[];
+  for(const entry of entries){const path=freePath(targetDoc,entry.path);if(path!==entry.path){renamed.push(`${entry.path} → ${path}`);entry.path=path;}}
+  if(!await checkImport(entries))return;
+  importEntries(targetDoc,entries,client,expected,destination);
+  const count=entries.reduce((sum,entry)=>sum+readBibliography(entry.content).entries.length,0);
+  notice(`Imported ${entries.length===1?entries[0].path:`${entries.length} bibliography files`} with ${count} ${count===1?'entry':'entries'}; citation keys are unchanged.${renamed.length?` A file with that name existed, so it was imported as ${renamed.join(', ')}.`:''}`);
+}
 async function importFolder(client=commands,expected) {
   const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard();
   try {
@@ -626,7 +687,7 @@ function wireFileDrop(area) {
     try {
       const directory=directoryAt(e),local=e.dataTransfer.getData(type);
       if(local){const item=JSON.parse(local);if(item.projectId!==projectId)throw new Error('Move files within the same project. Use export/import between projects.');const node=projectNode(doc,item.id);if(!node)throw new Error('The dragged item no longer exists.');await moveWithReview(node.id,directory+node.name);}
-      else {const targetDoc=doc,destination=destinationGuard();importEntries(targetDoc,await readDroppedFiles(e.dataTransfer,directory),commands,undefined,destination);}
+      else {const targetDoc=doc,destination=destinationGuard(),entries=await readDroppedFiles(e.dataTransfer,directory);if(await checkImport(entries))importEntries(targetDoc,entries,commands,undefined,destination);}
     }catch(error){displayError(error);}
   };
 }
@@ -728,7 +789,7 @@ async function treeMenu(id,origin={},client=commands,expected){
   const row=id?treeRow(id):null,button=row?.querySelector('.file-menu'),anchor=origin.point?undefined:origin.anchor||button||document.querySelector('.tree-root');
   const blocked=treeEditBlocked(),target=doc;
   const menuSignature=()=>client===commands&&doc===target?JSON.stringify([nodeShape(id),state.trashCount,treeEditBlocked()]):null,seen=menuSignature();
-  const opened=openMenu({label:node?`${node.folder?'Folder':'File'} actions`:'Project files',title:node?node.path:'Project files',note:blocked||undefined,items:treeMenuItems(node,{blocked,trashCount:state.trashCount}),anchor,point:origin.point,scope:workspaceRoot(),
+  const opened=openMenu({label:node?`${node.folder?'Folder':'File'} actions`:'Project files',title:node?node.path:'Project files',note:blocked||undefined,items:treeMenuItems(node,{blocked,trashCount:state.trashCount,pluginItems:plugins.fileActions(node,{mode:collaboration?.review.state.mode,blocked})}),anchor,point:origin.point,scope:workspaceRoot(),
     returnFocus:()=>id?treeRow(id)?.querySelector('[data-node]')||document.querySelector('.tree-root'):document.querySelector('.tree-root'),
     // Closes when what the menu offers changes, not when any file's text does.
     watchOptions:menuSignature,
@@ -749,9 +810,18 @@ async function treeMenu(id,origin={},client=commands,expected){
     }
     case 'new-file': case 'new-folder': state.selected=id;emit();await addNode(choice==='new-file'?'file':'folder',next,client,expected);break;
     case 'upload': {
-      state.selected=id;emit();const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('',true);
-      importEntries(targetDoc,await readBrowserFiles(files,directory),client,expected,destination);break;
+      state.selected=id;emit();const targetDoc=doc,directory=selectedDirectory(),destination=destinationGuard(),files=await pickFiles('',true),entries=await readBrowserFiles(files,directory);
+      if(await checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
     }
+    case 'import-bibliography': state.selected=id||'';emit();await importBibliography(client,expected);break;
+    default:
+      // A plugin's tree action: “plugin:<id>:<action>”. Folders and the root pass their folder.
+      if(choice.startsWith('plugin:')){
+        const [,plugin,action]=choice.split(':');
+        if(!node||node.folder){state.selected=id||'';emit();}
+        await plugins.runFileAction(plugin,action,{nodeId:node&&!node.folder?id:null,directory:!node||node.folder?selectedDirectory():''});
+      }
+      break;
     case 'import-folder': state.selected='';emit();await importFolder(client,expected);break;
     case 'restore': client.run({op:'trash.restore'},expected);if(!state.active)activateFile(state.mainFile||state.files[0]?.id);notice('Last deletion restored with its original contents.');break;
   }
@@ -898,17 +968,28 @@ async function action(name, value = '', detail = {}) {
         const choice = await openMenu({label:'Project actions',anchor,items:[{label:'Open project',value:'open',icon:'open'},...(backup?[{label:'Export pre-upgrade backup',value:'backup',icon:'download'}]:[]),{separator:true},{label:'Delete project',value:'delete',icon:'trash',danger:true}]});
         if (choice === 'open') await openProject(value);
         if (choice === 'backup') { const original = new Y.Doc(); try { Y.applyUpdate(original, backup); download(exportZip(original), 'pre-upgrade-sources.zip', 'application/zip'); } finally { original.destroy(); } }
-        if (choice === 'delete' && await openPrompt({title:'Delete project',message:'Deleting a local project cannot be undone. Export a backup first.',label:'Delete project',danger:true,anchor})) { await storage.deleteProject(value); await refreshProjects(); }
+        if (choice === 'delete' && await openPrompt({title:'Delete project',message:'Deleting a local project cannot be undone. Export a backup first.',label:'Delete project',danger:true,anchor})) { await storage.deleteProject(value); await plugins.forgetProject(value); await refreshProjects(); }
         break;
       }
       case 'add-file': await addNode('file',detail,client,expected);break;
       case 'add-folder': await addNode('folder',detail,client,expected);break;
       case 'file-menu': await treeMenu(value,detail,client,expected);break;
       case 'upload-files': {
-        const targetDoc = doc, directory = selectedDirectory(), destination = destinationGuard(), uploads = await pickFiles('', true);
-        importEntries(targetDoc,await readBrowserFiles(uploads,directory),client,expected,destination);break;
+        const targetDoc = doc, directory = selectedDirectory(), destination = destinationGuard(), uploads = await pickFiles('', true), entries = await readBrowserFiles(uploads,directory);
+        if(await checkImport(entries))importEntries(targetDoc,entries,client,expected,destination);break;
       }
       case 'import-folder': await importFolder();break;
+      case 'import-bibliography': await importBibliography(client,expected);break;
+      case 'plugins': await pluginManager({system:plugins,catalog:pluginCatalog,policy:pluginPolicy,notify:notice,fetchPackage:readPluginPackage});break;
+      // Plugin contributions: “<plugin id>:<command or action>”, and for tree actions “:<node id>”.
+      case 'plugin-command': {const [plugin,command]=value.split(':');await plugins.runCommand(plugin,command);break;}
+      case 'plugin-bar': {const [plugin,action]=value.split(':');if(state.active)await plugins.runBarAction(plugin,action,state.active);break;}
+      case 'plugin-file-action': {
+        const [plugin,action,nodeId='']=value.split(':'),node=nodeId?projectNode(doc,nodeId):null;
+        if(nodeId&&!node)break;
+        if(!node||node.folder){state.selected=nodeId;emit();}
+        await plugins.runFileAction(plugin,action,{nodeId:node&&!node.folder?nodeId:null,directory:!node||node.folder?selectedDirectory():''});break;
+      }
       case 'insert-figure': {
         const snippet=figureSnippet(doc,value),target=projectNode(doc,lastSource)||projectNode(doc,state.mainFile);
         if(!target||target.binary||target.folder||! /\.(tex|ltx)$/i.test(target.path))throw new Error('Open a TeX source file first, then select the figure.');
@@ -993,7 +1074,7 @@ async function action(name, value = '', detail = {}) {
 }
 installPopups();
 installTreeMenus((id,origin)=>action('file-menu',id,origin));
-window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects();texLinks.start(); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
+window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects();texLinks.start();openLinks.start(); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
 window.addEventListener('keydown', e => {
   if(e.defaultPrevented||document.querySelector('dialog[open]')||e.getModifierState('AltGraph')||composingEvent(e)||editor?.composing&&editor.dom.contains(e.target))return;
   if(state.current&&!document.querySelector('dialog[open]')){
@@ -1080,3 +1161,12 @@ if(initialDirectInvite){try{const invitation=parseInvite(initialDirectInvite);
       enable:async()=>{await enableDirectSessions();direct?.close();direct=null;placeholder.destroy();initialDirectInvite=text;await openInvitedProject(invitation);}});
     initialDirectInvite='';direct.show();
   }}catch(error){notice(error.message);}}
+
+/** A sideloaded plugin package (developer mode only; docs/plugins.md#registry). */
+async function readPluginPackage(url){
+  const response=await fetch(url,{credentials:'omit',cache:'no-store',redirect:'error',referrerPolicy:'no-referrer'}).catch(()=>{throw new Error(`Scribyra could not read ${url}. The server must allow cross-origin requests (CORS).`);});
+  if(!response.ok)throw new Error(`The plugin package could not be read (HTTP ${response.status}).`);
+  const bytes=new Uint8Array(await response.arrayBuffer());
+  if(bytes.length>4*1024*1024)throw new Error('This plugin package is larger than 4 MiB.');
+  return bytes;
+}

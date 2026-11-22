@@ -2,6 +2,8 @@
 // environments, and the files a document can include. Parsing is per file and pure; the
 // index re-parses only files that changed, after a quiet moment, in idle time.
 import {withoutComments} from './latex.js';
+import {plainBibText,shortAuthors} from './bib-text.js';
+export {plainBibText,shortAuthors};
 import {projectFiles} from './model.js';
 import {changedTextFiles} from './change-origins.js';
 
@@ -42,10 +44,6 @@ function balanced(text,open){
   for(let i=open;i<text.length;i++){const c=text[i];if(c==='\\'){i++;continue;}if(c==='{'||c==='('&&close===')')depth++;else if(c==='}'||c===')'&&close===')'){if(--depth===0)return i;}}
   return text.length;
 }
-const ACCENTS=/\\[`'^"~=.]\s*\{?\s*([A-Za-z])\s*\}?|\\(?:[ckvuHrdb])\s*\{\s*([A-Za-z])\s*\}/g;
-export function plainBibText(value){
-  return value.replace(/\\(La)?TeX\b\s*/g,(_,la)=>la?'LaTeX':'TeX').replace(ACCENTS,(_,a,b)=>a||b).replace(/\\(ss|ae|oe|aa|o|l|AE|OE|AA|O|L)\b\s*/g,'$1').replace(/\\&/g,'&').replace(/\\[A-Za-z]+\s*/g,'').replace(/[{}]/g,'').replace(/~/g,' ').replace(/\s+/g,' ').trim();
-}
 function fieldValues(body){
   const fields={};let i=0;
   while(i<body.length){
@@ -58,11 +56,6 @@ function fieldValues(body){
     fields[found[1].toLowerCase()]=value;i=end;
   }
   return fields;
-}
-export function shortAuthors(value){
-  const names=plainBibText(value).split(/\s+and\s+/i).map(name=>name.trim()).filter(Boolean);if(!names.length)return '';
-  const last=name=>name.includes(',')?name.slice(0,name.indexOf(',')).trim():name.split(' ').at(-1);
-  if(names.length===1)return last(names[0]);if(names.length===2)return `${last(names[0])} and ${last(names[1])}`;return `${last(names[0])} et al.`;
 }
 /** Bibliography entries in one .bib source: key, entry type and a short author/title/year. */
 export function parseBib(text){

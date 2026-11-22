@@ -1,10 +1,20 @@
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile as writeInPlace, rename, rm } from 'node:fs/promises';
+// Compiler assets are often hard links into a shared store (other checkouts, the
+// deployment cache). Write a new file and rename it into place so a patch never
+// changes the bytes another checkout sees through the same inode.
+async function writeFile(path,data){
+  const temporary=`${path}.scribyra-${process.pid}.tmp`;
+  try{await writeInPlace(temporary,data);await rename(temporary,path);}
+  catch(error){await rm(temporary,{force:true});throw error;}
+}
 import { Script } from 'node:vm';
 import { scribyraProjectWrites } from './virtual-fs-guard.mjs';
 import {scribyraBiberProject} from './biber-project.mjs';
 import { scribyraInstallTex } from './tex-runtime.mjs';
 import {patchRuntimeDownload} from './runtime-download-observation.mjs';
 import {patchCompilerWorker} from './patch-compiler-worker.mjs';
+import {scribyraTexPasses} from './tex-passes.mjs';
+import {scribyraHeapBytes,scribyraPatchMemory,scribyraWasmWithMemory} from './wasm-memory.mjs';
 
 // Small, reproducible fixes to the pinned 1.4.1 wrapper, not the WASM engine.
 // Fail on unexpected upstream changes rather than silently applying half a fix.
@@ -42,11 +52,65 @@ export async function patchBusytex() {
     if ((!count&&applied>=expected)||(after.includes(before)&&count===applied&&applied>=expected))continue;
     throw new Error('Unexpected BusyTeX wrapper version; cannot apply compilation fixes.');
   }
+  // Passes as latexmk decides them (scripts/tex-passes.mjs) instead of BusyTeX's fixed
+  // initial + bibliography + up to three reruns on log warnings + an extra final pass.
+  source=source.replace("return { exit_code: effective_exit_code, log };","return { exit_code: effective_exit_code, log, stdout };");
+  if(!source.includes('// SCRIBYRA PASSES')){
+    const start=source.indexOf("        let exit_code = 0;\n        let last_log = '';\n\n        ({ exit_code, log: last_log } = run(initial, this.error_messages_fatal));");
+    const stop=source.indexOf("        if (exit_code == 0 && dvi) {",start);
+    if(start<0||stop<0||!source.slice(start,stop).includes('this._needs_rerun(last_log)'))throw new Error('Unexpected BusyTeX pass loop; cannot apply the rerun policy.');
+    source=source.slice(0,start)+`        // SCRIBYRA PASSES: rerun only while a file LuaLaTeX reads changed (scripts/tex-passes.mjs).
+        let exit_code = 0;
+        let last_log = '';
+        const rerun_enabled = rerun === null ? true : rerun;
+        const scribyra_inputs = new Set(files.filter(f => f.contents != null).map(f => PATH.join(this.project_dir, f.path)));
+        const scribyra_bibliography = !bibtex ? null : bib_backend == 'biber' && this.biber != null
+            ? { kind: 'biber', bcf: tex_path.replace(/\\.tex$/i, '.bcf'), bbl: PATH.join(source_dir, bbl_path), run: () => this._run_biber(FS, tex_path, files, verbose_args_for('biber'), logs) }
+            : { kind: 'bibtex', aux: aux_path, bbl: PATH.join(source_dir, bbl_path), cmd: bibtex8_cmd };
+        const scribyra_index = (makeindex === null ? true : makeindex) ? { idx: idx_path, ind: PATH.join(source_dir, ind_path), cmd: makeindex_cmd } : null;
+        ({ exit_code, last_log } = await scribyraTexPasses({ FS, projectDir: this.project_dir, inputs: scribyra_inputs, run, tex: final_cmd, fatal: this.error_messages_fatal, all: this.error_messages_all, bibliography: scribyra_bibliography, index: scribyra_index,
+            consulted: () => ({ paths: new Set(Module.scribyraInputs || []), truncated: !Module.scribyraInputs || !!Module.scribyraInputsTruncated, missing: [...Module.scribyraMissing.values()].map(entry => String(entry.name)) }),
+            maxPasses: rerun_enabled ? this.max_tex_passes + 2 : 1, print: this.print }));
+
+`+source.slice(stop);
+  }
+  // The engine's memory ceiling (scripts/wasm-memory.mjs): the worker passes the limit it
+  // chose (self.scribyraMemoryBytes); the module's declared maximum is rewritten as it streams
+  // in and the glue's heap ceiling follows Module.scribyraHeapMax.
+  const fetchWasm="return WebAssembly.compileStreaming ? WebAssembly.compileStreaming(response) : response.arrayBuffer().then(WebAssembly.compile);";
+  const fetchLimited="return WebAssembly.compileStreaming ? scribyraWasmWithMemory(response, this.scribyra_heap_max).then(limited => WebAssembly.compileStreaming(limited)) : response.arrayBuffer().then(bytes => WebAssembly.compile(scribyraPatchMemory(new Uint8Array(bytes), this.scribyra_heap_max / 65536)));";
+  const heapAt="        this.wasm_module_promise = fetch(busytex_wasm).then(response => {",heapSet="        this.scribyra_heap_max = scribyraHeapBytes(self.scribyraMemoryBytes);\n";
+  if(!source.includes(fetchLimited)){
+    if(source.split(fetchWasm).length!==2||source.split(heapAt).length!==2)throw new Error('Unexpected BusyTeX module loading; cannot apply the memory limit.');
+    source=source.replace(fetchWasm,fetchLimited).replace(heapAt,heapSet+heapAt);
+  }
+  const moduleAt="            noInitialRun: true,\n",moduleSet="            scribyraHeapMax: this.scribyra_heap_max,\n";
+  if(!source.includes(moduleSet)){if(source.split(moduleAt).length!==2)throw new Error('Unexpected BusyTeX module options.');source=source.replace(moduleAt,moduleAt+moduleSet);}
+  // Which TeX files the engine already has (bundled tree, installed packages), by name, so
+  // packages a project names are installed before the first pass only when they are missing.
+  const presentAt="    async write_texlive_remote_files(files) {";
+  const present=`    async scribyra_present(names) {
+        const Module = await this.Module;
+        if (!Module) throw new Error('Module not initialized');
+        const { FS } = Module, collect = (dir, into) => {
+            if (!FS.analyzePath(dir).exists) return into;
+            for (const name of FS.readdir(dir)) { if (name === '.' || name === '..') continue; const path = dir + '/' + name; if (FS.isDir(FS.stat(path).mode)) collect(path, into); else into.add(name); }
+            return into;
+        };
+        this.scribyra_bundled ||= collect('/texlive', new Set());
+        const installed = collect('/texmf-downloads', new Set());
+        return names.map(name => { const base = String(name).split('/').pop(); return this.scribyra_bundled.has(base) || installed.has(base); });
+    }
+
+`;
+  if(!source.includes('async scribyra_present(names)')){if(source.split(presentAt).length!==2)throw new Error('Unexpected BusyTeX remote-file API.');source=source.replace(presentAt,present+presentAt);}
   // Undo the earlier info-only recorder switch: authoritative input evidence is
   // collected at successful virtual-FS opens, including Lua's own file reads.
   for(const engine of ['luatex','luahbtex'])source=source.replace(`${engine}: ['-kpathsea-debug', '32', '-recorder']`,`${engine}: ['-kpathsea-debug', '32']`);
   const output='missing: Array.from(Module.scribyraMissing.values())';
   if(!source.includes('recorderTruncated:'))source=source.replace(output,output+`, recorder: Array.from(Module.scribyraInputs||[]).map(path=>'INPUT '+path).join('\\n').slice(0, 256*1024), recorderTruncated: !!Module.scribyraInputsTruncated || Array.from(Module.scribyraInputs||[]).reduce((sum,path)=>sum+path.length+7,0)>256*1024`);
+  // The engine's WebAssembly memory after the run: it only grows, so this is the run's peak.
+  if(!source.includes('memory: Module.HEAPU8.length'))source=source.replace(output,output+', memory: Module.HEAPU8.length');
   source=source.replaceAll(".replace('.tex',",".replace(/\\.tex$/i,");
   const bridge=[
     ["const inputs = [{ path: bcf_path, contents: FS.readFile(bcf_path, { encoding: 'utf8' }) }];", "const relative_dir=FS.cwd().slice(this.project_dir.length).replace(/^\\//,''); const control_path=(relative_dir?relative_dir+'/':'')+bcf_path;\n        const inputs = [{ path: control_path, contents: FS.readFile(bcf_path, { encoding: 'utf8' }) }];"],
@@ -56,7 +120,7 @@ export async function patchBusytex() {
   for(const[before,after]of bridge){if(source.includes(before))source=source.replace(before,after);else if(!source.includes(after))throw new Error('Unexpected Biber project bridge.');}
 
   const begin='// BEGIN SCRIBYRA VIRTUAL FS GUARD',end='// END SCRIBYRA VIRTUAL FS GUARD';
-  const guard=`${begin}\n${scribyraProjectWrites.toString()}\n${scribyraInstallTex.toString()}\n${end}\n`;
+  const guard=`${begin}\n${scribyraProjectWrites.toString()}\n${scribyraInstallTex.toString()}\n${scribyraTexPasses.toString()}\n${scribyraHeapBytes.toString()}\n${scribyraPatchMemory.toString()}\n${scribyraWasmWithMemory.toString()}\n${end}\n`;
   if(source.startsWith(begin)){const stop=source.indexOf(end);if(stop<0)throw new Error('Invalid filesystem guard patch.');source=source.slice(stop+end.length).replace(/^\n/,'');}
   source=guard+source;
   new Script(source,{filename:path});
@@ -70,6 +134,10 @@ export async function patchBusytex() {
     if (engine.split(fetchStart).length !== 2) throw new Error('Unexpected BusyTeX missing-file hook');
     engine = engine.replace(fetchStart, hook);
   }
+  // Heap growth stops at the limit the pipeline chose (scripts/wasm-memory.mjs), which matches
+  // the maximum it declared for the module; 576 MiB is the build's own MAXIMUM_MEMORY.
+  const heapMax="      603979776;\n  var _emscripten_get_heap_max",heapLimited="      (Module['scribyraHeapMax'] || 603979776);\n  var _emscripten_get_heap_max";
+  if(!engine.includes(heapLimited)){if(engine.split(heapMax).length!==2)throw new Error('Unexpected BusyTeX heap ceiling.');engine=engine.replace(heapMax,heapLimited);}
   new Script(engine, {filename:enginePath});
   await writeFile(enginePath, engine);
 

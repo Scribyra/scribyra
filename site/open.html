@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Make an Open in Scribyra link and badge for a GitHub or GitLab repository, or a ZIP file. One click opens it in Scribyra, in the browser.">
+  <meta name="theme-color" content="#7160d9">
+  <title>Open in Scribyra links — Scribyra</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="open.js"></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header wrap">
+    <a class="brand" href="./" aria-label="Scribyra home"><span class="brand-mark">s</span>scribyra</a>
+    <a class="button small secondary github-link" href="https://github.com/Scribyra/scribyra" aria-label="Source code on GitHub"><svg class="github-mark" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19.5c-4 1.2-4-2-5.6-2.4M15 21v-3.3c0-1 .1-1.5-.5-2.1 2.7-.3 5.5-1.3 5.5-5.9 0-1.2-.4-2.3-1.2-3.1.1-.4.5-1.6-.1-3.2 0 0-1-.3-3.3 1.2a11.4 11.4 0 0 0-6 0C7.1 3.1 6.1 3.4 6.1 3.4c-.6 1.6-.2 2.8-.1 3.2-.8.8-1.2 1.9-1.2 3.1 0 4.6 2.8 5.6 5.5 5.9-.4.4-.6 1-.6 1.7V21"/></svg>GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main" class="wrap doc open-generator">
+    <div class="eyebrow"><span class="line"></span> OPEN IN SCRIBYRA</div>
+    <h1>A button that opens your paper</h1>
+    <p class="lead">Put an “Open in Scribyra” badge on a GitHub or GitLab repository. One click opens Scribyra, shows where the files come from and how big they are, and imports a copy into that person’s browser when they agree. Nothing is compiled until they choose to.</p>
+
+    <form id="open-form" class="open-form" novalidate>
+      <div class="open-field open-wide">
+        <label for="open-source">Repository or ZIP address</label>
+        <input id="open-source" name="source" type="text" inputmode="url" autocomplete="off" spellcheck="false" placeholder="https://github.com/you/paper" aria-describedby="open-source-help">
+        <small id="open-source-help">A public GitHub or GitLab repository (gitlab.com or your own GitLab), a page inside one such as …/tree/main/paper, or an https address of a .zip file that allows downloads from other sites.</small>
+      </div>
+      <div class="open-field"><label for="open-ref">Branch, tag or commit <span>optional</span></label><input id="open-ref" name="ref" type="text" autocomplete="off" spellcheck="false" placeholder="Default branch"></div>
+      <div class="open-field"><label for="open-path">Folder <span>optional</span></label><input id="open-path" name="path" type="text" autocomplete="off" spellcheck="false" placeholder="Whole repository"></div>
+      <div class="open-field"><label for="open-main">Main file <span>optional</span></label><input id="open-main" name="main" type="text" autocomplete="off" spellcheck="false" placeholder="Found automatically"></div>
+      <div class="open-field"><label for="open-name">Project name <span>optional</span></label><input id="open-name" name="name" type="text" autocomplete="off" placeholder="Repository name"></div>
+      <div class="open-field"><label for="open-style">Badge</label>
+        <select id="open-style" name="style">
+          <option value="badge.svg">Light</option>
+          <option value="badge-dark.svg">Dark</option>
+          <option value="badges/flat.svg">Flat</option>
+          <option value="badges/flat-square.svg">Flat square</option>
+          <option value="badges/for-the-badge.svg">For the badge</option>
+        </select>
+      </div>
+    </form>
+    <p id="open-status" class="open-status" role="status" aria-live="polite"></p>
+
+    <section class="open-output" aria-labelledby="open-output-title" hidden>
+      <h2 id="open-output-title">Your link</h2>
+      <div class="open-preview">
+        <a id="open-preview-link" href="#"><img id="open-preview-badge" src="badge.svg" alt="Open in Scribyra" height="28"></a>
+        <a id="open-try" href="#" target="_blank" rel="noopener">Try the link ↗</a>
+      </div>
+      <div class="open-snippet" data-kind="link"><div class="open-snippet-head"><label for="open-link">Link</label><button type="button" class="button secondary" data-copy="open-link">Copy link</button></div><textarea id="open-link" readonly rows="2" spellcheck="false"></textarea></div>
+      <div class="open-snippet" data-kind="markdown"><div class="open-snippet-head"><label for="open-markdown">Markdown (README.md)</label><button type="button" class="button secondary" data-copy="open-markdown">Copy Markdown</button></div><textarea id="open-markdown" readonly rows="2" spellcheck="false"></textarea></div>
+      <div class="open-snippet" data-kind="html"><div class="open-snippet-head"><label for="open-html">HTML</label><button type="button" class="button secondary" data-copy="open-html">Copy HTML</button></div><textarea id="open-html" readonly rows="2" spellcheck="false"></textarea></div>
+      <div class="open-snippet" data-kind="rst"><div class="open-snippet-head"><label for="open-rst">reStructuredText (README.rst)</label><button type="button" class="button secondary" data-copy="open-rst">Copy reStructuredText</button></div><textarea id="open-rst" readonly rows="2" spellcheck="false"></textarea></div>
+    </section>
+
+    <h2 id="what">What happens when someone clicks it</h2>
+    <ul>
+      <li>Scribyra opens and shows the source, branch and folder. Nothing is downloaded yet.</li>
+      <li>They choose <strong>Check repository</strong>: their browser asks GitHub or GitLab for the file list, and Scribyra shows the number of files, their size and anything it will skip, such as Git LFS files, submodules or symbolic links.</li>
+      <li>They choose <strong>Import</strong> or <strong>Import and compile</strong>. A copy is made in their browser; nothing is sent back to you or to us.</li>
+      <li>Projects hold up to 512 files and 64 MiB. Files over 16 MiB are skipped. Opening the link again offers the copy they already have.</li>
+    </ul>
+    <p>Only public repositories work for now; private ones will come with the Git plugins. GitHub allows 60 requests an hour per network without signing in, and each check uses two (or three with Git LFS settings). Details are in the <a href="https://github.com/Scribyra/scribyra/blob/main/docs/open-links.md">link format reference</a>; what the browser contacts is on the <a href="privacy.html#choose">privacy page</a>.</p>
+  </main>
+  <footer class="footer wrap"><a class="brand" href="./"><span class="brand-mark">s</span>scribyra</a><span>A little more possibility.</span><div><a href="mailto:contact@scribyra.com">Contact</a><a href="privacy.html">Privacy</a><a href="licenses.html">Licences</a><a href="https://github.com/Scribyra/scribyra">Source ↗</a></div><p class="legal"><span>© 2026 URUNDEAD LABS S.R.L.</span> · <span>Reg. Com. J2026034271001</span> · <span>CUI 54762154</span> · <span>VAT RO55538423</span> · <span>Strada Pitar Moș 27, et. 5, ap. 17,</span> <span>010452 București, Romania</span></p></footer>
+</body>
+</html>

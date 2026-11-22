@@ -1,13 +1,14 @@
 // Output equality for the compile-engine benchmark (docs/compile-engines.md): page count and
 // extracted text (pdf.js, as the app's viewer reads it) of the same documents compiled by the
 // WebAssembly engine on the server, native TeX Live on the server and the browser.
-//   node scripts/compile-benchmark-compare.mjs <out-dir>     (reads <out-dir>/<engine>/<doc>.pdf)
+//   node scripts/compile-benchmark-compare.mjs <out-dir> [engine…]   (reads <out-dir>/<engine>/<doc>.pdf;
+//   default engines wasm, browser, native; any two or more directories compare, e.g. before after)
 import {readFileSync,existsSync} from 'node:fs';
 import {join} from 'node:path';
 import {getDocument} from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const out=process.argv[2]||'target/compile-benchmark/out';
-const engines=['wasm','browser','native'],docs=['sample','article','beamer','tikz','thesis'];
+const engines=process.argv.length>3?process.argv.slice(3):['wasm','browser','native'],docs=['sample','article','beamer','tikz','thesis'];
 async function read(path){
  const task=getDocument({data:new Uint8Array(readFileSync(path)),verbosity:0}),pdf=await task.promise,pages=[];
  for(let i=1;i<=pdf.numPages;i++){const page=await pdf.getPage(i);pages.push((await page.getTextContent()).items.map(item=>item.str).join(' ').replace(/\s+/g,' ').trim());}
@@ -25,7 +26,7 @@ for(const doc of docs){
  const texts={};
  for(const engine of engines){const path=join(out,engine,`${doc}.pdf`);if(existsSync(path))texts[engine]=await read(path);}
  const row={doc,pages:Object.fromEntries(Object.entries(texts).map(([e,t])=>[e,t.length]))};
- for(const[a,b]of [['wasm','browser'],['wasm','native'],['browser','native']]){
+ for(const[a,b]of engines.flatMap((a,i)=>engines.slice(i+1).map(b=>[a,b]))){
   if(!texts[a]||!texts[b])continue;
   const same=texts[a].join('\f')===texts[b].join('\f');
   row[`${a}~${b}`]={identicalText:same,wordOverlap:Math.round(overlap(texts[a],texts[b])*10000)/10000,pagesWithSameText:texts[a].filter((t,i)=>t===texts[b][i]).length};

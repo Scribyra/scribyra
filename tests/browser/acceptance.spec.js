@@ -33,7 +33,7 @@ test('composition keys do not submit dialogs or run workspace shortcuts; tree re
  // independent, real-keyboard shortcut checks.
  await source.focus();await page.keyboard.press('Escape');await source.focus();
  await page.keyboard.press('Control+Shift+f');await expect(page.getByLabel('Search text',{exact:true})).toBeFocused();await page.keyboard.press('Control+Shift+o');await expect(page.getByRole('button',{name:'Document outline',exact:true})).toHaveAttribute('aria-pressed','true');
- await page.getByRole('separator',{name:'Resize editor and preview'}).focus();const before=Number(await page.getByRole('separator').getAttribute('aria-valuenow'));await page.keyboard.press('ArrowRight');await expect(page.getByRole('separator')).toHaveAttribute('aria-valuenow',String(before+2));
+ await page.getByRole('separator',{name:'Resize editor and preview'}).focus();const before=Number(await page.getByRole('separator',{name:'Resize editor and preview'}).getAttribute('aria-valuenow'));await page.keyboard.press('ArrowRight');await expect(page.getByRole('separator',{name:'Resize editor and preview'})).toHaveAttribute('aria-valuenow',String(before+2));
  const original=(await sourceZip(page))['paper.tex'];await source.focus();await page.keyboard.press('Control+Enter');await expect(page.getByRole('button',{name:'Cancel compilation',exact:true})).toBeVisible();await page.getByRole('button',{name:'Cancel compilation',exact:true}).click();await expect(page.locator('.editor-status')).toContainText('Compilation cancelled');expect((await sourceZip(page))['paper.tex']).toEqual(original);
 });
 test('combined Unicode project preserves images/citations, previous PDF and recoverable sources through offline errors',async({page,context})=>{

@@ -44,6 +44,8 @@ export function compileOutput(send){
  return {
   attempt(number){attempt=number;inAttempt=0;previous='';},
   get attemptNumber(){return attempt;},
+  // LuaLaTeX runs so far, across attempts (the failing runs that find missing packages too).
+  get passes(){return texPasses;},
   step(text){emit({text,kind:'step'});},
   // This attempt stopped only for missing files that are about to be fetched:
   // its fatal and exit-code lines are expected, so they lose error styling.

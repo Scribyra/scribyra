@@ -2,7 +2,96 @@
 
 Measured 19 November 2026 on branch `feature/wasm-compile`, after Paul's decision of that day to compile on the server with **the browser's own WebAssembly TeX engine**, keeping native TeX Live only if the numbers demand it. `deployment.compile_engine` selects `wasm` (default) or `native` ([service](service.md#server-compile), [design section 6](org-sync-design.md#6-server-compile)).
 
-**Recommendation: keep the WebAssembly engine as the only engine we offer; do not offer native TeX Live as a "fast" option, and delete it after one release.** Every document compiles on the server to the same pages and text as in the browser, and native's output was the same too, so native would add no capability. Its speed lead is real but bounded: 1.3–3.3× on small documents and 1.7–1.8× (about 100 s more: 3.9 against 2.2 minutes) on the 305-page thesis. It costs a second TeX distribution to secure, patch and keep in step: 2.6 GB for a TeX Live that compiles all five documents, against 0.5 GB for Node and the runtime. Most of the WebAssembly engine's extra time has a known cause we can fix (below).
+**Recommendation: keep the WebAssembly engine as the only engine we offer; do not offer native TeX Live as a "fast" option, and delete it after one release.** Every document compiles on the server to the same pages and text as in the browser, and native's output was the same too, so native would add no capability. Its speed lead is real but bounded: 1.3–3.3× on small documents and 1.7–1.8× (about 100 s more: 3.9 against 2.2 minutes) on the 305-page thesis. It costs a second TeX distribution to secure, patch and keep in step: 2.6 GB for a TeX Live that compiles all five documents, against 0.5 GB for Node and the runtime. Most of the WebAssembly engine's extra time had a known cause, now fixed: see [Engine speed and memory](#engine-speed-and-memory-november-21-2026), which brings the WebAssembly engine to native's pass counts (tikz: 2 against native's 1, since a pass that creates the `.aux` is followed by one that reads it).
+
+## Engine speed and memory (November 21, 2026)
+
+Paul approved two fixes on November 21 that this benchmark found. Both are in the shared driver (`web/compile-driver.js`) and the BusyTeX patches (`scripts/patch-busytex.mjs`), so the browser and the server's Node runner get them alike. On branch `feature/engine-speed`, the driver refactor was ported from `feature/org-sync-v2` first, unchanged, so the two branches share it.
+
+**Fewer passes.** Three causes, three fixes:
+
+- **Reruns as latexmk decides them** (`scripts/tex-passes.mjs`, embedded in the pipeline). BusyTeX ran an initial pass, the bibliography, up to three reruns while the log said "Rerun…", then one more "final" pass: four passes for a one-page document. Now TeX runs, Biber/BibTeX and makeindex run when their input changed (`.bcf`, the `.aux` citation lines, `.idx`), and TeX runs again only while a generated file that it opened, or looked for and did not find, changed in the last round: `.aux` (and included chapters' `.aux`), `.toc`, `.lof`, `.out`, `.bbl` and the like. Files only other programs read (`.bcf`, `.run.xml`, `.idx`) never cause a rerun by themselves. When nothing TeX reads changed, another pass would read the same input and produce the same pages, so the last pass is the document's fixpoint. Rerun warnings alone no longer cost a pass, and a changed table of contents reruns even when LaTeX prints no warning (BusyTeX's pattern list would have stopped early there). The bound is five passes.
+- **Packages before the first pass.** TeX stops at the first missing file, so each job discovered a document's packages one failing pass at a time (BusyTeX's pipeline restarts at the first pass after each install). Before the first pass the driver now installs:
+  1. the packages the project's last successful compile installed. The browser remembers them per project on the device (`web/project-packages.js`, names only, per catalog snapshot, 200 projects); the server runner takes them per job (`compile({packages})`, `--packages a,b`), which the service can fill from the stored `result.packages`;
+  2. the classes, packages, Beamer themes, TikZ/PGF/pgfplots libraries and BibTeX styles the source names literally (`web/tex-requirements.js`: `\documentclass`, `\usepackage`, `\RequirePackage`, `\LoadClass`, `\usetheme`, `\usetikzlibrary`, `\bibliographystyle`…, comments stripped, project files excluded) that the engine's own tree does not have (asked of the engine: `scribyra_present`);
+  3. for each of those, the catalog's declared dependencies (its `dependencies` data) that the engine lacks, transitively. A dependency of which any file is already in the engine's tree is never installed over it, and dependencies resolve through their files, so a compiler-matched component wins over the mirror's archive exactly as it does after a failing pass.
+  Anything the scan cannot see (a package named through a macro, a conditional load) is still found by a failing pass, and then remembered.
+- **One round, fetched together.** A round's archives (the plan, checked against the 64-package / 96 MiB limit first) are fetched four at a time and written into the engine in plan order.
+
+**Memory.** The 576 MiB cap was the pinned `busytex.wasm`'s own declared maximum: its memory section says 1024 pages (64 MiB) initially and at most 9216 pages (576 MiB), Emscripten's `MAXIMUM_MEMORY` for that build with `ALLOW_MEMORY_GROWTH`; the glue (`busytex.js`) repeats it as `getHeapMax()`, which both heap growth and C's `emscripten_get_heap_max()` use. The memory is defined in the module, not imported. Neither the compiled code nor any pin depends on the maximum, so no rebuild is needed (`scripts/wasm-memory.mjs`):
+
+- the pipeline rewrites the memory section's maximum while the module streams in (`WebAssembly.compileStreaming` still streams; the section is buffered only until it has passed). The file on disk and every checksum that pins it (runtime assets, the catalog's compatibility record, environment locks) are unchanged; the patched glue changes the adapter identity, as any glue patch does;
+- the glue's `getHeapMax()` returns `Module.scribyraHeapMax`, the same value;
+- the ceiling is **2 GiB − 64 KiB** (32767 pages). This glue was linked without Emscripten's 4 GB support: above 2 GiB, pointers handed to JavaScript would turn negative. 2 GiB − 64 KiB is also Emscripten's own default maximum for growable memories, so browsers routinely accept it. Memory still starts at 64 MiB and grows only as a document needs it; small documents reserve nothing more.
+
+Defaults:
+
+| Where | Ceiling | Why |
+| --- | --- | --- |
+| Desktop browsers (Chromium, Firefox, Safari) | 2 GiB − 64 KiB | 64-bit engines reserve address space for any wasm32 memory anyway; growth commits only what is used. |
+| Phones, tablets (iOS/iPadOS, Android) and devices reporting `navigator.deviceMemory` < 4 | 1 GiB | iOS ends a web page's process (WebKit's WebContent) at about 1.5 GiB on most iPhones and caps typed arrays and WebAssembly memory together at 2 GiB (the Gigacage); WebKit reports have pages killed, not refused, when `memory.grow` exceeds what the OS allows ([WebKit bug 269777](https://bugs.webkit.org/show_bug.cgi?id=269777), [221530](https://bugs.webkit.org/show_bug.cgi?id=221530)). A killed tab loses the clear message, so phones stop earlier, cleanly. |
+| Server (Node runner) | 2 GiB − 64 KiB (`--engine-memory-mib`) | Size the job's `memory_mib` at 3072 or more for documents near the ceiling: Node and the in-memory file system add 0.3–0.4 GiB to the engine heap. |
+
+A document that needs more ends with a message naming the limit, in the browser ("The document needs more memory than the TeX engine can use (2047 MiB, the most this build of the engine can address). Simplify the document or split it into parts.", with the desktop figure on phones) as on the server (`memoryMessage`, status `memory`). If the browser or machine refuses memory below the ceiling, the message says so and suggests closing tabs. Only the engine runtime's own stderr report counts, never TeX output (`\typeout`).
+
+**Going past 2 GiB needs a rebuild, and it was not done here.** wasm32 allows 4 GiB, but this glue must then treat every pointer as unsigned (Emscripten does that when `MAXIMUM_MEMORY` exceeds 2 GB at link time). That means relinking BusyTeX: building TeX Live's engines from source with the matching Emscripten, which `texlyre-busytex` 1.4.1 does not ship as a reproducible recipe (its binary carries no producers section naming the toolchain) and nixpkgs does not package. A rebuilt engine also changes the binary every pin and the prebuilt LuaLaTeX format are matched to (`lualatex-manifest.json` `compatibility`), so the format and catalog compatibility record would be regenerated with it. That is hours of CPU and several GB of build tree per attempt on this shared host, for memory that phones cannot use and no benchmark document needs (the largest, the thesis, peaks at 229 MiB). If a real project needs more than 2 GiB, the plan is: pin the BusyTeX sources and an Emscripten release in a flake input, build with `-sMAXIMUM_MEMORY=4GB -sALLOW_MEMORY_GROWTH`, regenerate the format and compatibility pins, and keep the browser default at 2 GiB.
+
+### Results
+
+Measured November 21, 2026 on the same shared host as above (load 15–20 from other work), before (`76815f0`, the port plus instrumentation) and after the changes, with the same five documents. Medians of 5 runs, the thesis 3. Raw runs: [measurements/engine-speed](measurements/engine-speed/).
+
+**Server (Node runner).** `scripts/compile-benchmark-node.mjs`: the runner without the sandbox, one job per process (each starts from the engine's baseline, as a server job does), wall seconds, peak RSS of the process, and the engine's WebAssembly heap at the end (it only grows, so it is the peak). "Warm + project packages" passes the names the project's previous compile installed.
+
+| Document | Passes | Cold cache (s) | Warm cache (s) | Warm + project packages (s) | Peak RSS (MiB) | Engine heap (MiB) |
+| --- | --- | --- | --- | --- | --- | --- |
+| sample | 4 → **2** | 10.4 → **7** | 10.2 → **7.1** | 7.3 | 459 → 458 | 191 → 191 |
+| article | 7 → **3** | 31 → **21.9** | 32.5 → **21.7** | 22.3 | 617 → 650 | 159 → 191 |
+| beamer | 8 → **2** | 59.2 → **26.2** | 60.2 → **26.7** | 27.1 | 641 → 508 | 191 → 191 |
+| tikz | 5 → **2** | 45.8 → **29.2** | 45.9 → **28.6** | 28.7 | 576 → 471 | 159 → 159 |
+| thesis | 8 → **3** | 230.8 → **167.8** | 224.5 → **167.3** | 168.8 | 943 → 942 | 229 → 229 |
+
+**Browser.** `tests/browser/compile-benchmark.spec.js`, all three browsers at once against the built app, seconds from the Compile click to the result:
+- **cold**: the first compile in a fresh profile (no package cache, no project memory, the compiler starting);
+- **reopen**: the page reloaded and the project opened again: a new compiler, the profile's package cache and, after the change, the project's remembered packages;
+- **recompile**: a second compile in the same tab, compiler and packages warm.
+
+| Document | Scenario | Passes | Chromium (s) | Firefox (s) | WebKit (s) |
+| --- | --- | --- | --- | --- | --- |
+| sample | cold | 4 → **2** | 17.8 → **13.8** | 20.3 → **16.8** | 20.2 → **16.1** |
+| sample | reopen | 4 → **2** | 12.4 → **9** | 14.6 → **10.5** | 14.3 → **10.6** |
+| sample | recompile | 4 → **2** | 7.2 → **4** | 7.7 → **4.4** | 8 → **4.2** |
+| article | cold | 7 → **3** | 43.8 → **34.2** | 51.4 → **46.4** | 51.2 → **42** |
+| article | reopen | 7 → **3** | 35.5 → **25.9** | 38.8 → **29.7** | 41.5 → **32.4** |
+| article | recompile | 4 → **3** | 27.2 → **20.9** | 28.6 → **22.1** | 30.9 → **24** |
+| beamer | cold | 8 → **2** | 93.5 → **45** | 106.5 → **50.1** | 85.1 → **46.9** |
+| beamer | reopen | 8 → **2** | 89.8 → **38** | 103.5 → **40.3** | 79.4 → **37.6** |
+| beamer | recompile | 4 → **2** | 62.5 → **35.4** | 71.6 → **34.5** | 57.7 → **31.7** |
+| tikz | cold | 5 → **2** | 69.2 → **44.4** | 79.9 → **48.3** | 71.8 → **47.8** |
+| tikz | reopen | 5 → **2** | 62.9 → **39.1** | 70.2 → **39.9** | 63.1 → **41.9** |
+| tikz | recompile | 3 → **2** | 50.5 → **35.5** | 53.5 → **34.5** | 52.1 → **35.5** |
+| thesis | cold | 8 → **3** | 277.9 → **221.4** | 305.1 → **237.8** | 291.5 → **222.4** |
+| thesis | reopen | 8 → **3** | 211.4 → **161.4** | 230.4 → **176.9** | 277.5 → **211.2** |
+| thesis | recompile | 4 → **3** | 202.1 → **155.2** | 206.8 → **163.7** | 263.2 → **203.3** |
+
+What the numbers say:
+
+- **Passes now match native TeX Live** for the sample (2), the article (3), Beamer (2) and the thesis (3); TikZ takes 2 against native's 1. The failing discovery passes are gone: packages are installed before the first pass whenever the source names them.
+- **Time falls with the passes**: Beamer 1.8–2.6× faster, TikZ 1.4–1.8×, the sample 1.2–1.9×, the article 1.1–1.4×, the thesis 1.25–1.4× (Node 231 → 168 s, Chromium cold 278 → 221 s). Against native TeX Live's 135 s the server's thesis is now 1.2× rather than 1.7×.
+- **The remaining gap is time per pass**, not passes: LuaTeX in WebAssembly is slower than native per pass, and each job still loads and compiles the 32 MB engine.
+- **Project memory** matters for packages the source does not name literally; for these five documents the source scan already finds everything, so "warm + project packages" and "reopen" equal the plain warm case (the reopen gain is the passes).
+- **Memory is unchanged** for these documents (engine heap 159–229 MiB; peak RSS the same or lower, except the article at +33 MiB). The raised ceiling costs nothing until a document needs it.
+
+### Output equality
+
+PDFs before and after are the same for all five documents, in the Node runner and in each browser: same page count and identical extracted text on every page (`node scripts/compile-benchmark-compare.mjs target/compile-benchmark/out node-before node-after`, and the browsers' `before-<browser>` against `after-<browser>`).
+
+### Tests
+
+- `tests/compile-passes.test.mjs`: the rerun policy against a simulated TeX (two passes for a plain document, a changed `.toc` reruns without a warning, warnings alone do not, Biber once per changed `.bcf`, the five-pass bound, failures), the source scan, and the per-project package memory.
+- `tests/wasm-engine.test.mjs`: the real engine under Node, offline: two passes for a plain document and for a table of contents (filled), Biber with packages installed up front and no failing pass, a package found by a failing pass and then remembered (three passes, then two), a document needing about 1 GiB compiling (1056 MiB heap; the pinned build failed it at 576 MiB), and one needing 2.4 GiB failing with the memory message.
+- `tests/engine-memory.test.mjs`: the memory-section rewrite on the real `busytex.wasm` (valid, streamed and buffered alike), the ceiling's bounds, the browser defaults by device, and the message.
+- `tests/browser/engine-speed.spec.js`, in Chromium, Firefox and WebKit: the sample paper in two passes, the remembered package after a reload, a 1 GiB document compiling and a 2.4 GiB one failing with the message.
+- Benchmark: `scripts/compile-benchmark-node.mjs` (Node, one job per process; cold, warm and per-project caches; peak RSS) and `tests/browser/compile-benchmark.spec.js` (cold, reopen and recompile per browser), summarised by `scripts/compile-benchmark-report.mjs`.
 
 ## Method
 
@@ -73,7 +162,7 @@ Peak memory of the job's cgroup (every process plus scratch), maximum over the r
 | thesis | 942 MiB | 301 MiB |
 
 - **Where the memory goes.** Node itself, the engine's WebAssembly heap and the 45 MB LuaLaTeX baseline unpacked into the engine's in-memory file system together put a WebAssembly job at 0.5–0.9 GiB: 3–5× native. Keep `memory_mib` at 1536 or more (the default is 2048), and size worker pods at about 1 GiB per concurrent job plus Node's overhead.
-- **The engine's own ceiling.** This BusyTeX build caps its WebAssembly heap at **576 MiB**: Emscripten's `MAXIMUM_MEMORY`, not wasm32's 4 GB. A document that needs more fails with `limit_memory` and a log saying so; `crates/compile/tests/wasm.rs` checks that message. None of the five documents came close. Raising the cap means rebuilding BusyTeX with a larger `MAXIMUM_MEMORY`, up to 4 GB.
+- **The engine's own ceiling.** This BusyTeX build declared a WebAssembly heap of at most **576 MiB**: Emscripten's `MAXIMUM_MEMORY`, not wasm32's 4 GB. Since November 21 the pipeline raises it at load time to 2 GiB − 64 KiB (see [Engine speed and memory](#engine-speed-and-memory-november-21-2026)). A document that needs more fails with `limit_memory` and a log saying so; `crates/compile/tests/wasm.rs` checks that message. None of the five documents came close.
 
 ## Size
 
@@ -112,8 +201,8 @@ Page counts, and whether the extracted text of every page is identical:
 
 - **It would be a second supported engine.** Native means a second TeX distribution in the worker image, five to eleven times the WebAssembly engine's size for full coverage. It also brings its own CVE stream, its own package set (a project that compiles in the browser may not compile natively, and the reverse), and its own sandbox allow list for Perl/Biber and the TeX binaries.
 - **The WebAssembly engine's gap has cheap, engine-independent fixes**, which help the browser as well:
-  - **Preinstall a project's known packages.** Start each job with the packages the project's last successful compile installed, as a warm browser tab does. That removes the 1–3 failing discovery passes, and the server already stores `result.packages`.
-  - **Align BusyTeX's rerun policy with the native driver's** (stop when the `.aux` is unchanged).
+  - **Preinstall a project's known packages.** Done on November 21: packages remembered per project and named in the source are installed before the first pass. The server runner takes them per job (`--packages`); the service passing its stored `result.packages` remains to wire up on `feature/org-sync-v2`.
+  - **Align BusyTeX's rerun policy with the native driver's.** Done on November 21, latexmk-style: native's pass counts for four of the five documents; tikz takes 2 against native's 1, because a new `.aux` is always read back once.
   - **Cache Node's compiled WebAssembly code** across jobs (each job compiles the 32 MB module anew).
 - **Correctness does not need native.** Nothing measured requires it: every document compiled, within the new default budgets (`cpu_seconds` 300, `wall_seconds` 600; the thesis takes about 4 minutes), and the memory ceiling was not approached.
 

@@ -47,9 +47,7 @@ struct State {
     search_status: String,
     search_truncated: bool,
     undo_replace_label: String,
-    outline_items: Vec<Heading>,
     outline_scope: String,
-    outline_busy: bool,
     outline_status: String,
     projects: Vec<Card>,
     files: Vec<File>,
@@ -111,6 +109,35 @@ struct State {
     download_loaded: f64,
     download_total: f64,
     filter: String,
+    /// The bar a plugin shows above the active file (docs/plugins.md), drawn here.
+    file_bar: Option<FileBar>,
+    /// More tools items contributed by enabled plugins.
+    plugin_commands: Vec<PluginCommand>,
+}
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+struct FileBar {
+    plugin_name: String,
+    label: String,
+    text: String,
+    actions: Vec<BarAction>,
+}
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct BarAction {
+    plugin: String,
+    id: String,
+    label: String,
+    title: String,
+    disabled: bool,
+}
+#[derive(Clone, Default, Deserialize, PartialEq)]
+#[serde(default)]
+struct PluginCommand {
+    plugin: String,
+    id: String,
+    label: String,
+    hint: String,
 }
 #[derive(Clone, Default, Deserialize)]
 struct SearchHit {
@@ -119,14 +146,6 @@ struct SearchHit {
     line: usize,
     column: usize,
     preview: String,
-}
-#[derive(Clone, Default, Deserialize)]
-struct Heading {
-    index: usize,
-    path: String,
-    line: usize,
-    level: usize,
-    title: String,
 }
 #[derive(Clone, Default, Deserialize)]
 struct Card {
@@ -193,10 +212,13 @@ fn Icon(#[prop(default = "file")] name: &'static str) -> impl IntoView {
         "fit-width" => "M3 12h18M7 8l-4 4 4 4m10-8 4 4-4 4",
         "fit-page" => "M7 3h10v18H7Z",
         "minus" => "M5 12h14",
+        "expand-all" => "m8 9 4-4 4 4M8 15l4 4 4-4",
+        "collapse-all" => "m8 5 4 4 4-4M8 19l4-4 4 4",
         "page-previous" => "m15 6-6 6 6 6",
         "page-next" => "m9 6 6 6-6 6",
         "plug" => "M9 3v5m6-5v5M6 8h12v3a6 6 0 0 1-12 0Zm6 9v4",
         "servers" => "M4 5h16v5H4Zm0 9h16v5H4Zm4-6.5h.01M8 16.5h.01",
+        "book" => "M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3ZM5 17a3 3 0 0 1 3-3h11",
         "package" => "m12 3 8 4.5v9L12 21l-8-4.5v-9Zm0 9 8-4.5M12 12v9m0-9L4 7.5",
         "sliders" => "M4 7h9m5 0h2M4 17h2m5 0h9M13 5h5v4h-5Zm-7 10h5v4H6Z",
         "pulse" => "M3 12h4l3-7 4 14 3-7h4",
@@ -300,6 +322,12 @@ fn App() -> impl IntoView {
                             <hr/>
                             <button aria-label="Share project" aria-haspopup="dialog" on:click=move |_| action("direct-share", "")><Icon name="share"/><span class="tools-item-text">"Share project"<small>{move || if s.get().direct_active { "Experimental · in a direct session" } else if s.get().direct_enabled { "Experimental · direct sessions on" } else { "Experimental · off" }}</small></span></button>
                             <hr/>
+                            <button aria-label="Plugins" aria-haspopup="dialog" on:click=move |_| action("plugins", "")><Icon name="plug"/><span class="tools-item-text">"Plugins"<small>"Install, permissions, updates"</small></span></button>
+                            // Items from enabled plugins; each runs in its plugin's sandbox (docs/plugins.md).
+                            <For each=move || s.get().plugin_commands key=|c| (c.plugin.clone(), c.id.clone(), c.label.clone(), c.hint.clone()) children=move |c| {
+                                let value = format!("{}:{}", c.plugin, c.id);
+                                view! { <button aria-label=c.label.clone() aria-haspopup="dialog" data-plugin=c.plugin.clone() on:click=move |_| action("plugin-command", &value)><Icon name="book"/><span class="tools-item-text">{c.label.clone()}<small>{c.hint.clone()}</small></span></button> }
+                            }/>
                             <button aria-label="MCP providers" on:click=move |_| action("providers", "")><Icon name="servers"/><span>"MCP providers"</span></button>
                             // The Rust companion is discontinued (November 8, 2026). Its item exists only behind
                             // the test-only localStorage switch scribyra-companion-dev; see web/main.js.
@@ -314,7 +342,7 @@ fn App() -> impl IntoView {
                 </header>
                 <div class="workspace">
                     <history::HistoryView state=Signal::derive(move || s.get().history)/>
-                    <aside class="file-sidebar">
+                    <aside class="file-sidebar" id="file-sidebar">
                         <nav class="workspace-navigation" aria-label="Workspace tools">
                             <button aria-label="Files" aria-pressed=move || (s.get().side_panel == "files").to_string() on:click=move |_| action("workspace-panel","files")>"Files"</button>
                             <button aria-label="Search project" aria-pressed=move || (s.get().side_panel == "search").to_string() on:click=move |_| action("workspace-panel","search")><Icon name="search"/>"Search"</button>
@@ -351,6 +379,8 @@ fn App() -> impl IntoView {
                         <Show when=move || s.get().side_panel == "outline"><OutlinePanel s=s/></Show>
                         <div class="sidebar-bottom"><Icon name="lock"/><p>"Your words stay yours."<br/><span>"Saved on this device."</span></p></div>
                     </aside>
+                    // web/sidebar-resize.js owns the width; phone layouts hide the handle.
+                    <div id="sidebar-divider" class="sidebar-divider" role="separator" aria-label="Resize sidebar" aria-orientation="vertical" aria-controls="file-sidebar" tabindex="0" title="Drag to resize. Double-click to reset."></div>
                     <section class="writing-area" aria-label="LaTeX workspace" data-review-mode=move || s.get().review_workspace.mode>
                         <div class="workspace-toolbar">
                             <review_workspace::Mode state=Signal::derive(move || s.get().review_workspace)/>
@@ -379,7 +409,13 @@ fn App() -> impl IntoView {
                                         <button class="icon-button" aria-label="Show source in PDF" title=move || format!("Show source in PDF. {}", s.get().source_map_status) disabled=move || !s.get().source_map_ready||s.get().source_map_busy on:click=move |_| action("source-to-pdf","")><Icon name="to-pdf"/></button>
                                         <review_workspace::ReviewToggle state=Signal::derive(move || s.get().review_workspace)/>
                                     </div>
-                                </div><div id="code-editor" role="tabpanel" aria-label="Source editor" aria-labelledby=move || if s.get().active.is_empty(){None}else{Some(dom_id("tab",&s.get().active))}></div>
+                                </div>
+                                {move || s.get().file_bar.map(|bar| view! {
+                                    <div class="linked-file-bar" role="group" aria-label=bar.label.clone()><span class="linked-file-summary">{bar.text.clone()}</span><span class="plugin-chip">{bar.plugin_name.clone()}</span>
+                                        {bar.actions.into_iter().map(|a| { let value = format!("{}:{}", a.plugin, a.id); view! { <button class="button secondary compact" disabled=a.disabled title=a.title.clone() on:click=move |_| action("plugin-bar", &value)>{a.label.clone()}</button> } }).collect::<Vec<_>>()}
+                                    </div>
+                                })}
+                                <div id="code-editor" role="tabpanel" aria-label="Source editor" aria-labelledby=move || if s.get().active.is_empty(){None}else{Some(dom_id("tab",&s.get().active))}></div>
                             </section>
                             <review_workspace::Panel state=Signal::derive(move || s.get().review_workspace) comments=Signal::derive(move || s.get().comments)>
                                 <comments::Comments state=Signal::derive(move || s.get().comments)/>
@@ -564,13 +600,16 @@ fn SearchPanel(s: ReadSignal<State>) -> impl IntoView {
 }
 #[component]
 fn OutlinePanel(s: ReadSignal<State>) -> impl IntoView {
-    view! { <section class="tool-panel" aria-label="Source outline">
-        <label>"Outline scope"<select aria-label="Outline scope" prop:value=move || s.get().outline_scope on:change=move |e| action("outline-scope",&event_target_value(&e))><option value="file">"Current file"</option><option value="project">"Entire project"</option></select></label>
+    // web/outline.js renders the tree into #outline-tree: only the rows in view exist, and the
+    // headings stay out of the state that every update serialises.
+    view! { <section class="tool-panel outline-panel" aria-label="Source outline">
+        <div class="outline-toolbar">
+            <select aria-label="Outline scope" prop:value=move || s.get().outline_scope on:change=move |e| action("outline-scope",&event_target_value(&e))><option value="project">"Entire project"</option><option value="file">"Current file"</option></select>
+            <button class="icon-button" aria-label="Expand all" title="Expand all" on:click=move |_| action("outline-expand-all","")><Icon name="expand-all"/></button>
+            <button class="icon-button" aria-label="Collapse all" title="Collapse all" on:click=move |_| action("outline-collapse-all","")><Icon name="collapse-all"/></button>
+        </div>
         <p class="tool-status" aria-live="polite">{move || s.get().outline_status}</p>
-        <div class="tool-results"><For each=move || s.get().outline_items key=|item| (item.index,item.title.clone(),item.path.clone(),item.line) children=move |item| view!{
-            <button disabled=move || s.get().outline_busy style=format!("padding-left:{}px",8+item.level.min(5)*8) on:click=move |_| action("outline-hit",&item.index.to_string())><strong>{item.title}</strong><span>{format!("{}:{}",item.path,item.line)}</span></button>
-        }/></div>
-        <p class="tool-help">"Literal TeX headings. Custom macros and included-file order are not expanded."</p>
+        <div id="outline-tree" class="outline-tree" role="tree" aria-label="Outline"></div>
     </section> }
 }
 

@@ -1,0 +1,32 @@
+browser_snapshot [7987 chars] {}
+browser_tabs [116 chars] {"action": "list"}
+browser_click [380 chars] {"target": "e157"}
+browser_press_key [114 chars] {"key": "End"}
+browser_type [171 chars] {"target": "e153", "element": "LaTeX source editor", "text": " Field work ran from 6 to 24 October."}
+browser_snapshot [273 chars] {"target": "e153"}
+browser_press_key [126 chars] {"key": "Control+z"}
+browser_snapshot [769 chars] {"target": "e153"}
+browser_click [380 chars] {"target": "e212"}
+browser_press_key [114 chars] {"key": "End"}
+browser_type [435 chars] {"target": "e153", "element": "LaTeX source editor", "text": " Field work ran from 6 to 24 October.", "slowly": true}
+browser_snapshot [862 chars] {"target": "e153"}
+browser_click [93 chars ERROR] {"target": "e108"}
+browser_wait_for [400 chars] {"time": 5}
+browser_find [1270 chars] {"regex": "/status|error|Compiled|success|fail/i"}
+browser_find [2468 chars] {"text": "Compile"}
+browser_click [561 chars] {"target": "e108"}
+browser_wait_for [575 chars] {"time": 8}
+browser_find [1174 chars] {"text": "Compilation status"}
+browser_wait_for [619 chars] {"time": 20, "textGone": "Preparing LuaLaTeX"}
+browser_find [1275 chars] {"text": "Compilation status"}
+browser_wait_for [578 chars] {"time": 15}
+browser_find [1275 chars] {"text": "Compilation status"}
+browser_wait_for [132 chars ERROR] {"time": 30, "text": "Download PDF"}
+browser_find [974 chars] {"text": "Compilation status"}
+browser_click [391 chars] {"target": "e197"}
+browser_take_screenshot [206948 chars] {"scale": "css"}
+browser_click [567 chars] {"target": "e108"}
+browser_wait_for [132 chars ERROR] {"time": 30, "text": "Download PDF"}
+browser_take_screenshot [195368 chars] {"scale": "css"}
+browser_wait_for [621 chars] {"time": 30, "textGone": "Working on your PDF"}
+browser_take_screenshot [202340 chars] {"scale": "css"}

@@ -95,7 +95,7 @@ test('Unicode input, keyboard resizing, and storage failure never claim a save',
   await page.locator('.cm-content').click(); await page.keyboard.press('Control+Home'); await page.keyboard.insertText('% café 你好 ∑\n');
   await expect(page.locator('.cm-content')).toContainText('café 你好 ∑'); await expect(page.locator('.save-indicator')).toHaveText('Saved locally');
   await page.keyboard.press('Control+z'); await expect(page.locator('.cm-content')).not.toContainText('café 你好 ∑'); await page.keyboard.press('Control+y'); await expect(page.locator('.cm-content')).toContainText('café 你好 ∑');
-  const divider=page.getByRole('separator');await divider.focus();await page.keyboard.press('ArrowRight');await expect(divider).toHaveAttribute('aria-valuenow','52');
+  const divider=page.getByRole('separator',{name:'Resize editor and preview'});await divider.focus();await page.keyboard.press('ArrowRight');await expect(divider).toHaveAttribute('aria-valuenow','52');
   await page.evaluate(()=>{const original=IDBObjectStore.prototype.put;window.restoreStorage=()=>{IDBObjectStore.prototype.put=original;};IDBObjectStore.prototype.put=function(){throw new DOMException('Simulated full disk','QuotaExceededError');};});
   await page.locator('.cm-content').click();await page.keyboard.press('Control+Home');await page.keyboard.insertText('% not-yet-saved\n');
   await expect(page.locator('.save-indicator')).toHaveText('Not saved · export a backup');await expect(page.getByRole('status',{name:'Workspace notification',exact:true})).toContainText('Local save failed');

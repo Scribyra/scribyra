@@ -31,7 +31,8 @@ test('selection comments, line cards, overview, resolved comments and top-bar hi
  await setup(page);await comment(page);const panel=page.getByRole('complementary',{name:'Review panel'});
  await expect(panel.locator('.review-card')).toContainText('Please check');await expect(page.locator('.file-sidebar')).not.toContainText('Comments');await expect(page.locator('.file-sidebar')).not.toContainText('Reviews');await expect(page.locator('.editor-header').getByRole('button',{name:'History',exact:true})).toBeVisible();
  await panel.locator('.review-card').getByRole('button',{name:'Resolve',exact:true}).click();await panel.getByRole('combobox',{name:'Review status filter'}).selectOption('resolved');await panel.locator('.review-card').getByRole('button',{name:'Reopen',exact:true}).click();await panel.getByRole('combobox',{name:'Review status filter'}).selectOption('open');
- await panel.getByRole('tab',{name:'Overview',exact:true}).click();await panel.getByRole('navigation',{name:'Review files'}).getByRole('button',{name:'other.tex (0)',exact:true}).click();await expect(page.getByRole('tab',{name:'other.tex',exact:true})).toHaveAttribute('aria-selected','true');await expect(panel.locator('.review-card')).toHaveCount(0);
+ await panel.getByRole('tab',{name:'Overview',exact:true}).click();const reviewFiles=panel.getByRole('navigation',{name:'Review files'});await expect(reviewFiles.getByRole('button',{name:/^other\.tex /})).toHaveCount(0);await reviewFiles.getByRole('button',{name:'main.tex (1)',exact:true}).click();await expect(page.getByRole('tab',{name:'main.tex',exact:true})).toHaveAttribute('aria-selected','true');
+ await page.getByRole('treeitem',{name:'other.tex',exact:true}).click();await panel.getByRole('tab',{name:'Current file',exact:true}).click();await expect(panel.locator('.review-card')).toHaveCount(0);
  await page.getByRole('treeitem',{name:'main.tex',exact:true}).click();await panel.locator('.review-card-location').click();await expect(page.locator('.comment-highlight')).toHaveText('Second');
  await select(page,0);await panel.locator('.review-card strong').click();await expect.poll(()=>page.evaluate(()=>{const v=document.querySelector('.cm-content').cmTile.root.view;return v.state.sliceDoc(v.state.selection.main.from,v.state.selection.main.to);})).toBe('Second');
  await page.getByRole('button',{name:'Close review panel'}).click();await page.locator('.comment-highlight').click();await expect(panel).toBeVisible();
@@ -91,12 +92,16 @@ test('foreign pending text is protected and accepting it resets reviewing undo',
 async function patch(page,find,replace){
  return page.evaluate(({find,replace})=>{const api=window.scribyra.agent,r=api.patchSource({expectedRevision:api.status().revision,edits:[{path:'main.tex',find,replace}]});if(!r.ok)throw Error(JSON.stringify(r));return r;},{find,replace});
 }
-for(const route of ['typing','undo','mode change','file switch','project close'])test(`conflicting agent patch retains review text and permits ${route}`,async({page})=>{
- await setup(page);await page.getByRole('combobox',{name:'Editor mode'}).selectOption('reviewing');
+for(const route of ['typing','undo','mode change','file switch','project close'])test(`conflicting accepted change from another tab retains review text and permits ${route}`,async({page,context,baseURL})=>{
+ // Agent patches in Reviewing are suggestions now, so the concurrent accepted-source change comes from a second tab in Editing.
+ // It opens before this tab switches mode, so it keeps Editing; its committed change arrives here through local-tab sync.
+ await setup(page);const peer=await context.newPage();await peer.goto(baseURL);await peer.locator('.card-open').first().click();await expect(peer.locator('.cm-content')).toBeVisible();
+ await page.getByRole('combobox',{name:'Editor mode'}).selectOption('reviewing');await expect(peer.getByRole('combobox',{name:'Editor mode'})).toHaveValue('editing');
  const at=text.indexOf('First'),draft=text.replace('First','LOCAL');
- // One task: no idle/blur flush can publish the draft before the concurrent patch.
- await page.evaluate(({at})=>{const view=document.querySelector('.cm-content').cmTile.root.view;view.dispatch({changes:{from:at,to:at+5,insert:'LOCAL'},selection:{anchor:at+5}});const api=window.scribyra.agent,r=api.patchSource({expectedRevision:api.status().revision,edits:[{path:'main.tex',find:'First',replace:'AGENT'}]});if(!r.ok)throw Error(JSON.stringify(r));},{at});
- const retained=page.getByRole('region',{name:'Retained review drafts'});await expect(retained.getByRole('textbox')).toHaveValue(draft);expect(await accepted(page)).toBe(text.replace('First','AGENT'));
+ // The draft is not flushed (no blur, idle flush is 900 ms away) when the peer's accepted change arrives; if it were, no draft would be retained and the test fails.
+ await page.evaluate(({at})=>{const view=document.querySelector('.cm-content').cmTile.root.view;view.dispatch({changes:{from:at,to:at+5,insert:'LOCAL'},selection:{anchor:at+5}});},{at});
+ await patch(peer,'First','AGENT');expect(await peer.evaluate(()=>window.scribyra.agent.readSource({path:'main.tex',startLine:1,endLine:200}).value.content)).toBe(text.replace('First','AGENT'));
+ const retained=page.getByRole('region',{name:'Retained review drafts'});await expect(retained.getByRole('textbox')).toHaveValue(draft);expect(await accepted(page)).toBe(text.replace('First','AGENT'));await peer.close();
  if(route==='typing'){await select(page,0);await page.keyboard.type('% next\n');await flush(page);await expect(page.locator('.tracked-insert')).toHaveText('% next');}
  if(route==='undo'){await page.locator('.cm-content').focus();await page.keyboard.press('Control+z');await expect(retained.getByRole('textbox')).toHaveValue(draft);await select(page,0);await page.keyboard.type('Z');await page.keyboard.press('Control+z');await expect(page.locator('.cm-content')).not.toContainText('Z');}
  if(route==='mode change'){await page.getByRole('combobox',{name:'Editor mode'}).selectOption('editing');await expect(page.getByRole('combobox',{name:'Editor mode'})).toHaveValue('editing');}
@@ -106,6 +111,21 @@ for(const route of ['typing','undo','mode change','file switch','project close']
  await page.reload();await page.locator('.card-open').first().click();await expect(retained.getByRole('textbox')).toHaveValue(draft);
  const download=page.waitForEvent('download');await retained.getByRole('button',{name:'Save draft text'}).click();expect(await readFile(await(await download).path(),'utf8')).toBe(draft);
  await retained.getByRole('button',{name:'Discard draft'}).click();await page.getByRole('dialog',{name:'Discard review draft'}).getByRole('button',{name:'Continue',exact:true}).click();await expect(retained).toBeHidden();
+});
+
+test('agent patch in Reviewing becomes an agent-credited suggestion and leaves a concurrent local draft intact',async({page})=>{
+ await setup(page);await page.getByRole('combobox',{name:'Editor mode'}).selectOption('reviewing');
+ const at=text.indexOf('First'),draft=text.replace('First','LOCAL');
+ // Same task as the old conflict test: the agent patch lands while the local draft is still unpublished.
+ const receipt=await page.evaluate(({at})=>{const view=document.querySelector('.cm-content').cmTile.root.view;view.dispatch({changes:{from:at,to:at+5,insert:'LOCAL'},selection:{anchor:at+5}});const api=window.scribyra.agent;return api.patchSource({expectedRevision:api.status().revision,edits:[{path:'main.tex',find:'Second',replace:'AGENT'}]});},{at});
+ expect(receipt.ok,JSON.stringify(receipt.error)).toBe(true);expect(receipt.value.count).toBe(0);expect(receipt.value.suggested).toBe(1);expect(await accepted(page)).toBe(text);
+ await expect(page.getByRole('region',{name:'Retained review drafts'})).toBeHidden();
+ const projected=()=>page.evaluate(()=>document.querySelector('.cm-content').cmTile.root.view.state.doc.toString());await expect.poll(projected).toBe(draft.replace('Second','AGENT'));
+ // Blur publishes the local draft next to the agent's suggestion; both stay pending and accepted source is untouched.
+ await page.getByRole('button',{name:'Review',exact:true}).focus();await expect.poll(async()=>(await proposals(page)).filter(s=>s.status==='pending').map(s=>s.after).sort()).toEqual(['AGENT','LOCAL']);
+ const items=await proposals(page),agent=items.find(s=>s.after==='AGENT'),local=items.find(s=>s.after==='LOCAL');
+ expect(agent.before).toBe('Second');expect(receipt.value.suggestionIds).toEqual([agent.id]);expect(local.before).toBe('First');expect(agent.authorId).not.toBe(local.authorId);expect(await accepted(page)).toBe(text);
+ await openReview(page);await expect(page.locator('.review-card').filter({hasText:'AGENT'}).locator('strong').first()).toHaveText('Agent');await expect(page.locator('.review-card').filter({hasText:'LOCAL'})).toHaveCount(1);await expect(page.locator('.review-card').filter({hasText:'LOCAL'}).locator('strong').first()).not.toHaveText('Agent');
 });
 
 for(const decision of ['individual','batch'])test(`typing before a foreign insertion preserves order through reload and ${decision} acceptance`,async({page})=>{
@@ -155,8 +175,9 @@ test('Viewing denies tree writes, reference rewrites, uploads, settings and sear
  await page.evaluate(()=>{void window.scribyra.action('search-replace');});await page.getByRole('dialog',{name:'Review replacements'}).getByRole('button',{name:'Apply replacements',exact:true}).click();await expect(notice).toContainText('Switch to Editing');await unchanged();
  await page.evaluate(()=>window.scribyra.action('workspace-panel','files'));await comment(page);await expect(page.locator('.review-card')).toContainText('Please check');
  const download=page.waitForEvent('download');await page.getByRole('button',{name:'Export',exact:true}).click();expect((await download).suggestedFilename()).toMatch(/\.zip$/);
- // Modes apply only to the UI. A trusted agent still edits accepted source.
- await patch(page,'First','Trusted');expect(await accepted(page)).toContain('Trusted');await expect(page.getByRole('combobox',{name:'Editor mode'})).toHaveValue('viewing');
+ // Viewing also refuses agent patches (R4): accepted source and the mode stay as they were.
+ const refused=await page.evaluate(()=>{const api=window.scribyra.agent;return api.patchSource({expectedRevision:api.status().revision,edits:[{path:'main.tex',find:'First',replace:'Trusted'}]});});
+ expect(refused.ok).toBe(false);expect(refused.error.code).toBe('viewing_mode');await unchanged();expect(await proposals(page)).toEqual([]);await expect(page.getByRole('combobox',{name:'Editor mode'})).toHaveValue('viewing');
 });
 
 test('Viewing refuses existing replacement undo and review acceptance',async({page})=>{

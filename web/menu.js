@@ -20,6 +20,8 @@ const ICONS={
   open:'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
   download:'M12 4v11M7 10l5 5 5-5M4 20h16',
   restore:'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5',
+  book:'M5 4h11a3 3 0 0 1 3 3v13H8a3 3 0 0 1-3-3ZM5 17a3 3 0 0 1 3-3h11',
+  link:'M10 14a4 4 0 0 0 5.7 0l3-3a4 4 0 0 0-5.7-5.7l-1 1M14 10a4 4 0 0 0-5.7 0l-3 3a4 4 0 0 0 5.7 5.7l1-1',
 };
 const MARGIN=8,GAP=4,TYPEAHEAD_MS=600;
 const supportsPopover=typeof HTMLElement!=='undefined'&&'popover' in HTMLElement.prototype;
