@@ -123,8 +123,9 @@ Source; newer editor: File → Download as source). **Import ZIP** reads it as b
   (warning), bibliography files named but missing (warning), custom latexmk rules (info).
 - **Counts**: files, `.tex`, images, bibliography files and the bibliography tool.
 
-The summary dialog appears when the ZIP looks like Overleaf's or there is something to
-fix; a plain ZIP imports exactly as before. File names in it open that line. **Compile
+The summary dialog appears when the ZIP looks like Overleaf's, there is something to
+fix (a warning or an error) or there are several possible main files; notes alone do not
+interrupt, and a plain ZIP imports exactly as before. File names in it open that line. **Compile
 now** compiles. Non-UTF-8 text files are refused with the file name and the fix.
 
 Wording: Overleaf is named only to say where a file came from and how to download it.

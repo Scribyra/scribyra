@@ -134,7 +134,8 @@ export function analyzeImport(entries){
 
 /** Whether the import summary is worth showing: an Overleaf project, or anything to fix. */
 export function needsSummary(report){
- return report.overleaf||report.warnings.some(entry=>entry.severity!=='info')||(report.compiler&&report.compiler!=='lualatex'&&report.warnings.length>0)||report.roots.length>1;
+ // Notes alone (severity info: things LuaLaTeX ignores or handles) never interrupt a plain ZIP.
+ return report.overleaf||report.warnings.some(entry=>entry.severity!=='info')||report.roots.length>1;
 }
 
 /** What the person needs to know about the compiler, in one sentence. */

@@ -47,6 +47,12 @@ test('a % !TEX program line is the clearest hint',()=>{
  assert.equal(needsSummary(report),false,'nothing to fix and not from Overleaf');
 });
 
+test('a plain pdfLaTeX-era ZIP with only notes imports without interrupting',()=>{
+ const report=analyzeImport(entries({'main.tex':doc('\\usepackage[T1]{fontenc}\n\\usepackage[romanian]{babel}')}));
+ assert.equal(report.overleaf,false);assert(report.warnings.length>0);assert(report.warnings.every(entry=>entry.severity==='info'));
+ assert.equal(needsSummary(report),false,'notes are not worth a dialog when nothing needs changing');
+});
+
 test('fontspec alone means a Unicode engine, and LuaLaTeX is one',()=>{
  const report=analyzeImport(entries({'main.tex':doc('\\usepackage{fontspec}\n\\setmainfont{TeX Gyre Pagella}')}));
  assert.equal(report.compiler,'lualatex');assert.deepEqual(report.warnings,[]);assert.equal(needsSummary(report),false);
