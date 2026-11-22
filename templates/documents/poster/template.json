@@ -1,0 +1,9 @@
+{
+  "id": "poster",
+  "name": "Conference poster",
+  "category": "slides",
+  "order": 20,
+  "description": "An A0 portrait research poster made with tikzposter: title bar, three columns of blocks, a figure and contact details.",
+  "keywords": ["poster", "a0", "conference", "tikzposter", "research"],
+  "main": "main.tex"
+}

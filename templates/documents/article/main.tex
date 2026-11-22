@@ -1,0 +1,106 @@
+% Article: a general research paper.
+% Replace the title, authors and body text; keep the structure you need.
+% Bibliography: biblatex with Biber, entries in references.bib.
+\documentclass[11pt]{article}
+
+% ---- Page and language ------------------------------------------------------
+\usepackage[a4paper,margin=2.5cm]{geometry} % letterpaper for US Letter
+\usepackage[english]{babel}                 % e.g. [ngerman], [french]
+\usepackage{microtype}                      % finer spacing and line breaks
+
+% ---- Mathematics, figures and tables ---------------------------------------
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}  % \includegraphics for PNG, JPEG and PDF images
+\usepackage{booktabs}  % \toprule, \midrule, \bottomrule
+\usepackage{tikz}      % the example figure is drawn with TikZ
+
+% ---- References -------------------------------------------------------------
+% style=authoryear gives (Author 2024); style=numeric gives [1].
+\usepackage[style=authoryear,backend=biber]{biblatex}
+\addbibresource{references.bib}
+\usepackage{csquotes}
+
+% Load hyperref late; cleveref after it.
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalise]{cleveref}
+
+\title{A Concise Title That Says What You Found}
+\author{%
+  First Author\thanks{Department, University. \texttt{first@example.org}}
+  \and
+  Second Author\thanks{Institute, City.}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+  One paragraph: the question, what you did, what you found, and why it
+  matters. Most readers decide here whether to read on, so keep it to about
+  150--250 words.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+State the problem and why it is worth solving. Place your work among earlier
+studies \parencite{doe2021,roe2019} and end with your contribution. The rest of
+the paper is organised as follows: \cref{sec:method} describes the method and
+\cref{sec:results} the results.
+
+\section{Method}
+\label{sec:method}
+Describe what you did in enough detail that someone else could repeat it.
+Number the equations you refer to:
+\begin{equation}
+  \label{eq:model}
+  y_i = \beta_0 + \beta_1 x_i + \varepsilon_i,
+  \qquad \varepsilon_i \sim \mathcal{N}(0,\sigma^2).
+\end{equation}
+\Cref{eq:model} is then estimated by least squares \parencite{roe2019}.
+
+\section{Results}
+\label{sec:results}
+\Cref{fig:trend} shows the trend and \cref{tab:summary} summarises the data.
+
+\begin{figure}[htbp]
+  \centering
+  % Replace this drawing with your own image, for example:
+  % \includegraphics[width=0.7\linewidth]{figures/trend.png}
+  \begin{tikzpicture}[scale=0.9]
+    \draw[->] (0,0) -- (6.2,0) node[right] {$x$};
+    \draw[->] (0,0) -- (0,4.2) node[above] {$y$};
+    \foreach \x/\y in {0.5/0.9,1.2/1.4,1.9/1.6,2.6/2.3,3.3/2.4,4.0/3.1,4.7/3.2,5.4/3.8}
+      \fill (\x,\y) circle (2pt);
+    \draw[thick,blue] (0.3,0.75) -- (5.8,3.95);
+  \end{tikzpicture}
+  \caption{Observations and the fitted line from \cref{eq:model}.}
+  \label{fig:trend}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Summary of the observations.}
+  \label{tab:summary}
+  \begin{tabular}{lrr}
+    \toprule
+    Group   & $n$ & Mean \\
+    \midrule
+    Control & 24  & 1.82 \\
+    Treated & 26  & 2.47 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\section{Discussion}
+What do the results mean, what are their limits, and what should come next?
+As \textcite{doe2021} put it, \enquote{a clear question is half the answer}.
+
+\section{Conclusion}
+Summarise the contribution in a few sentences.
+
+\section*{Acknowledgements}
+Thank funders, colleagues and data providers here.
+
+\printbibliography
+
+\end{document}

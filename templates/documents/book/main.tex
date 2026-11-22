@@ -1,0 +1,53 @@
+% Book: front matter, parts and chapters, back matter.
+% Each chapter lives in its own file under chapters/ and is pulled in with
+% \include. To compile only the chapter you are working on, uncomment:
+% \includeonly{chapters/chapter2}
+\documentclass[11pt,openany]{book}  % remove openany to start chapters on right-hand pages
+
+% Trim size: a common hardback format. Use a4paper or letterpaper for drafts.
+\usepackage[paperwidth=156mm,paperheight=234mm,
+            inner=22mm,outer=18mm,top=20mm,bottom=24mm]{geometry}
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage[hidelinks]{hyperref}
+
+\title{The Title of Your Book}
+\author{Author Name}
+\date{}
+
+\begin{document}
+
+% ---- Front matter: roman page numbers, unnumbered chapters ----------------
+\frontmatter
+\maketitle
+
+% Copyright page (the back of the title page).
+\thispagestyle{empty}
+\vspace*{\fill}
+\noindent Copyright \copyright\ 2026 Author Name.\\
+All rights reserved. % or choose an open licence, e.g. CC BY 4.0
+\par\medskip
+\noindent First edition.
+\clearpage
+
+\chapter{Preface}
+Why you wrote this book and who it is for. Thank the people who helped.
+
+\tableofcontents
+
+% ---- Main matter: arabic page numbers, numbered chapters -------------------
+\mainmatter
+\part{Beginnings}
+\include{chapters/chapter1}
+\include{chapters/chapter2}
+
+\part{Further On}
+\include{chapters/chapter3}
+
+% ---- Back matter: unnumbered chapters again --------------------------------
+\backmatter
+\chapter{Afterword}
+A few closing words.
+
+\end{document}

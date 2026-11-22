@@ -1,0 +1,9 @@
+{
+  "id": "lecture-notes",
+  "name": "Lecture notes",
+  "category": "teaching",
+  "order": 30,
+  "description": "Course notes with numbered lectures, coloured boxes for definitions, theorems and examples, margin notes and exercises.",
+  "keywords": ["lecture", "notes", "course", "script", "teaching", "theorem", "tcolorbox"],
+  "main": "main.tex"
+}

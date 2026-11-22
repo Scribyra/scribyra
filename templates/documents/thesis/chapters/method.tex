@@ -1,0 +1,19 @@
+\chapter{Method}
+\label{ch:method}
+
+Describe the design of your study, the data and the analysis.
+\Cref{fig:pipeline} gives an overview.
+
+\begin{figure}[htbp]
+  \centering
+  % Replace with \includegraphics[width=\linewidth]{figures/pipeline.pdf}
+  \begin{tikzpicture}[box/.style={draw,rounded corners,minimum width=2.4cm,minimum height=1cm,align=center}]
+    \node[box] (a) {Collect\\data};
+    \node[box,right=1cm of a] (b) {Clean and\\code};
+    \node[box,right=1cm of b] (c) {Analyse};
+    \draw[->,thick] (a) -- (b);
+    \draw[->,thick] (b) -- (c);
+  \end{tikzpicture}
+  \caption{Overview of the research process.}
+  \label{fig:pipeline}
+\end{figure}

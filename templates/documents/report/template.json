@@ -1,0 +1,10 @@
+{
+  "id": "report",
+  "name": "Report",
+  "category": "papers",
+  "order": 20,
+  "description": "A technical or project report with a title page, contents, chapters, an executive summary and references.",
+  "keywords": ["technical report", "project", "chapters", "title page", "biblatex"],
+  "main": "main.tex",
+  "preview": [1, 6]
+}

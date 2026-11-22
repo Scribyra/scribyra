@@ -270,7 +270,9 @@ export function importZip(bytes) {
     if (path.endsWith('/')) { result.push({ path: path.slice(0,-1), folder: true }); continue; }
     assertPath(path); actual += content.length;
     if (actual > MAX_BYTES) throw new Error('Expanded ZIP exceeds 64 MiB.');
-    result.push({ path, content: isText(path) ? new TextDecoder('utf-8', { fatal: true }).decode(content) : content });
+    let text;
+    if (isText(path)) { try { text = new TextDecoder('utf-8', { fatal: true }).decode(content); } catch { throw new Error(`${path} is not saved as UTF-8 text. Scribyra and LuaLaTeX read UTF-8: save the file as UTF-8 (most editors offer this when saving) and import the ZIP again.`); } }
+    result.push({ path, content: isText(path) ? text : content });
   }
   if (actual > expected) throw new Error('ZIP size metadata does not match its contents.');
   if (!result.length) throw new Error('The ZIP contains no files or folders.');

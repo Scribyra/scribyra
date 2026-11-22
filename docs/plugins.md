@@ -514,6 +514,16 @@ Files it created stay in the projects as ordinary files.
 **Project deleted.** Every plugin's `projectData` and ownership for that project are
 deleted.
 
+## Templates hook
+
+Not built. Document templates ([templates.md](templates.md)) are data: a `template.json`
+plus files, checked by `validateTemplate` in `web/template-catalog.js`. A later capability
+could let a plugin contribute templates of exactly that shape (for example a
+department's thesis template, or a publisher class bundled with the plugin). The gallery
+would show them in their category with the plugin's name, load their files only when
+chosen, and apply the same file rules. No permission, manifest field or API exists for
+it yet.
+
 ## Organisation allow-list (hook)
 
 Organisation deployments ([org-sync design](org-sync-design.md) on

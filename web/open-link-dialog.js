@@ -12,6 +12,10 @@ export function takeOpenFragment(browser){
  const hash=browser.location.hash;
  if(!/^#open(?:\?|$)/.test(hash))return null;
  browser.history.replaceState(null,'',browser.location.pathname+browser.location.search);
+ return readOpenFragment(hash);
+}
+/** A #open? fragment the app made itself (the welcome's Git link), read like a pasted link. */
+export function readOpenFragment(hash){
  if(hash.length>OPEN_LINK_MAX_CHARS+1)return {error:`This link is too long. Open links are at most ${OPEN_LINK_MAX_CHARS.toLocaleString('en')} characters.`};
  try{return {link:parseOpenLink(hash)};}catch(error){return {error:error instanceof OpenLinkError?error.message:'This link is damaged.'};}
 }
@@ -173,5 +177,7 @@ export function openLinkEntry({initial,projects,openExisting,importProject,compi
  }
  return {
   start(){if(started)return;started=true;show(initial);initial=null;window.addEventListener('hashchange',()=>show(takeOpenFragment(window)));},
+  /** Shows the same confirmation for a fragment without going through the address bar. */
+  offer(hash){show(readOpenFragment(hash));},
  };
 }

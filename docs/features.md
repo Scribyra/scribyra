@@ -6,6 +6,7 @@ and screenshots; the [roadmap](roadmap.md) has what comes next.
 
 ## Features
 
+- **New project** opens a template gallery with search and categories: sample paper, minimal, article, report, book, thesis (biblatex/Biber), Beamer slides, tikzposter poster, CV, cover letter, homework, lab report and lecture notes, all written for Scribyra and compiling offline with the bundled packages. `#template=<id>` links (used by scribyra.com/templates/) preselect one. **Import ZIP** recognises projects downloaded from Overleaf, picks the main file, names the compiler they were written for and explains what LuaLaTeX needs, with fixes. A first visit shows a dismissible welcome. See [templates](templates.md).
 - Project dashboard and search; nested folders with keyboard navigation; file/folder create, rename, move, duplicate, delete and restore; atomic file/folder imports and drag/drop moves/uploads; main-file selection, themes, and resizable source/PDF panes.
 - Stable file tabs with per-session cursor/selection restoration and per-file undo. Tabs, font size, indentation, wrapping and auto-compile preferences persist on this device. Project settings control the name, main document and engine.
 - Rust project search with Unicode, case/whole-word options, regular expressions, selectable replacement previews and cross-file batch undo/redo. Source outlines navigate literal headings. Search and outline work offline in cancellable workers.

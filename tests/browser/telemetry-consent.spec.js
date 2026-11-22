@@ -140,6 +140,11 @@ test('unavailable preference storage suppresses reminders and leaves explicit ta
 for(const theme of ['light','dark'])test(`${theme} consent is accessible and opening the editor clears the unanswered card`,async({page,context},info)=>{
  const network=await configured(context);await context.addInitScript(theme=>localStorage.setItem('scribyra-theme',theme),theme);await page.goto(network.app);await expect(card(page)).toBeVisible();
  await page.screenshot({path:resolve(`.cache/telemetry-consent-${info.project.name}-${theme}-dashboard-1366x768.png`)});
+ // The first-run welcome is part of the page, so the card neither hides it nor takes over: every welcome control can still be reached and pressed.
+ const welcome=page.getByRole('region',{name:'How would you like to begin?',exact:true});await expect(welcome).toBeVisible();await expect(page.getByRole('dialog')).toHaveCount(0);
+ for(const control of [welcome.getByRole('button',{name:'Dismiss welcome',exact:true}),welcome.getByRole('button',{name:'Start with a sample paper',exact:true}),welcome.getByRole('link',{name:'agent.md',exact:true})])await control.click({trial:true,timeout:15000});
+ await page.evaluate(()=>{for(const node of document.querySelectorAll('.dashboard-main,.dashboard-content,html'))node.scrollTop=node.scrollHeight;});
+ const end=await welcome.boundingBox(),cardTop=(await card(page).boundingBox()).y;expect(end.y+end.height,'scrolled to the end, the welcome ends above the card').toBeLessThanOrEqual(cardTop);
  const audit=await new AxeBuilder({page}).include('.telemetry-consent').withTags(['wcag2a','wcag2aa','wcag21aa']).analyze();expect(audit.violations).toEqual([]);
  await card(page).getByRole('checkbox',{name:'Errors and failures',exact:true}).check();await sample(page);await expect(card(page)).toHaveCount(0);
  await raise(page);await quiet(page);expect(network.telemetry()).toEqual([]);const settings=await open(page);await expect(settings.getByRole('checkbox',{name:'Errors and failures',exact:true})).not.toBeChecked();await settings.getByRole('button',{name:'Close',exact:true}).click();

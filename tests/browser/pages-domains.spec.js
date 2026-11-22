@@ -2,7 +2,7 @@ import {test,expect} from '@playwright/test';
 import {officialTelemetryEndpoint} from '../../scripts/official-telemetry.mjs';
 import {zipSync,strToU8} from 'fflate';
 import {createServer} from 'node:http';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,stat} from 'node:fs/promises';
 import {resolve,extname,sep} from 'node:path';
 import {execFileSync} from 'node:child_process';
 let server,directory,presentation,application;
@@ -12,7 +12,8 @@ test.beforeAll(async()=>{
   try{
    const path=resolve(directory,'.'+decodeURIComponent(new URL(req.url,'http://localhost').pathname));
    if(path!==directory&&!path.startsWith(directory+sep)){res.writeHead(403).end();return;}
-   const file=path.endsWith(sep)||path===directory?resolve(path,'index.html'):path;
+   // Like Pages, a folder address (templates/) serves its index.html.
+   const file=path.endsWith(sep)||path===directory||(await stat(path).catch(()=>null))?.isDirectory()?resolve(path,'index.html'):path;
    const types={'.html':'text/html','.js':'text/javascript','.mjs':'text/javascript','.css':'text/css','.json':'application/json','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.md':'text/markdown'};
    const data=await readFile(file);res.writeHead(200,{'Content-Type':types[extname(file)]||'application/octet-stream'});res.end(data);
   }catch{res.writeHead(404).end();}
@@ -51,7 +52,7 @@ test('separate presentation and root app hosts compile online and offline',async
 test('site pages may be indexed, with a sitemap, and every page they link to in the release exists',async({page})=>{
  const robots=await readFile(resolve(directory,'robots.txt'),'utf8');expect(robots).toContain('Allow: /');expect(robots).not.toMatch(/^Disallow: \/$/m);expect(robots).toContain('Sitemap: https://scribyra.com/sitemap.xml');
  expect((await page.request.get(new URL('sitemap.xml',presentation).href)).ok()).toBe(true);
- for(const name of ['','privacy.html','licenses.html','telemetry.html','open.html']){
+ for(const name of ['','privacy.html','licenses.html','telemetry.html','open.html','templates/','coming-from-overleaf.html']){
   await page.goto(new URL(name,presentation).href);await expect(page.locator('meta[name=robots]')).toHaveCount(0);
   const hrefs=await page.locator('a[href]').evaluateAll(links=>links.map(link=>link.getAttribute('href')));expect(hrefs.filter(href=>/gitlab\.com\/urundead-labs/.test(href)),`${name||'index'} links to the GitLab repository`).toEqual([]);
   if(name!=='telemetry.html'){const github=page.getByRole('banner').getByRole('link',{name:'Source code on GitHub',exact:true});await expect(github).toBeVisible();await expect(github).toHaveAttribute('href','https://github.com/Scribyra/scribyra');await expect(github).toContainText('GitHub');await expect(page.getByRole('contentinfo').getByRole('link',{name:'Source ↗',exact:true})).toHaveAttribute('href','https://github.com/Scribyra/scribyra');}
@@ -68,7 +69,7 @@ test('site pages may be indexed, with a sitemap, and every page they link to in 
  await page.goto(new URL('privacy.html',presentation).href);await expect(page.getByRole('link',{name:'tlnet.yihui.org',exact:true})).toBeVisible();await expect(page.locator('main')).toContainText('Open in Scribyra links, only after you confirm.');await expect(page.getByRole('link',{name:'api.zotero.org',exact:true})).toBeVisible();await expect(page.locator('main')).not.toContainText(/end-to-end encrypt/i);
  await expect(page.getByRole('link',{name:'What telemetry contains',exact:true})).toHaveAttribute('href','telemetry.html');await expect(page.locator('main')).toContainText('Grafana Cloud, a third-party service');
  await expect(page.locator('main')).toContainText('URUNDEAD LABS S.R.L. operates Scribyra. It is the data controller');await expect(page.locator('#who + p')).toContainText('EUID ROONRC.J2026034271001');await expect(page.getByRole('link',{name:'dataprotection.ro',exact:true})).toHaveAttribute('href','https://www.dataprotection.ro/');
- for(const name of ['','privacy.html','licenses.html','telemetry.html','open.html']){await page.goto(new URL(name,presentation).href);await expect(page.getByRole('contentinfo')).toContainText('© 2026 URUNDEAD LABS S.R.L. · Reg. Com. J2026034271001 · CUI 54762154 · VAT RO55538423 · Strada Pitar Moș 27, et. 5, ap. 17, 010452 București, Romania');}
+ for(const name of ['','privacy.html','licenses.html','telemetry.html','open.html','templates/','coming-from-overleaf.html']){await page.goto(new URL(name,presentation).href);await expect(page.getByRole('contentinfo')).toContainText('© 2026 URUNDEAD LABS S.R.L. · Reg. Com. J2026034271001 · CUI 54762154 · VAT RO55538423 · Strada Pitar Moș 27, et. 5, ap. 17, 010452 București, Romania');}
  expect(await(await page.request.get(new URL('licenses/COPYRIGHT.txt',presentation).href)).text()).toContain('Copyright (C) 2026 URUNDEAD LABS S.R.L.');
 });
 

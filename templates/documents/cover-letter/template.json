@@ -1,0 +1,9 @@
+{
+  "id": "cover-letter",
+  "name": "Cover letter",
+  "category": "career",
+  "order": 20,
+  "description": "A formal letter with sender and recipient addresses, date, subject line, body and signature. Pairs with the CV template.",
+  "keywords": ["letter", "cover letter", "application", "job", "formal"],
+  "main": "main.tex"
+}

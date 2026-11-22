@@ -1,0 +1,9 @@
+{
+  "id": "cv",
+  "name": "CV / résumé",
+  "category": "career",
+  "order": 10,
+  "description": "A clean one- or two-page CV: contact header, profile, experience, education, skills and publications.",
+  "keywords": ["cv", "resume", "curriculum vitae", "job", "application"],
+  "main": "main.tex"
+}

@@ -1,0 +1,87 @@
+% Lecture notes.
+% \lecture{date}{title} starts a new lecture. Definitions, theorems and examples
+% are numbered within the lecture and drawn as coloured boxes (tcolorbox).
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.5cm,marginparwidth=2cm]{geometry}
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsthm}
+\usepackage[dvipsnames]{xcolor}
+\usepackage[most]{tcolorbox}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+% ---- Course details: change these ------------------------------------------
+\title{Course Name\\[0.3em]\large Lecture Notes}
+\author{Lecturer Name}
+\date{Term 2026}
+
+% ---- Lectures -----------------------------------------------------------------
+\newcounter{lecture}
+\newcommand{\lecture}[2]{%
+  \refstepcounter{lecture}%
+  \section*{Lecture \thelecture: #2}%
+  \addcontentsline{toc}{section}{Lecture \thelecture: #2}%
+  \marginpar{\raggedright\footnotesize\color{gray}#1}}
+\counterwithin*{equation}{lecture}
+
+% ---- Boxes ----------------------------------------------------------------------
+% Change the colours or add your own with \newtcbtheorem.
+\tcbset{notebox/.style={enhanced,breakable,boxrule=0.6pt,arc=2pt,
+  fonttitle=\bfseries,separator sign={.},description font=\mdseries\itshape}}
+\newtcbtheorem[number within=lecture]{definition}{Definition}%
+  {notebox,colback=NavyBlue!5,colframe=NavyBlue!70!black}{def}
+\newtcbtheorem[use counter from=definition]{theorem}{Theorem}%
+  {notebox,colback=Plum!5,colframe=Plum!70!black}{thm}
+\newtcbtheorem[use counter from=definition]{example}{Example}%
+  {notebox,colback=ForestGreen!5,colframe=ForestGreen!70!black}{ex}
+\newcommand{\remark}[1]{\marginpar{\raggedright\footnotesize\color{BrickRed}#1}}
+
+\begin{document}
+\maketitle
+\tableofcontents
+
+\lecture{6 Jan 2026}{Sets and functions}
+
+\begin{definition}{Function}{function}
+  A \emph{function} $f\colon A \to B$ assigns to every $a \in A$ exactly one
+  element $f(a) \in B$.
+\end{definition}
+
+A function is \emph{injective} if different inputs give different outputs.%
+\remark{Also called one-to-one.}
+
+\begin{example}{}{square}
+  $f\colon \mathbb{R} \to \mathbb{R}$, $f(x) = x^2$ is not injective, since
+  $f(-1) = f(1)$.
+\end{example}
+
+\lecture{8 Jan 2026}{Limits}
+
+\begin{definition}{Limit}{limit}
+  We write $\lim_{x \to a} f(x) = L$ if for every $\varepsilon > 0$ there is a
+  $\delta > 0$ such that $0 < |x - a| < \delta$ implies $|f(x) - L| < \varepsilon$.
+\end{definition}
+
+\begin{theorem}{Sum rule}{sum}
+  If $\lim_{x\to a} f(x) = L$ and $\lim_{x\to a} g(x) = M$, then
+  \begin{equation}
+    \lim_{x\to a} \bigl(f(x) + g(x)\bigr) = L + M.
+  \end{equation}
+\end{theorem}
+
+\begin{proof}
+  Given $\varepsilon > 0$, choose $\delta$ so that both $|f(x) - L|$ and
+  $|g(x) - M|$ are below $\varepsilon/2$; the triangle inequality does the rest.
+\end{proof}
+
+Theorem~\ref{thm:sum} relies on Definition~\ref{def:limit}.
+
+\subsection*{Exercises}
+\begin{enumerate}[label=\arabic*.]
+  \item Show that $f(x) = 2x + 1$ is injective.
+  \item Use Definition~\ref{def:limit} to prove that $\lim_{x\to 2} 3x = 6$.
+\end{enumerate}
+
+\end{document}
