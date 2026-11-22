@@ -209,6 +209,9 @@ test('records after a pull: applied, same, kept mine and pending changes',()=>{
   assert.deepEqual(next['n.tex'],record('n1','hn'));
   assert.deepEqual(next['k.tex'],record('k2','hk-edited'));
   assert.equal(next['skip.tex'],undefined);
+  // A combined or edited result differs from theirs (no fingerprint): the next push sends it.
+  const merged=recordsAfterPull({records:{'c.tex':record('c1','hc')},remote:remote({'c.tex':'c2'}),outcomes:{'c.tex':{result:'applied',exists:true,hash:null}}});
+  assert.deepEqual(planPush({records:merged,local:local({'c.tex':'hc-merged'})}).items.map(item=>[item.path,item.op]),[['c.tex','update']]);
   // Kept mine after a remote deletion: the file is new again relative to the remote.
   assert.equal(localState(recordsAfterPull({records:{'g.tex':record('g1','hg')},remote:remote({}),outcomes:{'g.tex':{result:'mine'}}})['g.tex'],{hash:'hg-edited'}),'added');
   // Kept a local deletion against a remote change: pushing deletes it there.

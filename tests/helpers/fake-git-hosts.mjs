@@ -9,7 +9,7 @@
 //   GET  /repos/{o}/{r}                                {full_name, private, default_branch, html_url, permissions{admin,maintain,push,triage,pull}}
 //   GET  /repos/{o}/{r}/git/ref/heads/{branch}         {ref, node_id, url, object{type, sha, url}}; 404; 409 empty repository
 //   GET  /repos/{o}/{r}/git/commits/{sha}              {sha, tree{sha,url}, parents[{sha,url,html_url}], message, …}
-//   GET  /repos/{o}/{r}/git/trees/{sha}[?recursive=1]  {sha, url, tree[{path, mode, type, sha, size?, url}], truncated}
+//   GET  /repos/{o}/{r}/git/trees/{sha}[?recursive=1]  {sha, url, tree[{path, mode, type, sha, size?, url}], truncated}; a commit id or ref names its tree
 //   GET  /repos/{o}/{r}/git/blobs/{sha}                Accept application/vnd.github.raw+json → raw bytes; else JSON base64
 //   POST /repos/{o}/{r}/git/blobs                      {content, encoding utf-8|base64} → 201 {url, sha}
 //   POST /repos/{o}/{r}/git/trees                      {base_tree, tree[{path, mode, type, sha|content}]}; sha null deletes → 201
@@ -17,6 +17,8 @@
 //   PATCH /repos/{o}/{r}/git/refs/heads/{branch}       {sha, force=false}; 422 "Update is not a fast forward" (seen)
 //   POST /repos/{o}/{r}/git/refs                       {ref, sha}; 422 "Reference already exists" (seen)
 //   GET  /repos/{o}/{r}/compare/{base}...{head}        {status ahead|behind|diverged|identical, ahead_by, behind_by, total_commits, commits}
+//   GET  /repos/{o}/{r}/commits/{ref}                  Accept application/vnd.github.sha → the id as text (Open in Scribyra)
+//   raw.githubusercontent.com/{o}/{r}/{sha}/{path}     the file, for public imports
 //   Fine-grained tokens: GETs need Contents read; POST/PATCH need Contents write, else 403
 //   "Resource not accessible by personal access token" with X-Accepted-GitHub-Permissions;
 //   a repository the token cannot see is 404. Rate limit headers: 5,000 an hour per token.
@@ -159,10 +161,19 @@ export function fakeGitHubApi(){
     if(!rest){json(res,200,{id:1,node_id:'R_fake',name:entry.name.split('/')[1],full_name:entry.name,private:entry.private,html_url:`https://github.com/${entry.name}`,default_branch:entry.defaultBranch,visibility:entry.private?'private':'public',permissions:{admin:false,maintain:false,push:access==='write',triage:access==='write',pull:true}});return;}
     if(!repo.branches.size&&rest.startsWith('/git')){error(res,409,'Git Repository is empty.','https://docs.github.com/rest/git/refs#get-a-reference');return;}
     let m;
+    if(req.method==='GET'&&(m=/^\/commits\/(.+)$/.exec(rest))){
+      const ref=decodeURIComponent(m[1]),sha=ref==='HEAD'?repo.branches.get(entry.defaultBranch):repo.branches.get(ref)||(repo.objects.get(ref)?.type==='commit'?ref:null);
+      if(!sha){error(res,422,`No commit found for SHA: ${ref}`,'https://docs.github.com/rest/commits/commits#get-a-commit');return;}
+      if(req.headers.accept==='application/vnd.github.sha'){send(res,200,{...cors,...rate(),'Content-Type':'application/vnd.github.sha; charset=utf-8'},sha);return;}
+      json(res,200,{sha,commit:{tree:{sha:repo.objects.get(sha).tree},message:repo.objects.get(sha).message},files:[]});return;
+    }
     if(req.method==='GET'&&(m=/^\/git\/ref\/heads\/(.+)$/.exec(rest))){const branch=decodeURIComponent(m[1]);if(!repo.branches.has(branch)){error(res,404,'Not Found','https://docs.github.com/rest/git/refs#get-a-reference');return;}json(res,200,refJson(branch));return;}
     if(req.method==='GET'&&(m=/^\/git\/commits\/([0-9a-f]{40})$/.exec(rest))){if(repo.objects.get(m[1])?.type!=='commit'){error(res,404,'Not Found');return;}json(res,200,commitJson(m[1]));return;}
-    if(req.method==='GET'&&(m=/^\/git\/trees\/([0-9a-f]{40})$/.exec(rest))){
-      const tree=repo.objects.get(m[1]);if(tree?.type!=='tree'){error(res,404,'Not Found','https://docs.github.com/rest/git/trees#get-a-tree');return;}
+    if(req.method==='GET'&&(m=/^\/git\/trees\/([^/]+)$/.exec(rest))){
+      // "The SHA1 value or ref (branch or tag) name of the tree": a commit or ref resolves to its tree.
+      const named=decodeURIComponent(m[1]),target=repo.branches.get(named)||named,found=repo.objects.get(target),sha=found?.type==='commit'?found.tree:target;
+      m=[m[0],sha];
+      const tree=repo.objects.get(sha);if(tree?.type!=='tree'){error(res,404,'Not Found','https://docs.github.com/rest/git/trees#get-a-tree');return;}
       const items=[],walk=(sha,prefix)=>{for(const item of repo.objects.get(sha).entries){const path=prefix+item.name;items.push({path,mode:item.mode,type:item.type,sha:item.sha,...(item.type==='blob'?{size:repo.objects.get(item.sha).data.length}:{}),...(item.type==='commit'?{}:{url:`${repoUrl}/git/${item.type}s/${item.sha}`})});if(item.type==='tree'&&url.searchParams.has('recursive'))walk(item.sha,path+'/');}};
       walk(m[1],'');json(res,200,{sha:m[1],url:`${repoUrl}/git/trees/${m[1]}`,tree:items,truncated:false});return;
     }
@@ -216,12 +227,20 @@ export function fakeGitHubApi(){
     }
     error(res,404,'Not Found');
   });
+  // raw.githubusercontent.com, for Open in Scribyra imports of public repositories.
+  const raw=listen((req,res)=>{
+    const parts=new URL(req.url,'http://x').pathname.split('/').slice(1).map(decodeURIComponent),entry=repos.get(`${parts[0]}/${parts[1]}`.toLowerCase());
+    const sha=entry&&!entry.private?entry.repo.branches.get(parts[2])||parts[2]:null,commit=sha&&entry.repo.objects.get(sha),file=commit?.type==='commit'?entry.repo.flatten(commit.tree).get(parts.slice(3).join('/')):null;
+    if(!file||file.type!=='blob'){send(res,404,{'Access-Control-Allow-Origin':'*','Content-Type':'text/plain; charset=utf-8'},'404: Not Found');return;}
+    send(res,200,{'Access-Control-Allow-Origin':'*','Content-Type':'text/plain; charset=utf-8','ETag':`"${file.sha}"`},entry.repo.objects.get(file.sha).data);
+  });
   return {
-    api,origin,state,
+    api,raw,origin,state,
+    async start(){return {api:await api.listen(),raw:await raw.listen()};},
     addRepo(name,{repo=gitRepository(),private:isPrivate=true,defaultBranch='main'}={}){repos.set(name.toLowerCase(),{name,repo,private:isPrivate,defaultBranch});return repo;},
     addToken(token,{login='octocat',repos:access={}}={}){tokens.set(token,{login,repos:access});return this;},
     repo:name=>repos.get(name.toLowerCase()).repo,
-    start:()=>api.listen(),close:()=>api.close(),requests:()=>api.log,
+    close:()=>Promise.all([api.close(),raw.close()]),requests:()=>[...api.log,...raw.log],
   };
 }
 

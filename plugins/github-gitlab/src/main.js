@@ -57,7 +57,8 @@ async function localBlobId(file){if(!blobIds.has(file.hash)){const {bytes}=await
 /** What is never synced: .scribyraignore patterns and the link's own exclusions. */
 async function exclusions(local,current=link){
   const lines=[...(current?.excludes||[])],file=local.get('.scribyraignore');
-  if(file&&!file.binary)lines.push(...(await readFile(file)).text.split('\n'));
+  // Without a text extension the project keeps it as a binary file; it is UTF-8 all the same.
+  if(file){const content=await readFile(file),text=content.text??decodeText(content.bytes);if(text)lines.push(...text.split('\n'));}
   return ignoreMatcher(lines);
 }
 function modeBlocked(mode,doing){
@@ -293,7 +294,8 @@ async function pull(){
     if(now.mode==='reviewing'&&(!item.file||item.file.binary||body.text===undefined)){later.push(item.path);outcomes[item.path]={result:'pending'};continue;}
     if(item.file)changes.push({op:'update',fileId:item.file.id,expect:item.file.hash,...body});
     else changes.push({op:'add',path:item.path,...body});
-    planned.set(item.path,{exists:true});
+    // A merge or an edited result differs from theirs: it is a local change to push.
+    planned.set(item.path,{exists:true,differs:body.text!==undefined&&gitBlobId(encoder.encode(body.text))!==item.remote?.sha});
   }
   let summary='';
   if(changes.length){
@@ -303,7 +305,7 @@ async function pull(){
       summary=`${plural(result.suggested||0,'suggestion')} from ${link.branch} are in the review “GitHub and GitLab suggestions”. Accept them, then pull again to finish.`;
     }else{
       const hashes=new Map(result.files.map(file=>[file.path,file]));
-      for(const [path,{exists}]of planned)outcomes[path]={result:'applied',exists,hash:hashes.get(path)?.hash};
+      for(const [path,{exists,differs}]of planned)outcomes[path]={result:'applied',exists,hash:differs?null:hashes.get(path)?.hash};
       const count=kind=>items.filter((item,i)=>planned.has(item.path)&&item.remoteState===kind&&decision.choices[i]!=='mine').length;
       summary=`Pulled ${link.branch} at ${short(head)}: ${count('added')} added, ${count('changed')} changed, ${count('removed')} removed.`;
     }
