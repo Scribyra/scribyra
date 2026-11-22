@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Move a LaTeX project from Overleaf to Scribyra: download the source ZIP, import it, and compile with LuaLaTeX in your browser.">
+  <meta name="theme-color" content="#7160d9">
+  <meta name="color-scheme" content="light dark">
+  <title>Coming from Overleaf? — Scribyra</title>
+  <link rel="icon" href="assets/mark.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="adaptive">
+  <a class="skip" href="#main">Skip to content</a>
+  <header class="header wrap">
+    <a class="brand" href="./" aria-label="Scribyra home"><span class="brand-mark">s</span>scribyra</a>
+    <nav aria-label="Main navigation"><a href="./#workspace">Workspace</a><a href="templates/">Templates</a><a href="coming-from-overleaf.html" aria-current="page">Coming from Overleaf?</a></nav>
+    <a class="button small secondary github-link" href="https://github.com/Scribyra/scribyra" aria-label="Source code on GitHub"><svg class="github-mark" viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 19.5c-4 1.2-4-2-5.6-2.4M15 21v-3.3c0-1 .1-1.5-.5-2.1 2.7-.3 5.5-1.3 5.5-5.9 0-1.2-.4-2.3-1.2-3.1.1-.4.5-1.6-.1-3.2 0 0-1-.3-3.3 1.2a11.4 11.4 0 0 0-6 0C7.1 3.1 6.1 3.4 6.1 3.4c-.6 1.6-.2 2.8-.1 3.2-.8.8-1.2 1.9-1.2 3.1 0 4.6 2.8 5.6 5.5 5.9-.4.4-.6 1-.6 1.7V21"/></svg>GitHub <span aria-hidden="true">↗</span></a>
+  </header>
+  <main id="main" class="wrap doc">
+    <div class="eyebrow"><span class="line"></span> GUIDE</div>
+    <h1>Coming from Overleaf?</h1>
+    <p class="lead">Overleaf lets you download any of your projects as a ZIP of its source files. Scribyra imports that ZIP as it is, finds the main file, and tells you if anything needs a change. It takes a few minutes.</p>
+    <p>Scribyra is a separate, independent project. It is not affiliated with Overleaf; this page only describes how to move your own files.</p>
+
+    <h2 id="steps">Step by step</h2>
+    <ol class="guide-steps">
+      <li><strong>Download the source.</strong> Open your project in Overleaf and download it as source: <em>Menu</em> → <em>Download</em> → <em>Source</em> (in the newer editor, <em>File</em> → <em>Download as source (.zip)</em>). You get a ZIP of your <code>.tex</code>, <code>.bib</code>, image and other files. You don’t need the PDF.</li>
+      <li><strong>Open Scribyra.</strong> Go to <a href="https://app.scribyra.com/">app.scribyra.com</a>. There is no account to create; projects are stored in your browser.</li>
+      <li><strong>Import the ZIP.</strong> Choose <em>Import ZIP</em> on the dashboard (on your first visit, <em>Import a ZIP</em> in the welcome) and pick the file you downloaded. The ZIP is read in your browser and is not uploaded anywhere.</li>
+      <li><strong>Read the summary.</strong> Scribyra shows the main file it chose, your bibliography and image counts, which compiler the project was written for, and anything to adjust, with the fix. Choose a file name in the list to jump to that line.</li>
+      <li><strong>Compile.</strong> Choose <em>Compile now</em>, or <em>Compile</em> (Ctrl + Enter, or ⌘ + Enter on a Mac). The first compile downloads the TeX engine once; after that it also works offline.</li>
+    </ol>
+
+    <h2 id="compiler">pdfLaTeX, XeLaTeX and LuaLaTeX</h2>
+    <p>Overleaf compiles with pdfLaTeX unless a project chooses otherwise. Scribyra always compiles with LuaLaTeX, a modern engine that reads UTF-8 and uses OpenType fonts. Most pdfLaTeX documents compile with it unchanged. Scribyra reads the compiler setting from the project’s <code>latexmkrc</code> or a <code>% !TEX program</code> line, and otherwise from the packages it uses.</p>
+    <table class="guide-table">
+      <thead><tr><th scope="col">In your project</th><th scope="col">What to do</th></tr></thead>
+      <tbody>
+        <tr><td><code>\usepackage[utf8]{inputenc}</code></td><td>Nothing. LuaLaTeX ignores it; you can delete it.</td></tr>
+        <tr><td><code>\usepackage[latin1]{inputenc}</code> (or another encoding)</td><td>Save the files as UTF-8 and delete the line. Overleaf already stores files as UTF-8, so usually only the line needs to go.</td></tr>
+        <tr><td><code>\usepackage[T1]{fontenc}</code></td><td>Works. Deleting it gives you OpenType Latin Modern; use <code>fontspec</code> to choose other fonts.</td></tr>
+        <tr><td><code>\pdfoutput=1</code> and other <code>\pdf…</code> commands</td><td>Delete <code>\pdfoutput=1</code>. For the others, add <code>\usepackage{luatex85}</code> at the top.</td></tr>
+        <tr><td><code>xeCJK</code>, <code>xltxtra</code>, <code>xunicode</code>, <code>\XeTeX…</code> commands</td><td>These are XeLaTeX-only. Use <code>luatexja-fontspec</code> for Chinese and Japanese; <code>fontspec</code> covers the rest.</td></tr>
+        <tr><td><code>fontspec</code>, <code>unicode-math</code>, <code>polyglossia</code></td><td>Nothing; they work the same with LuaLaTeX.</td></tr>
+      </tbody>
+    </table>
+
+    <h2 id="limits">What a browser cannot do</h2>
+    <ul>
+      <li><strong>Shell escape.</strong> Packages that run other programs (<code>minted</code>, <code>svg</code>, <code>gnuplottex</code>, <code>pythontex</code>) don’t work. Use <code>listings</code> for code, and export figures as PDF or PNG.</li>
+      <li><strong>EPS images.</strong> Convert them to PDF first and upload the PDFs; <code>\includegraphics</code> finds them without the extension.</li>
+      <li><strong>Glossaries.</strong> Load <code>glossaries</code> with <code>automake=immediate</code>, or use <code>\printunsrtglossary</code> from <code>glossaries-extra</code>. Bibliographies (Biber and BibTeX) and indexes (makeindex) do work.</li>
+      <li><strong>Custom latexmk rules.</strong> Extra steps in a <code>latexmkrc</code> are not run.</li>
+    </ul>
+
+    <h2 id="stays">What comes across, and what doesn’t</h2>
+    <p>Everything in the source ZIP: <code>.tex</code> files, bibliography files, images, class and style files, folders. Comments, tracked changes, chat and history stay in Overleaf, because the download doesn’t include them. Scribyra has its own <a href="https://github.com/Scribyra/scribyra/blob/main/docs/comments.md">comments, suggested changes</a> and <a href="https://github.com/Scribyra/scribyra/blob/main/docs/history.md">history</a> from here on.</p>
+    <p>Want to start fresh instead? Browse the <a href="templates/">templates</a>.</p>
+  </main>
+  <footer class="footer wrap"><a class="brand" href="./"><span class="brand-mark">s</span>scribyra</a><span>A little more possibility.</span><div><a href="mailto:contact@scribyra.com">Contact</a><a href="privacy.html">Privacy</a><a href="licenses.html">Licences</a><a href="https://github.com/Scribyra/scribyra">Source ↗</a></div><p class="legal"><span>© 2026 URUNDEAD LABS S.R.L.</span> · <span>Reg. Com. J2026034271001</span> · <span>CUI 54762154</span> · <span>VAT RO55538423</span> · <span>Strada Pitar Moș 27, et. 5, ap. 17,</span> <span>010452 București, Romania</span></p></footer>
+</body>
+</html>

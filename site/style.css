@@ -51,3 +51,5 @@
  .adaptive .template-item{background:#1e212a;box-shadow:none}.adaptive .template-item img{filter:brightness(.92)}.adaptive .skip{background:#1e212a}
  .adaptive .footer>span{color:#8f8a9e}.adaptive .doc a{color:var(--purple)}.adaptive .doc code{background:var(--soft)}
 }
+.sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
+.template-how{color:var(--muted);font-size:12px}

@@ -121,7 +121,7 @@ export function sitePage(catalog){
           <div class="template-text">
             <h3>${escape(template.name)}</h3>
             <p>${escape(template.description)}</p>
-            <a class="button small primary" href="${escape(templateLink(template.id))}" aria-label="Open ${escape(template.name)} in Scribyra">Open in Scribyra <span aria-hidden="true">↗</span></a>
+            <a class="button small primary" href="${escape(templateLink(template.id))}" >Open <span class="sr-only">${escape(template.name)} </span>in Scribyra <span aria-hidden="true">↗</span></a>
           </div>
         </li>`).join('')}
       </ul>
@@ -152,7 +152,7 @@ export function sitePage(catalog){
       <div class="eyebrow">TEMPLATES</div>
       <h1>Start from a template.<br><em>Make it yours.</em></h1>
       <p class="intro">Written by the Scribyra project and free to use for anything. Each one compiles with the packages built into Scribyra, so it works offline after the first compile. Comments in the source explain what to change.</p>
-      <p class="quiet">Choosing <strong>Open in Scribyra</strong> opens the app with that template selected. Nothing is created until you choose <strong>Create project</strong>, and the project stays in your browser. In the app, the same templates are under <strong>New project</strong>.</p>
+      <p class="quiet template-how">Choosing <strong>Open in Scribyra</strong> opens the app with that template selected. Nothing is created until you choose <strong>Create project</strong>, and the project stays in your browser. In the app, the same templates are under <strong>New project</strong>.</p>
     </div>${sections}
     <section class="template-note" aria-labelledby="journal-classes">
       <h2 id="journal-classes">Journal and conference classes</h2>
