@@ -12,7 +12,7 @@ Paul approved two fixes on November 21 that this benchmark found. Both are in th
 
 - **Reruns as latexmk decides them** (`scripts/tex-passes.mjs`, embedded in the pipeline). BusyTeX ran an initial pass, the bibliography, up to three reruns while the log said "Rerun…", then one more "final" pass: four passes for a one-page document. Now TeX runs, Biber/BibTeX and makeindex run when their input changed (`.bcf`, the `.aux` citation lines, `.idx`), and TeX runs again only while a generated file that it opened, or looked for and did not find, changed in the last round: `.aux` (and included chapters' `.aux`), `.toc`, `.lof`, `.out`, `.bbl` and the like. Files only other programs read (`.bcf`, `.run.xml`, `.idx`) never cause a rerun by themselves. When nothing TeX reads changed, another pass would read the same input and produce the same pages, so the last pass is the document's fixpoint. Rerun warnings alone no longer cost a pass, and a changed table of contents reruns even when LaTeX prints no warning (BusyTeX's pattern list would have stopped early there). The bound is five passes.
 - **Packages before the first pass.** TeX stops at the first missing file, so each job discovered a document's packages one failing pass at a time (BusyTeX's pipeline restarts at the first pass after each install). Before the first pass the driver now installs:
-  1. the packages the project's last successful compile installed. The browser remembers them per project on the device (`web/project-packages.js`, names only, per catalog snapshot, 200 projects); the server runner takes them per job (`compile({packages})`, `--packages a,b`), which the service can fill from the stored `result.packages`;
+  1. the packages the project's last successful compile installed. The browser remembers them per project on the device (`web/project-packages.js`, names only, per catalog snapshot, 200 projects); the server runner takes them per job (`compile({packages})`, `--packages a,b`), which the service fills from the set it remembers per project and engine version (see [Server compile on organisation deployments](#server-compile-on-organisation-deployments-november-22-2026));
   2. the classes, packages, Beamer themes, TikZ/PGF/pgfplots libraries and BibTeX styles the source names literally (`web/tex-requirements.js`: `\documentclass`, `\usepackage`, `\RequirePackage`, `\LoadClass`, `\usetheme`, `\usetikzlibrary`, `\bibliographystyle`…, comments stripped, project files excluded) that the engine's own tree does not have (asked of the engine: `scribyra_present`);
   3. for each of those, the catalog's declared dependencies (its `dependencies` data) that the engine lacks, transitively. A dependency of which any file is already in the engine's tree is never installed over it, and dependencies resolve through their files, so a compiler-matched component wins over the mirror's archive exactly as it does after a failing pass.
   Anything the scan cannot see (a package named through a macro, a conditional load) is still found by a failing pass, and then remembered.
@@ -30,7 +30,7 @@ Defaults:
 | --- | --- | --- |
 | Desktop browsers (Chromium, Firefox, Safari) | 2 GiB − 64 KiB | 64-bit engines reserve address space for any wasm32 memory anyway; growth commits only what is used. |
 | Phones, tablets (iOS/iPadOS, Android) and devices reporting `navigator.deviceMemory` < 4 | 1 GiB | iOS ends a web page's process (WebKit's WebContent) at about 1.5 GiB on most iPhones and caps typed arrays and WebAssembly memory together at 2 GiB (the Gigacage); WebKit reports have pages killed, not refused, when `memory.grow` exceeds what the OS allows ([WebKit bug 269777](https://bugs.webkit.org/show_bug.cgi?id=269777), [221530](https://bugs.webkit.org/show_bug.cgi?id=221530)). A killed tab loses the clear message, so phones stop earlier, cleanly. |
-| Server (Node runner) | 2 GiB − 64 KiB (`--engine-memory-mib`) | Size the job's `memory_mib` at 3072 or more for documents near the ceiling: Node and the in-memory file system add 0.3–0.4 GiB to the engine heap. |
+| Server (Node runner) | 2 GiB − 64 KiB within the job: `memory_mib` − 1024 (`--engine-memory-mib`, set by the worker) | Node and the in-memory file system add 0.3–0.4 GiB to the engine heap; the default `memory_mib` 3072 gives the full ceiling with room to spare, and the operator's worker pods may reach 3072 MiB per job. |
 
 A document that needs more ends with a message naming the limit, in the browser ("The document needs more memory than the TeX engine can use (2047 MiB, the most this build of the engine can address). Simplify the document or split it into parts.", with the desktop figure on phones) as on the server (`memoryMessage`, status `memory`). If the browser or machine refuses memory below the ceiling, the message says so and suggests closing tabs. Only the engine runtime's own stderr report counts, never TeX output (`\typeout`).
 
@@ -92,6 +92,46 @@ PDFs before and after are the same for all five documents, in the Node runner an
 - `tests/engine-memory.test.mjs`: the memory-section rewrite on the real `busytex.wasm` (valid, streamed and buffered alike), the ceiling's bounds, the browser defaults by device, and the message.
 - `tests/browser/engine-speed.spec.js`, in Chromium, Firefox and WebKit: the sample paper in two passes, the remembered package after a reload, a 1 GiB document compiling and a 2.4 GiB one failing with the message.
 - Benchmark: `scripts/compile-benchmark-node.mjs` (Node, one job per process; cold, warm and per-project caches; peak RSS) and `tests/browser/compile-benchmark.spec.js` (cold, reopen and recompile per browser), summarised by `scripts/compile-benchmark-report.mjs`.
+
+## Server compile on organisation deployments (November 22, 2026)
+
+On `feature/org-sync-v2`, after merging `dev` (the shared driver above), the organisation server's compile uses everything the browser does:
+
+- **Remembered package sets per project and engine version.** After a successful WebAssembly compile the service stores the packages it installed (`compile_packages`: project, the runtime's `wasm-<digest>`, at most 64 catalog names; a success replaces the row and drops other versions' rows, since another engine build may need other packages). The project's next job carries them (`Job::packages`).
+- **Fetched together before the sandbox starts.** The worker fills that set into the shared package cache four at a time (each archive verified against the pinned catalog, at most 256 MiB), then passes the names it holds with `--packages`; the engine installs them before its first pass. Nothing is asked on the job's fill channel for them. Names the cache cannot provide are noted in the job's log, and the engine still finds them by a failing pass if the document needs them.
+- **The 2 GiB ceiling within the job's cgroup.** The engine gets `memory_mib` − 1024 MiB (Node, the in-memory file system, the runner), at most 2047 MiB, at least 256 (`--engine-memory-mib`). Before, the worker read the ceiling from a comment in the glue ("4GB"), passed 0, and the runner silently fell back to its default. The default `memory_mib` is now 3072, so the engine has its full ceiling; the operator's worker pods request 1024 MiB per job plus 256 MiB and are limited to `memory_mib` per job plus 256 MiB (2304Mi / 6400Mi for two jobs). A document over the job's ceiling ends with the memory message naming it ("… on this server (N MiB per compile; …) … ask the administrator to raise the compile memory limit").
+
+### Results
+
+`crates/compile/examples/bench.rs`: each document through the worker's real path (bubblewrap, seccomp, a cgroup per job with one CPU, `memory_mib` 4096), before (`876ca6c`, this branch before the merge: the old driver, no remembered packages) and after (this branch), both runs at the same time on the shared host (load 10–20 from other work). Medians of 3 runs (min–max in the raw data: [measurements/org-server-compile](measurements/org-server-compile/)); "Peak" is the job cgroup's `memory.peak`, maximum over the runs; "Engine heap" is the WebAssembly heap at the end. "+ project" passes the set the service would have remembered from the previous compile: "cold + project" starts from an empty package cache (the worker fetches the set before the sandbox), "warm + project" from a filled one.
+
+| Document | Passes | Cold cache (s) | Warm cache (s) | Cold + project (s) | Warm + project (s) | Peak (MiB) | Engine heap (MiB) |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| sample | 4 → **2** | 14.7 → **11.3** | 14.5 → **11.3** | (no packages) | (no packages) | 568 → 619 | 191 |
+| article | 7 → **3** | 42.1 → **30.5** | 38.5 → **30** | 30.3 | 30.1 | 738 → 756 | 191 |
+| beamer | 8 → **2** | 64.6 → **34** | 64.7 → **33.3** | 32.1 | 32.1 | 704 → 658 | 191 |
+| tikz | 5 → **2** | 54.4 → **36.4** | 50.1 → **33.6** | 34.5 | 35.2 | 684 → 631 | 159 |
+| thesis | 8 → **3** | 243.4 → **180.3** | 240.8 → **183.1** | 177.2 | 180.9 | 1092 → 1115 | 229 |
+
+- **Passes match the browser's and native TeX Live's** (TikZ 2 against native's 1, as in the browser). Time falls with them: Beamer 1.9×, TikZ 1.5×, the article 1.3–1.4×, the sample 1.3×, the thesis 1.3× (243 → 180 s).
+- **Remembered packages change nothing measurable for these five documents**: the source scan already names every package they load, so their remembered set is installed before the first pass either way, and fetching it together before the sandbox costs no time against a warm cache. They matter for packages the source does not name literally (a package loaded through a macro, a conditional load): there they save the failing pass that finds the package, on every job after the first (`crates/compile/tests/wasm.rs`: 3 passes, then 2; the browser spec below: one pass fewer on the second server job).
+- **Memory is about the same** (peak within ±50 MiB, the engine heap 159–229 MiB); the thesis peaks at 1.1 GiB, so the pods' request of 1 GiB per job is a typical, not a worst, case, and the limit of 3 GiB per job leaves the engine its 2 GiB ceiling.
+- **The PDFs are the same** before and after for all five documents: same page count, identical extracted text on every page and the same byte size (`node scripts/compile-benchmark-compare.mjs target/compile-benchmark/out before/wasm after/wasm`). The browser spec checks server against browser.
+
+### Tests
+
+- `crates/compile/tests/wasm.rs`: a remembered package saves the pass that would find it (3 passes, then 2, same PDF); remembered packages fetched together before the sandbox starts (each mirror package once, nothing asked on the job's fill channel); the engine ceiling within the job's memory limit; the memory message naming the per-compile ceiling or the build's.
+- `crates/compile/src/cache.rs`: a batch is filled four at a time, in order, with one result per name.
+- `crates/sync/tests/compiles.rs`: the stored set, its engine version, and the next job carrying it.
+- `tests/wasm-compile.test.mjs`: both wordings of the memory message.
+- `tests/browser/org-compile.spec.js`, in Chromium, Firefox and WebKit: a document loading booktabs through a macro compiles on the server to the same page count and first-page text as in the browser; the server remembers `dist--booktabs` for the project's engine version, and the second server job takes one pass fewer with the same PDF.
+- Operator: the manifest snapshots and `tests/manifests.rs` (`memoryMiB` 3072, 2304Mi requested, 6400Mi limit), and the envtest (`nix develop .#operator`) checking the worker pod's resources and the generated `memory_mib`.
+
+To reproduce, build the runtime and the benchmark in each checkout, then:
+
+```sh
+SCRIBYRA_WASM_RUNTIME=$PWD/target/wasm-compile-runtime nix develop -c ./target/release/examples/bench target/compile-benchmark/docs target/compile-benchmark/out/after 3 3 wasm > after.jsonl
+```
 
 ## Method
 
@@ -161,7 +201,7 @@ Peak memory of the job's cgroup (every process plus scratch), maximum over the r
 | tikz | 590 MiB | 144 MiB |
 | thesis | 942 MiB | 301 MiB |
 
-- **Where the memory goes.** Node itself, the engine's WebAssembly heap and the 45 MB LuaLaTeX baseline unpacked into the engine's in-memory file system together put a WebAssembly job at 0.5–0.9 GiB: 3–5× native. Keep `memory_mib` at 1536 or more (the default is 2048), and size worker pods at about 1 GiB per concurrent job plus Node's overhead.
+- **Where the memory goes.** Node itself, the engine's WebAssembly heap and the 45 MB LuaLaTeX baseline unpacked into the engine's in-memory file system together put a WebAssembly job at 0.5–0.9 GiB: 3–5× native. Keep `memory_mib` at 1536 or more (the default is 3072, which gives the engine its full 2 GiB ceiling), request about 1 GiB per concurrent job for worker pods and let each job reach `memory_mib` (the operator's defaults).
 - **The engine's own ceiling.** This BusyTeX build declared a WebAssembly heap of at most **576 MiB**: Emscripten's `MAXIMUM_MEMORY`, not wasm32's 4 GB. Since November 21 the pipeline raises it at load time to 2 GiB − 64 KiB (see [Engine speed and memory](#engine-speed-and-memory-november-21-2026)). A document that needs more fails with `limit_memory` and a log saying so; `crates/compile/tests/wasm.rs` checks that message. None of the five documents came close.
 
 ## Size
@@ -201,7 +241,7 @@ Page counts, and whether the extracted text of every page is identical:
 
 - **It would be a second supported engine.** Native means a second TeX distribution in the worker image, five to eleven times the WebAssembly engine's size for full coverage. It also brings its own CVE stream, its own package set (a project that compiles in the browser may not compile natively, and the reverse), and its own sandbox allow list for Perl/Biber and the TeX binaries.
 - **The WebAssembly engine's gap has cheap, engine-independent fixes**, which help the browser as well:
-  - **Preinstall a project's known packages.** Done on November 21: packages remembered per project and named in the source are installed before the first pass. The server runner takes them per job (`--packages`); the service passing its stored `result.packages` remains to wire up on `feature/org-sync-v2`.
+  - **Preinstall a project's known packages.** Done on November 21: packages remembered per project and named in the source are installed before the first pass. Since November 22 the service remembers each project's set per engine version and the worker fetches it together before the job's sandbox starts (`--packages`).
   - **Align BusyTeX's rerun policy with the native driver's.** Done on November 21, latexmk-style: native's pass counts for four of the five documents; tikz takes 2 against native's 1, because a new `.aux` is always read back once.
   - **Cache Node's compiled WebAssembly code** across jobs (each job compiles the 32 MB module anew).
 - **Correctness does not need native.** Nothing measured requires it: every document compiled, within the new default budgets (`cpu_seconds` 300, `wall_seconds` 600; the thesis takes about 4 minutes), and the memory ceiling was not approached.
@@ -259,7 +299,7 @@ A TeX Live tree is no longer needed. Keep `texlive` only for `compile_engine: "n
 
 **Network.** Workers need egress to `deployment.tex_mirror` (HTTPS) for packages outside the bundled set. With `tex_mirror: ""` they need none, but only bundled packages compile.
 
-**Limits.** The defaults are now `cpu_seconds` 300 and `wall_seconds` 600. Keep `memory_mib` at 1536 or more, and size worker pods at about 1 GiB per concurrent job.
+**Limits.** The defaults are now `cpu_seconds` 300, `wall_seconds` 600 and `memory_mib` 3072. Keep `memory_mib` at 1536 or more; the engine's heap gets `memory_mib` less 1024 MiB, at most 2047 MiB. The operator requests about 1 GiB per concurrent job for worker pods (1024 MiB per job plus 256 MiB) and sets the limit at `memory_mib` per job plus 256 MiB (6400Mi for two jobs at the default), so one job at the ceiling fits beside the others.
 
 **Metrics.** Watch `scribyra_compile_package_requests_total{result}`. A rising `rejected` count means cache entries failed their checksum.
 

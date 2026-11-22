@@ -1121,7 +1121,7 @@ development shell sets all three (`bubblewrap`, `texliveSmall`).
 | --- | --- |
 | `cpu_seconds` 300 (deployment default; the runner's own 60) | the job's cgroup CPU time (all processes); `RLIMIT_CPU` per process too |
 | `wall_seconds` 600 (deployment default; the runner's own 120) | the runner kills the job's cgroup and the sandbox |
-| `memory_mib` 2048 | the job's `memory.max` (scratch included, no swap); `RLIMIT_AS` per process too |
+| `memory_mib` 3072 | the job's `memory.max` (scratch included, no swap); `RLIMIT_AS` per process too; with the WebAssembly engine also its heap ceiling (`memory_mib` − 1024, at most 2047 MiB) |
 | `output_mib` 64 | `RLIMIT_FSIZE` per file; also the PDF read back |
 | `scratch_mib` 512 | tmpfs size of `/work` (also counts against `memory_mib`) |
 | `processes` 64, `open_files` 256 | `pids.max` (plus bwrap's own), `RLIMIT_NPROC`, `RLIMIT_NOFILE`; core dumps off |
@@ -1183,16 +1183,31 @@ shared: whether a package is already cached (and so how fast a job gets it) tell
 packages earlier jobs used; give each tenant its own cache volume where that matters. A shared volume (ReadWriteMany) lets workers share it; a per-pod
 `emptyDir` works too, cold after each restart.
 
-**Memory.** This BusyTeX build caps its WebAssembly heap at 576 MiB (Emscripten's
-`MAXIMUM_MEMORY`; wasm32 itself stops at 4 GB). A document that needs more fails with
-`limit_memory` and a log that says so ("The document needs more memory than the WebAssembly TeX
-engine can use …"; only the engine's own report counts, not text a document prints); a job limit
-below what Node and the engine reach (about 0.6–0.9 GiB for ordinary documents) ends in
-`RLIMIT_DATA` or the cgroup's OOM kill, also `limit_memory`. Keep `memory_mib` at 1536
-or more.
+**Memory.** The pipeline raises the pinned BusyTeX build's 576 MiB heap maximum to 2 GiB − 64 KiB
+(2047 MiB, the most this glue can address; wasm32 itself stops at 4 GB; see
+[compile engines](compile-engines.md#engine-speed-and-memory-november-21-2026)). The worker gives
+each job's engine that ceiling within the job's cgroup: `memory_mib` less 1024 MiB for Node, the
+in-memory file system and the runner (`--engine-memory-mib`, at least 256), so the default 3072
+gives the full 2047 MiB. A document that needs more fails with `limit_memory` and a log that says
+so ("The document needs more memory than the WebAssembly TeX engine can use …", naming the
+per-compile ceiling and the limit to raise when it is below the build's; only the engine's own
+report counts, not text a document prints); a job limit below what Node and the engine reach
+(about 0.6–0.9 GiB for ordinary documents) ends in `RLIMIT_DATA` or the cgroup's OOM kill, also
+`limit_memory`. Keep `memory_mib` at 1536 or more.
 
-**CPU.** The WebAssembly engine is several times slower than native TeX Live and, like a fresh
-browser tab, finds a document's packages anew in every job (one extra failing pass), so
+**Remembered packages.** After a successful WebAssembly compile the service stores the packages it
+installed with the project, per engine version (`compile_packages`, keyed by the runtime's
+`wasm-<digest>`; other versions' sets are dropped; at most 64 catalog names). The project's next
+job gets them (`Job::packages`): the worker fetches them into the package cache together (four at
+a time, verified as above, at most 256 MiB) before the sandbox starts and passes those it
+holds with `--packages`; the engine installs them before its first pass, as the browser does with
+the set it keeps per project on the device. A package the source names only through a macro then
+costs no failing pass after the first compile. Names the cache could not provide are noted in the
+job's log; the engine still finds them by itself if the document needs them.
+
+**CPU.** The WebAssembly engine is slower than native TeX Live per pass (it now takes native's
+pass counts: packages the source names and the remembered ones are installed before the first
+pass, and TeX reruns only while a file it reads changed), so
 `cpu_seconds` and `wall_seconds` need to be larger than for native TeX Live: see
 [compile engines](compile-engines.md) for measured times; 600 s covers the 305-page thesis.
 
