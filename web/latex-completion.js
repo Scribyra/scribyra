@@ -207,8 +207,8 @@ function environmentOption(item,ranges,{from,to,label=item.label}){
 }
 function valueOption(label,{detail='',description='',source='',ranges,insert,from,to,closed}){
   return {label,detail,description,source,type:'text',ranges,apply:(view,completion)=>{
-    const text=insert+(closed?'':'}');
-    view.dispatch({changes:{from,to:closed?to+1:to,insert:text},selection:{anchor:from+text.length},annotations:pickedCompletion.of(completion),userEvent:'input.complete',scrollIntoView:true});
+    // A closing brace already there is kept (not deleted, not doubled); the cursor goes past it.
+    view.dispatch({changes:{from,to,insert:closed?insert:insert+'}'},selection:{anchor:from+insert.length+1},annotations:pickedCompletion.of(completion),userEvent:'input.complete',scrollIntoView:true});
   }};
 }
 /** An environment name typed in place, keeping the closing brace: the paired `\\end` follows by itself. */
@@ -283,11 +283,12 @@ export function completionOptions(context,catalog,index,{usage={},currentPath=''
       const entries=optionEntries(catalog.options,context.set),span={from:context.from,to:context.to,close:context.close};
       if(context.key!==null){
         const entry=entries.find(e=>e.name===context.key+'=');if(!entry?.values)return [];
-        return rankItems(entry.values.map(v=>Array.isArray(v)?{label:v[0],description:v[1]}:{label:v}),context.query)
+        // The curated order (most used first) decides among equal matches.
+        return rankItems(entry.values.map((v,i,all)=>Array.isArray(v)?{label:v[0],description:v[1],rank:all.length-i}:{label:v,rank:all.length-i}),context.query)
           .map(({item,ranges})=>optionOption(item.label,{description:item.description||`Value of ${context.key}`,source:entry.source,ranges,...span}));
       }
       const given=new Set(context.present);
-      return rankItems(entries.filter(e=>!given.has(e.name.replace(/=$/,''))).map(e=>({...e,label:e.name})),context.query)
+      return rankItems(entries.filter(e=>!given.has(e.name.replace(/=$/,''))).map((e,i,all)=>({...e,label:e.name,rank:(all.length-i)/2})),context.query)
         .map(({item,ranges})=>optionOption(item.name,{detail:item.values?valuesHint(item.values):'',description:item.description,source:item.source,ranges,reopen:!!item.values,...span}));
     }
     case 'label':return rankItems(index.labels.filter(l=>!present.includes(l.key)).map(l=>({label:l.key,rank:l.path===currentPath?5:0,l})),context.query).map(({item,ranges})=>valueOption(item.label,{description:`${item.l.path}:${item.l.line}`,source:'label',ranges,insert:item.label,...value}));
@@ -332,9 +333,11 @@ export function latexCompletion({index=()=>null,currentPath=()=>''}={}){
   const render=(className,field)=>({position:className==='cm-completionSource'?85:90,render(option){
     if(!option[field])return null;const span=document.createElement('span');span.className=className;
     span.append(pause(),option[field]);return span;}});
-  // A label and a detail that are separate words (`knuth1984`, `Knuth, 1984`) are read with a pause between them.
+  // Options are named by their visible text, read with pauses: `\\section{title}, LaTeX, Numbered
+  // section heading` (the description is shown, and so read, for the selected option). A label and a
+  // detail that are separate words (`knuth1984`, `Knuth, 1984`) get a pause between them too.
   const detailPause={position:70,render:option=>option.type==='text'&&option.detail?pause():null};
-  // The list is rendered a page at a time, so each option carries its place in the whole list.
+  // Only a page of the list is rendered at a time, so each option carries its place in the whole list.
   const place={position:100,render(option){
     const mark=document.createElement('span');mark.hidden=true;
     queueMicrotask(()=>{const li=mark.parentElement;if(li&&option.position){li.setAttribute('aria-posinset',String(option.position));li.setAttribute('aria-setsize',String(option.total));}});

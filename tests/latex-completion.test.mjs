@@ -264,6 +264,7 @@ test('option suggestions: names not given yet, values where finite, and acceptin
   const backend=completionOptions({...base,set:{type:'package',names:['biblatex']},query:'back'},full,empty)[0];assert.equal(backend.label,'backend=');assert.match(backend.detail,/= biber \| bibtex \| bibtex8/);
   assert.deepEqual(labels({...base,set:{type:'package',names:['biblatex']},key:'style',query:'authory'}).slice(0,2),['authoryear','authoryear-comp']);
   assert.deepEqual(labels({...base,key:'margin'}),[],'free values offer nothing');
+  assert.deepEqual(labels({...base,set:{type:'package',names:['biblatex']},key:'sorting'}).slice(0,3),['nty','nyt','nyvt'],'values keep the curated order');assert.equal(labels(base)[0],'a4paper');
   assert.deepEqual(labels({...base,set:{type:'class',names:['beamer']},key:'aspectratio',query:'16'}),['169','1610']);
   assert.ok(labels({...base,set:{type:'class',names:['report']},query:'open'}).includes('openright'));
   assert.ok(labels({...base,set:{type:'keys',names:['tikz']},query:'thi'}).includes('thick'));
