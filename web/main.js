@@ -53,6 +53,7 @@ import {wireSidebarDivider} from './sidebar-resize.js';
 import './outline.css';
 import {latexCompletion,prefetchCompletionData} from './latex-completion.js';
 import {latexIndex} from './latex-index.js';
+import {environmentPairing} from './latex-environment-pair.js';
 import './latex-completion.css';
 import * as Y from 'yjs';
 import { EditorView, keymap, lineNumbers, highlightActiveLine, drawSelection } from '@codemirror/view';
@@ -164,7 +165,7 @@ function captureSelection() {
 }
 const syntaxColors={'#708':'keyword','#219':'keyword','#05a':'special','#164':'variable','#a11':'string','#00f':'number','#085':'variable','#a50':'type','#777':'comment','#c00':'invalid'};
 const accessibleHighlight=HighlightStyle.define(defaultHighlightStyle.specs.map(style=>({...style,...(style.color?{color:syntaxColors[style.color]?`var(--syntax-${syntaxColors[style.color]})`:'var(--text)'}:{})})));
-function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),...(state.autocomplete?[latexCompletion({index:()=>plugins?.completionIndex(completionIndex)??completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
+function options(){return [EditorState.tabSize.of(state.tabSize),indentUnit.of(' '.repeat(state.tabSize)),...(state.wrap?[EditorView.lineWrapping]:[]),environmentPairing({allowSpan:(from,to,editorState)=>collaboration?.review.canReplace(from,to,editorState)??true}),...(state.autocomplete?[latexCompletion({index:()=>plugins?.completionIndex(completionIndex)??completionIndex,currentPath:()=>projectNode(doc,mountedFile)?.path||''})]:[])];}
 // Comments stay available in Viewing; anything that decides a suggestion or changes accepted source does not.
 const viewingRefuses=new Set(['suggestion.accept','suggestion.reject','suggestion.withdraw','review.acceptAll','review.acceptSet','review.propose','review.retry','review-accept-visible','review-reject-visible','change.undo','change.redo']);
 // Jumps (outline, search, PDF, comments) put the target in the middle of the editor, like other editors do.

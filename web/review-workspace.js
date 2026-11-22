@@ -8,7 +8,8 @@ import {discussion} from './comments.js';
 import {activeRecords,resolveSuggestion,projection} from './review-commands.js';
 import {anchors} from './comment-anchors.js';
 import {projectFiles,projectNode} from './model.js';
-import {reviewingSession} from './review-input.js';
+import {reviewingSession,reviewInput} from './review-input.js';
+import {pairedEnvironmentEdit} from './latex-environment-pair.js';
 import {recordTrust} from './direct-provenance.js';
 import './review-workspace.css';
 import {changedLineMarks,commentPill,dismissCommentPill,placeCommentPill,quietCommentPill,revealedSelection} from './review-editor.js';
@@ -32,6 +33,7 @@ class ChangeWidget extends WidgetType{
   toDOM(){const span=document.createElement(this.kind==='delete'?'del':'ins');span.className=this.active?`tracked-${this.kind} review-active`:`tracked-${this.kind}`;span.textContent=this.text;span.dataset.reviewId=this.id;span.style.setProperty('--change-author',this.colour);span.setAttribute('aria-label',this.label);span.title=this.label;return span;}
   ignoreEvent(){return false;}
 }
+const PAIR_SPAN=20000;
 export function reviewWorkspace(context,modules){
   if(typeof document==='undefined')return{actions:{},state:{mode:'editing'},flush(){},beforeLeave(){},refresh(){},report(){},close(){}};
   const {doc,author}=context,key=`scribyra:review-mode:${context.projectId}:${author.id}`;
@@ -108,6 +110,12 @@ export function reviewWorkspace(context,modules){
     return{start:p.toSource(start,-1),end:p.toSource(end,1)};
   }
   const toSource=position=>state.mode==='reviewing'&&session?session.display().toSource(position):position;
+  // Reviewing records a paired environment rename as one suggestion over both names, so it is
+  // offered only when that fits: no other author's pending text in between, and a short span.
+  function canReplace(from,to,editorState){
+    if(state.mode!=='reviewing')return true;if(!session||to-from>PAIR_SPAN)return false;
+    try{reviewInput(session.source,session.patches,from,to,editorState.sliceDoc(from,to),author.id,1,true);return true;}catch{return false;}
+  }
   const toDisplay=(position,side=1)=>state.mode==='reviewing'&&session?session.display().toDisplay(position,side):position;
   function decorations(editor){
     const marks=[],display=state.mode==='reviewing'&&session?session.display():null;
@@ -184,7 +192,9 @@ export function reviewWorkspace(context,modules){
     const dispatchTransactions=state.mode==='reviewing'?(transactions,editor)=>{
       for(const tr of transactions){
         if(tr.docChanged&&!refreshing){
-          const changes=[];tr.changes.iterChanges((from,to,_start,_end,insert)=>changes.push({from,to,insert:insert.toString()}),true);
+          let changes=[];tr.changes.iterChanges((from,to,_start,_end,insert)=>changes.push({from,to,insert:insert.toString()}),true);
+          // A renamed \begin and its \end are one decision: one suggestion spanning both names.
+          if(changes.length>1&&tr.annotation(pairedEnvironmentEdit)){const from=Math.min(...changes.map(c=>c.from)),to=Math.max(...changes.map(c=>c.to));changes=[{from,to,insert:tr.newDoc.sliceString(tr.changes.mapPos(from,-1),tr.changes.mapPos(to,1))}];}
           try{session.inputChanges(changes,tr.newDoc.toString(),tr.startState.selection.main.assoc||1);}catch(e){if(e.message.includes('projection differs'))drafts.retain({fileId,source:session.source,text:tr.newDoc.toString(),reason:e.message});state.open=true;announce(e.message);editor.update([]);return;}
         }
         editor.update([tr]);
@@ -238,5 +248,5 @@ export function reviewWorkspace(context,modules){
   const cardFocus=event=>{if(event.target.id==='comment-body'){const holder=event.target.closest('[data-card-id]');if(holder)reveal(holder.dataset.cardId);}const card=event.target.closest?.('.review-card'),scroller=card?.closest('.review-panel-scroll');if(!scroller||!view?.dom.isConnected||state.tab!=='file')return;const above=scroller.getBoundingClientRect().top-card.getBoundingClientRect().top;if(above>0)view.scrollDOM.scrollTop-=above+8;};document.addEventListener('focusin',cardFocus);
   const clock=setInterval(()=>{if(state.cards.length&&!document.hidden)refresh();},MINUTE);
   const beforeUnload=e=>{if(!context.canUnload?.()&&(session?.dirty||drafts.pending().length)){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',beforeUnload);
-  refresh();return{state,actions,configure,flush,beforeLeave,recovery:drafts.recovery,report(receipt){if(receipt?.ok===false){state.open=true;announce(`${receipt.error.code}: ${receipt.error.message}`);}else if(receipt?.ok&&receipt.value?.status)announce(receipt.value.status,true);},toSource,toDisplay,sourceRange,refresh,close(){closed=true;clearTimeout(timer);cancelAnimationFrame(frame);doc.off('update',update);window.removeEventListener('resize',resize);window.removeEventListener('beforeunload',beforeUnload);document.removeEventListener('click',cardClick);document.removeEventListener('click',menuClick);document.removeEventListener('keydown',menuKey,true);document.removeEventListener('focusin',cardFocus);clearInterval(clock);resized.disconnect();added.disconnect();histories.clear();floating.remove();drafts.close();}};
+  refresh();return{state,actions,configure,flush,beforeLeave,recovery:drafts.recovery,report(receipt){if(receipt?.ok===false){state.open=true;announce(`${receipt.error.code}: ${receipt.error.message}`);}else if(receipt?.ok&&receipt.value?.status)announce(receipt.value.status,true);},toSource,toDisplay,sourceRange,canReplace,refresh,close(){closed=true;clearTimeout(timer);cancelAnimationFrame(frame);doc.off('update',update);window.removeEventListener('resize',resize);window.removeEventListener('beforeunload',beforeUnload);document.removeEventListener('click',cardClick);document.removeEventListener('click',menuClick);document.removeEventListener('keydown',menuKey,true);document.removeEventListener('focusin',cardFocus);clearInterval(clock);resized.disconnect();added.disconnect();histories.clear();floating.remove();drafts.close();}};
 }
