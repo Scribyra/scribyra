@@ -64,11 +64,11 @@ const fold=value=>String(value).normalize('NFD').replace(/\p{M}+/gu,'').toLowerC
 /** Every word of the query must appear in the name, description, keywords or category name. */
 export function searchTemplates(catalog,{query='',category=''}={}){
  const words=fold(query).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
- const names=new Map(catalog.categories.map(entry=>[entry.id,entry.name]));
  return catalog.templates.filter(template=>{
   if(category&&template.category!==category)return false;
   if(!words.length)return true;
-  const haystack=fold([template.name,template.description,template.id,names.get(template.category),...template.keywords].join(' '));
+  // The category name is left out: "Slides and posters" would make every slide deck a poster. The chips filter by category.
+  const haystack=fold([template.name,template.description,template.id,...template.keywords].join(' '));
   return words.every(word=>haystack.includes(word));
  });
 }

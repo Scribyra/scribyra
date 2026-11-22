@@ -820,7 +820,7 @@ async function action(name, value = '', detail = {}) {
       case 'new': case 'templates': await chooseTemplate(); break;
       case 'welcome-dismiss': dismissWelcome(); state.welcome = false; emit(); requestAnimationFrame(() => document.querySelector('.welcome-row .button.primary')?.focus()); break;
       case 'overleaf-guide': if (await showOverleafGuide() === 'import') await action('import'); break;
-      case 'git-link': { const fragment = await askGitLink(); if (fragment) location.hash = fragment; break; }
+      case 'git-link': { const fragment = await askGitLink(); if (fragment) openLinks.offer(fragment); break; }
       case 'starter': await createProject('A space for your next great idea'); break;
       case 'open': await openProject(value); break;
       case 'open-file': activateFile(value); break;

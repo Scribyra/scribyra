@@ -145,4 +145,10 @@ bottom) stays where it is. **Dismiss welcome** hides it; creating or importing a
 also ends it. Either is remembered in `localStorage` (`scribyra:welcome:v1`); a browser
 that already has projects never sees it. Without storage it is not shown. **From a Git
 link** parses a pasted repository or ZIP address with the open-link generator's parser
-and hands it to the existing Open in Scribyra confirmation.
+and hands it straight to the existing Open in Scribyra confirmation (not through the
+address bar), so nothing is fetched until the person checks what it will import.
+
+Tests: `tests/browser/templates.spec.js` (welcome, gallery, creating from a template,
+template links, Overleaf import, the site's templates page and guide, in all three
+engines) and `tests/browser/telemetry-consent.spec.js` (the welcome stays reachable next
+to the consent card). Screenshots: `docs/screenshots/templates/`.
