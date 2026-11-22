@@ -215,7 +215,7 @@ test('\\usepackage[ and \\documentclass[ offer options, values where finite, and
   await expect(selected(page)).toContainText('aspectratio=');await accept(page);await type(page,'16');await expect(selected(page)).toContainText('169');await expect(selected(page)).toContainText('16:9');await accept(page);
   await ends(page,'\\documentclass[aspectratio=169]{beamer}');
   // TikZ keys and \includegraphics keys use the same list.
-  await page.keyboard.press('End');await page.keyboard.press('Enter');await page.keyboard.insertText('\\draw[] (0,0) -- (1,1);');await back(17);await type(page,'very th');await expect(popup(page).getByRole('option').filter({hasText:'very thick'})).toContainText('TikZ');await expect(selected(page)).toContainText('very thin');await page.keyboard.press('Escape');
+  await page.keyboard.press('End');await page.keyboard.press('Enter');await page.keyboard.insertText('\\draw[] (0,0) -- (1,1);');await back(17);await type(page,'very th');await expect(selected(page)).toContainText('very thick');await expect(selected(page)).toContainText('TikZ');await expect(popup(page).getByRole('option').filter({hasText:'very thin'})).toBeVisible();await page.keyboard.press('Escape');
   await page.keyboard.press('End');await page.keyboard.press('Enter');await type(page,'\\includegraphics[keep');await expect(selected(page)).toContainText('keepaspectratio');await page.keyboard.press('Escape');
   // \cite{a,|} offers the keys not given yet and keeps the closing brace.
   await page.keyboard.press('End');await page.keyboard.press('Enter');await page.keyboard.insertText('\\cite{knuth1984,}');await back(1);await page.keyboard.press('Control+Space');
