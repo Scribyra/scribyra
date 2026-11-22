@@ -162,8 +162,11 @@ test('server compile: the project switch, the PDF in a viewer’s app, older ver
 
 // The server's default engine is the browser's own WebAssembly LuaLaTeX: a multi-page document
 // with cross-references and a bibliography compiled on the server has as many pages, and the
-// same text on its first page, as when the same app compiles it in the browser.
-const LONG='\\documentclass{article}\n\\usepackage{amsmath}\n\\begin{document}\n\\tableofcontents\n'+Array.from({length:9},(_,i)=>`\\section{Part ${i+1}}\\label{s${i+1}}\nSee Section~\\ref{s${(i+3)%9+1}} and~\\cite{k${i%3}}. `+'Server and browser should agree on every line break of this paragraph. '.repeat(40)+`\n\\begin{equation}a_{${i}}=\\sum_{k=1}^{n}k^{${i}}\\end{equation}\n`).join('')+'\\begin{thebibliography}{9}\n'+[0,1,2].map(i=>`\\bibitem{k${i}} Author ${i}, \\emph{Title ${i}}, 2026.`).join('\n')+'\n\\end{thebibliography}\n\\end{document}\n';
+// same text on its first page, as when the same app compiles it in the browser. It loads booktabs
+// through a macro, which only a failing pass finds; the server remembers it with the project for
+// its engine version, so the next server job installs it before the first pass and takes one
+// pass fewer, with the same pages.
+const LONG='\\documentclass{article}\n\\usepackage{amsmath}\n\\def\\tablepackage{booktabs}\\usepackage{\\tablepackage}\n\\begin{document}\n\\tableofcontents\n\\begin{tabular}{ll}\\toprule a&b\\\\\\midrule c&d\\\\\\bottomrule\\end{tabular}\n'+Array.from({length:9},(_,i)=>`\\section{Part ${i+1}}\\label{s${i+1}}\nSee Section~\\ref{s${(i+3)%9+1}} and~\\cite{k${i%3}}. `+'Server and browser should agree on every line break of this paragraph. '.repeat(40)+`\n\\begin{equation}a_{${i}}=\\sum_{k=1}^{n}k^{${i}}\\end{equation}\n`).join('')+'\\begin{thebibliography}{9}\n'+[0,1,2].map(i=>`\\bibitem{k${i}} Author ${i}, \\emph{Title ${i}}, 2026.`).join('\n')+'\n\\end{thebibliography}\n\\end{document}\n';
 test('the server’s WebAssembly engine makes the same PDF pages as the browser’s',async({browser},info)=>{
  test.setTimeout(3600000);
  const s=await compileService();const contexts=[];
@@ -190,6 +193,19 @@ test('the server’s WebAssembly engine makes the same PDF pages as the browser�
   await expect(pdfText(ana.page)).toContainText('Contents');
   const serverFirst=(await pdfText(ana.page).textContent()).replace(/\s+/g,' ').trim();
   expect(ana.compiler).toEqual([]);
+  const project=await s.sql("SELECT project FROM sr_projects WHERE deleted IS NULL ORDER BY created DESC LIMIT 1");
+  const jobs=()=>s.sql(`SELECT passes FROM compiles WHERE project = '${project}' AND state = 'done' ORDER BY finished`);
+  const firstPasses=Number(await jobs());
+  expect(await s.sql(`SELECT array_to_string(packages, ',') FROM compile_packages WHERE project = '${project}' AND texlive LIKE 'wasm-%'`)).toBe('dist--booktabs');
+  // A second server job, after an edit outside the document: the remembered package is
+  // installed before the first pass, and the PDF is the same.
+  await typeAt(ana.page,['ControlOrMeta+End'],'\n% compiled again\n');
+  await ana.page.getByRole('button',{name:/^Compile on server/}).click();
+  await expect(badge(ana.page)).toHaveText(new RegExp(BADGE.source+'from your latest changes$'),{timeout:COMPILE});
+  await expect(status(ana.page)).toHaveText(new RegExp(`^Compiled on server · ${serverPages} pages`),{timeout:COMPILE});
+  await expect.poll(async()=>(await jobs()).split('\n').length).toBe(2);
+  expect(Number((await jobs()).split('\n')[1])).toBe(firstPasses-1);
+  expect((await pdfText(ana.page).textContent()).replace(/\s+/g,' ').trim()).toBe(serverFirst);
   await home(ana.page);
   row=await shareBox(ana.page,'Same pages');
   await row.getByRole('radio',{name:'Compile in the browser'}).check();

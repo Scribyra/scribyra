@@ -134,5 +134,5 @@ export async function compileService({compile='both',engine='wasm',limits={},dep
  if(engine==='native'&&!texlive)throw Error('SCRIBYRA_TEXLIVE is not set: run under `nix develop`.');
  const wasm=engine==='wasm'?{compile_runtime:compileRuntime(),compile_cache:await mkdtemp(join(tmpdir(),'scribyra-tex-cache-'))}:{};
  return serverService({compile_worker_in_process:true,compile_heartbeat_seconds:2,compile_heartbeat_timeout_seconds:60,...wasm,...options,
-  deployment:{compile,compile_engine:engine,...(engine==='native'?{texlive}:{tex_mirror:''}),compile_limits:{cpu_seconds:300,wall_seconds:600,memory_mib:2048,scratch_mib:512,output_mib:64,passes:4,concurrency:2,queue:32,per_member_per_hour:120,...limits},...deployment}});
+  deployment:{compile,compile_engine:engine,...(engine==='native'?{texlive}:{tex_mirror:''}),compile_limits:{cpu_seconds:300,wall_seconds:600,memory_mib:3072,scratch_mib:512,output_mib:64,passes:4,concurrency:2,queue:32,per_member_per_hour:120,...limits},...deployment}});
 }
