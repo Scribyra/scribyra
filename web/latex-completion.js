@@ -43,8 +43,8 @@ export function inVerbatim(text,before){
 }
 /** Innermost environment still open before the cursor (bounded look-back), for `\end{`. */
 export function openEnvironment(text){return openEnvironments(text).at(-1)||'';}
-// Optional and key=value arguments: `\\usepackage[…]{name}`, `\\documentclass[…]{class}`, and the
-// settings of a few packages (`\\hypersetup{…}`, `\\includegraphics[…]`, TikZ `[…]`).
+// Optional and key=value arguments: `\usepackage[…]{name}`, `\documentclass[…]{class}`, and the
+// settings of a few packages (`\hypersetup{…}`, `\includegraphics[…]`, TikZ `[…]`).
 const KEYVAL={
   '[':{usepackage:'package',RequirePackage:'package',documentclass:'class',LoadClass:'class',includegraphics:'graphicx',lstinputlisting:'listings',inputminted:'minted',mintinline:'minted',
     SI:'siunitx',si:'siunitx',num:'siunitx',qty:'siunitx',unit:'siunitx',ang:'siunitx',
@@ -211,7 +211,7 @@ function valueOption(label,{detail='',description='',source='',ranges,insert,fro
     view.dispatch({changes:{from,to,insert:closed?insert:insert+'}'},selection:{anchor:from+insert.length+1},annotations:pickedCompletion.of(completion),userEvent:'input.complete',scrollIntoView:true});
   }};
 }
-/** An environment name typed in place, keeping the closing brace: the paired `\\end` follows by itself. */
+/** An environment name typed in place, keeping the closing brace: the paired `\end` follows by itself. */
 function nameOption(label,{description='',source='',ranges,from,to,closed,type='environment'}){
   return {label,description,source,type,ranges,apply:(view,completion)=>{
     view.dispatch({changes:{from,to,insert:closed?label:label+'}'},selection:{anchor:from+label.length+1},annotations:pickedCompletion.of(completion),userEvent:'input.complete',scrollIntoView:true});
@@ -264,7 +264,7 @@ export function completionOptions(context,catalog,index,{usage={},currentPath=''
   const value={from:context.from,to:context.to,closed:context.closed};
   switch(context.kind){
     case 'begin':case 'end':{
-      // `\\end{` ranks the innermost open environment first, then the ones around it.
+      // `\end{` ranks the innermost open environment first, then the ones around it.
       const open=context.environments||(context.environment?[context.environment]:[]);
       const boost=name=>{const at=open.lastIndexOf(name);return at<0?0:at===open.length-1?2000:1000+at;};
       const items=[...catalog.environments,...projectEnvironmentItems(index,catalog)].map(e=>({...e,rank:e.rank+(context.kind==='end'?boost(e.name):0)}));
@@ -333,7 +333,7 @@ export function latexCompletion({index=()=>null,currentPath=()=>''}={}){
   const render=(className,field)=>({position:className==='cm-completionSource'?85:90,render(option){
     if(!option[field])return null;const span=document.createElement('span');span.className=className;
     span.append(pause(),option[field]);return span;}});
-  // Options are named by their visible text, read with pauses: `\\section{title}, LaTeX, Numbered
+  // Options are named by their visible text, read with pauses: `\section{title}, LaTeX, Numbered
   // section heading` (the description is shown, and so read, for the selected option). A label and a
   // detail that are separate words (`knuth1984`, `Knuth, 1984`) get a pause between them too.
   const detailPause={position:70,render:option=>option.type==='text'&&option.detail?pause():null};
@@ -363,7 +363,7 @@ export function latexCompletion({index=()=>null,currentPath=()=>''}={}){
     completionAnnouncer,
   ];
 }
-/** Facts only the document can tell: the label target, the paired `\\end`, open environments, list keys. */
+/** Facts only the document can tell: the label target, the paired `\end`, open environments, list keys. */
 function documentFacts(state,latex,pos){
   const facts={currentLine:state.doc.lineAt(pos).number};
   if(latex.kind==='newlabel')facts.target=labelTarget(state.sliceDoc(Math.max(0,latex.commandFrom-30000),latex.commandFrom),state.sliceDoc(latex.to,latex.to+4000));
