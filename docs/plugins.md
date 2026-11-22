@@ -125,7 +125,7 @@ cannot ask for something the consent dialog would not show. The rules:
 | Permission | Shape | What it allows | Shown at install as |
 | --- | --- | --- | --- |
 | `project.read` | `{files: [glob…], binary?: true}` | List and read text files of the **open project** whose path matches a glob; with `binary` *(Nov 22)*, binary files too, as bytes. Never other projects, history, comments, or the project list. | "Read files in the open project matching *.bib, *.tex, *.ltx"; with `**` and `binary`: "Read every file in the open project, including images and other binary files" |
-| `project.write` | `{create: [glob…], pick: bool, change?: [glob…]}` | Create files whose path matches `create`. Change only files it created, or files the person picked for it (`pick`), or *(Nov 22)* existing readable files matching `change`, which it may also delete through `project.apply`. Respects modes. | "Create *.bib files and change the files it created"; with `change: ["**"]`: "Add, change and delete any file in the open project, in changes you confirm" |
+| `project.write` | `{create: [glob…], pick: bool, change?: [glob…]}` | Create files whose path matches `create`. Patch only files it created, or files the person picked for it (`pick`). *(Nov 22)* Existing readable files matching `change` can be changed and deleted only through `project.apply`, which needs the person's click in the plugin's dialog. Respects modes. | "Create *.bib files and change the files it created"; with `change: ["**"]`: "Add, change and delete any file in the open project, in changes you confirm" |
 | `network` | `["https://host[:port]"]` | Requests through the host's fetch proxy to exactly these origins. `https:` only. No wildcards, credentials or redirects. | "Contact https://api.zotero.org" |
 | `network.ask` *(Nov 22)* | `{purpose: text}` | Ask the person, in Scribyra's own dialog, to allow one more `https:` origin at a time (`net.requestOrigin`), for example a self-hosted server. Allowed origins are kept in the plugin's record, listed in the manager with **Remove**, and then behave like `network` origins. | "Ask you to allow other https:// addresses (self-hosted GitLab servers you add)" |
 | `ui.status` *(Nov 22)* | `true` | Show one status item above the open project, with up to three buttons. | "Show a status item above the open project" |
@@ -256,11 +256,11 @@ scribyra.files                            // the package's own files: text or Ui
 | `project.patch` | `project.write` | `{fileId, edits:[{start, end, before, after}]}` → Editing `{applied}`; Reviewing `{suggested, reviewId}`; Viewing refused |
 | `project.pick` | `project.write.pick` | `{title, files:[glob]}` → `{id, path}` or `null`; the person chooses; grants read and write to that file |
 | `project.activate` | readable file | `{fileId}` → `{}`; opens the file in the editor |
-| `secrets.get` / `set` / `delete` / `keys` | `secrets` | `{name[, value, origin]}` (strings ≤ 4 KiB, ≤ 32 names). With `origin` *(Nov 22)* the secret is **bound**: write-only (`get` returns `null`), and usable only through `net.fetch {auth}` to that origin |
+| `secrets.get` / `set` / `delete` / `keys` | `secrets` | `{name[, value, origin]}` (strings ≤ 4 KiB, ≤ 32 names). With `origin` *(Nov 22)* the secret is **bound**: printable ASCII, write-only (`get` returns `null`), and usable only through `net.fetch {auth}` to that origin, while `secrets` is granted. Removing an asked-for origin deletes the secrets bound to it |
 | `net.fetch` | `network` or `network.ask` | `{url, method?, headers?, body?, responseType?, auth?, requestId?}` → `{status, statusText, headers:[[k,v]], body}`; `auth: {secret, header: 'Authorization' \| 'PRIVATE-TOKEN', scheme: 'Bearer' \| 'token' \| ''}` makes the host add a bound secret *(Nov 22)* |
 | `net.abort` | `network` | `{requestId}` |
 | `net.origins` *(Nov 22)* | `network` or `network.ask` | → `{granted, added}` |
-| `net.requestOrigin` *(Nov 22)* | `network.ask`, activation | `{origin, reason}` → `{granted, origin}` after Scribyra's own consent dialog |
+| `net.requestOrigin` *(Nov 22)* | `network.ask`, activation | `{origin, reason}` → `{granted, origin}` after Scribyra's own consent dialog; one at a time, and after a Cancel only with a new gesture and a 2 s pause |
 | `ui.status.set` *(Nov 22)* | `ui.status` | `{status: {label, text, title?, tone?, actions:[{id, label, title?, modes?, blockedTitle?}]} \| null}` |
 | `ui.dialog.open` / `update` / `close` | `ui.dialog` | `{spec}` → `{dialogId}`; `{dialogId, spec}`; `{dialogId}` |
 | `ui.files.decorate` | `ui.fileAction` | `{fileId, tags:[…], bar:{label, text, actions:[{id,label,title,modes}]} \| null}` on a readable file |
@@ -324,7 +324,9 @@ scribyra.files                            // the package's own files: text or Ui
 `project.apply` *(Nov 22)* applies a set of additions, changes and deletions the person
 confirmed in the plugin's dialog, all or nothing:
 
-- It needs activation: the person's click in the plugin's dialog in the last minute.
+- It needs **confirmation**: a click inside the plugin's own dialog in the last minute.
+  Other gestures, such as a More tools item or a status button, do not count. One click
+  covers one change set.
 - **Checks, before anything changes.**
   - Every `add` path must pass `assertPath` and match `project.write.create`, and must not
     exist, case-insensitively, unless the same set deletes it.
@@ -653,6 +655,19 @@ Lower-risk items also fixed:
 - Migration respects the policy and takes the highest compatible version.
 - Package file names cannot be `__proto__` or similar.
 - "Scribyra" in a plugin's name or publisher is reserved for official plugins.
+
+The November 22 additions (binary reads, `project.apply`, bound secrets, `network.ask`,
+`ui.status`) had their own independent review. Its findings and fixes are in
+[git-sync.md](git-sync.md#security-review). The ones in the host:
+
+- `change` no longer widens `project.patch`.
+- `project.apply` needs a click in the plugin's dialog.
+- Revoked `secrets` stops bound-secret use.
+- Origin prompts are paced.
+- Removing an origin deletes its bound secrets.
+- The local-network check is wider.
+- Status text cannot hide characters.
+- Bytes are copied at the boundary.
 
 Accepted and documented:
 

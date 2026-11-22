@@ -2,7 +2,7 @@
 // plugin may ask for (docs/plugins.md#flows). These are Scribyra's own dialogs: plugins
 // never draw here. The official registry is loaded only when the person chooses Browse.
 import {restoreDialogFocus} from './input.js';
-import {describePermissions,PluginError} from './plugin-manifest.js';
+import {describePermissions,privateOrigin,PluginError} from './plugin-manifest.js';
 import {developerMode,setDeveloperMode} from './plugin-store.js';
 
 function el(tag,props={},...children){
@@ -63,7 +63,6 @@ function confirmDialog({title,message,label,danger=false}){
   });
 }
 
-const privateHost=origin=>{const host=new URL(origin).hostname.replace(/^\[|\]$/g,'');return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd]|fe80:)/i.test(host)||host.endsWith('.local')||host.endsWith('.internal')||host.endsWith('.home.arpa');};
 /**
  * A plugin with “network.ask” wants to contact one more origin (docs/plugins.md#network).
  * Scribyra asks, not the plugin; resolves to true when the person allows it.
@@ -78,7 +77,7 @@ export function originConsentDialog({plugin,origin,reason='',purpose=''}){
       el('p',{},'It asks to contact ',el('code',{text:origin}),purpose?` (${purpose})`:'','.'),
       reason?el('p',{className:'plugin-text tone-note',text:`${plugin.name} says: ${reason}`}):null,
       el('p',{className:'plugin-text',text:'Once allowed, it can send what it reads from the open project to this address, as it can to the addresses you allowed at install. Allow only a server you trust.'}),
-      privateHost(origin)?el('p',{className:'plugin-text tone-warning',role:'note',text:'This address is on your own computer or local network.'}):null,
+      privateOrigin(origin)?el('p',{className:'plugin-text tone-warning',role:'note',text:'This address is on your own computer or local network.'}):null,
       el('p',{className:'plugin-text tone-muted',text:'You can remove it anytime in More tools → Plugins.'}),
       el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button('Allow',()=>finish(true),{primary:true}))));
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});

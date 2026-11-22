@@ -389,3 +389,102 @@ test('the JavaScript and Rust/WebAssembly templates install from a URL and run i
     }
   }finally{await server.close();}
 });
+
+// Regressions for the review of the November 22 additions (docs/git-sync.md#review-findings).
+const SYNC_ID='org.example.sync-probe';
+function syncProbeCode(config){
+  return `const config=${JSON.stringify(config)};
+const attempt=async(fn)=>{try{return {ok:true,value:await fn()};}catch(error){return {ok:false,code:error.code||error.name,message:String(error.message).slice(0,300)};}};
+const report=body=>scribyra.call('net.fetch',{url:config.origin+'/report',method:'POST',headers:[['Content-Type','application/json']],body:JSON.stringify(body)});
+const mainFile=async()=>(await scribyra.call('project.files',{hashes:true})).find(file=>file.path==='main.tex');
+scribyra.handle('command.run',async({command})=>{
+  const r={};
+  if(command==='probe'){
+    const main=await mainFile();
+    r.hashes=!!main.hash&&main.size>0;
+    r.binary=(await scribyra.call('project.files')).find(file=>file.path==='figure.png')?.binary===true;
+    r.readBinary=await attempt(async()=>{const value=await scribyra.call('project.read',{fileId:(await scribyra.call('project.files')).find(file=>file.path==='figure.png').id});return value.bytes instanceof Uint8Array&&value.bytes.length;});
+    r.patchChange=await attempt(()=>scribyra.call('project.patch',{fileId:main.id,edits:[{start:0,end:0,before:'',after:'% silent\\n'}]}));
+    r.applyWithoutDialog=await attempt(()=>scribyra.call('project.apply',{changes:[{op:'update',fileId:main.id,expect:main.hash,text:'% replaced\\n'}]}));
+    r.bind=await attempt(()=>scribyra.call('secrets.set',{name:'token',value:'bound-secret-value',origin:config.origin}));
+    r.bindElsewhere=await attempt(()=>scribyra.call('secrets.set',{name:'other',value:'x',origin:'https://evil.example'}));
+    r.bindHeaderUnsafe=await attempt(()=>scribyra.call('secrets.set',{name:'crlf',value:'a\\r\\nX-Evil: 1',origin:config.origin}));
+    r.getBound=await attempt(()=>scribyra.call('secrets.get',{name:'token'}));
+    r.useBound=await attempt(()=>scribyra.call('net.fetch',{url:config.origin+'/auth',auth:{secret:'token',header:'Authorization',scheme:'Bearer'}}));
+    r.useUnbound=await attempt(async()=>{await scribyra.call('secrets.set',{name:'plain',value:'plain-value'});return scribyra.call('net.fetch',{url:config.origin+'/auth2',auth:{secret:'plain',header:'Authorization',scheme:'Bearer'}});});
+    r.statusHidden=await attempt(()=>scribyra.call('ui.status.set',{status:{label:'Sync',text:'Saved locally\\u202e',actions:[]}}));
+    r.status=await attempt(()=>scribyra.call('ui.status.set',{status:{label:'Sync probe',text:'Probe status',actions:[{id:'go',label:'Go',modes:['editing']}]}}));
+    r.ask=await attempt(()=>scribyra.call('net.requestOrigin',{origin:'https://gitlab.example.org',reason:'to test'}));
+    r.askAgain=await attempt(()=>scribyra.call('net.requestOrigin',{origin:'https://gitlab.example.org',reason:'again'}));
+    r.askHttp=await attempt(()=>scribyra.call('net.requestOrigin',{origin:'http://gitlab.example.org'}));
+    r.origins=await attempt(()=>scribyra.call('net.origins'));
+  }
+  if(command==='apply'){
+    const main=await mainFile();
+    r.applied=await new Promise(async resolve=>{
+      const {dialogId}=await scribyra.call('ui.dialog.open',{spec:{title:'Apply probe',children:[{type:'actions',buttons:[{id:'apply',label:'Apply',primary:true}]}]}});
+      const stop=scribyra.on('dialog.event',async event=>{if(event.dialogId!==dialogId||event.control!=='apply')return;stop();
+        const first=await attempt(()=>scribyra.call('project.apply',{changes:[{op:'update',fileId:main.id,expect:main.hash,text:'% applied by probe\\n'},{op:'add',path:'added.tex',text:'new\\n'}]}));
+        const fresh=await mainFile();
+        const second=await attempt(()=>scribyra.call('project.apply',{changes:[{op:'update',fileId:fresh.id,expect:fresh.hash,text:'% again\\n'}]}));
+        await scribyra.call('ui.dialog.close',{dialogId});resolve({first,second});});
+    });
+  }
+  if(command==='auth')r.useBound=await attempt(()=>scribyra.call('net.fetch',{url:config.origin+'/auth3',auth:{secret:'token',header:'Authorization',scheme:'Bearer'}}));
+  await report({command,...r});
+  return {};
+});`;
+}
+test('review: change globs need project.apply with a dialog confirmation; bound secrets, asked-for origins and status text are checked',async({page})=>{
+  const server=await pluginServer(),errors=[];page.on('pageerror',error=>errors.push(error.message));
+  try{
+    await openProject(page,{'main.tex':MAIN,'figure.png':'\u0089PNG binary'});
+    const manifest={id:SYNC_ID,name:'Sync probe',version:'1.0.0',description:'Tries the November 22 additions.',
+      permissions:{'project.read':{files:['**'],binary:true},'project.write':{create:['*.tex'],change:['**']},network:[server.origin],'network.ask':{purpose:'test servers'},secrets:true,'ui.dialog':true,'ui.command':true,'ui.status':true},
+      contributes:{commands:[{id:'probe',label:'Sync probe'},{id:'apply',label:'Sync apply'},{id:'auth',label:'Sync auth'}]}};
+    const url=server.serve('/sync-probe-1.0.0.scribyra-plugin.json',pluginPackage(manifest,syncProbeCode({origin:server.origin})));
+    const manager=await openManager(page);
+    const consent=await sideload(page,url,{consentName:'Install Sync probe?',accept:null});
+    await expect(consent).toContainText('Add, change and delete any file in the open project, in changes you confirm');
+    await expect(consent).toContainText('Ask you to allow other https:// addresses (test servers)');
+    await consent.getByRole('button',{name:'Install',exact:true}).click();await expect(consent).toBeHidden();
+    await manager.getByRole('button',{name:'Close',exact:true}).click();
+    const run=command=>{const count=server.reports.length;return page.evaluate(value=>window.scribyra.action('plugin-command',value),`${SYNC_ID}:${command}`).then(()=>server.nextReport(count+1));};
+    const probe=run('probe');
+    // Scribyra's own dialog asks about the origin; Cancel, and asking again at once is refused.
+    const ask=page.getByRole('dialog',{name:'Allow Sync probe to contact gitlab.example.org?'});await expect(ask).toBeVisible();
+    await expect(ask).toContainText('Sync probe says: to test');
+    await ask.getByRole('button',{name:'Cancel'}).click();
+    const r=await probe;
+    expect(r.hashes).toBe(true);expect(r.binary).toBe(true);expect(r.readBinary).toMatchObject({ok:true});
+    expect(r.patchChange).toMatchObject({ok:false,code:'permission_denied'});
+    expect(r.applyWithoutDialog).toMatchObject({ok:false,code:'not_allowed'});
+    expect(r.bind).toMatchObject({ok:true});expect(r.bindElsewhere).toMatchObject({ok:false,code:'network_denied'});expect(r.bindHeaderUnsafe).toMatchObject({ok:false,code:'invalid_request'});
+    expect(r.getBound).toEqual({ok:true,value:null});
+    expect(r.useBound).toMatchObject({ok:true});expect(r.useUnbound).toMatchObject({ok:false,code:'network_denied'});
+    expect(server.requests.find(request=>request.url==='/auth').authorization).toBe('Bearer bound-secret-value');
+    expect(server.requests.some(request=>request.url==='/auth2')).toBe(false);
+    expect(r.statusHidden).toMatchObject({ok:false,code:'invalid_request'});expect(r.status).toMatchObject({ok:true});
+    expect(r.ask).toEqual({ok:true,value:{granted:false,origin:'https://gitlab.example.org'}});
+    expect(r.askAgain).toMatchObject({ok:false,code:'not_allowed'});
+    expect(r.askHttp).toMatchObject({ok:false,code:'invalid_request'});
+    expect(r.origins).toEqual({ok:true,value:{granted:[server.origin],added:[]}});
+    const item=page.getByRole('group',{name:'Sync probe',exact:true});await expect(item).toContainText('Probe status');await expect(item).toContainText('Sync probe plugin');
+    expect(await page.evaluate(()=>window.scribyra.agent.readSource({path:'main.tex'}).value.content)).toBe(MAIN);
+    // A click in its own dialog confirms one change set, applied at once; a second needs another click.
+    const applying=run('apply');
+    const dialog=page.getByRole('dialog',{name:'Apply probe'});await dialog.getByRole('button',{name:'Apply'}).click();
+    const a=await applying;
+    expect(a.applied.first).toMatchObject({ok:true});expect(a.applied.first.value.files.map(file=>[file.op,file.path])).toEqual([['update','main.tex'],['add','added.tex']]);
+    expect(a.applied.second).toMatchObject({ok:false,code:'not_allowed'});
+    expect(await page.evaluate(()=>window.scribyra.agent.readSource({path:'main.tex'}).value.content)).toBe('% applied by probe\n');
+    // Revoking “secrets” also stops the host from adding a bound secret.
+    await openManager(page);
+    await manager.locator(`[data-plugin="${SYNC_ID}"]`).getByRole('button',{name:'Revoke: Keep secrets such as API keys on this device'}).click();
+    await expect(manager.getByRole('status')).toContainText('Sync probe can no longer: keep secrets');
+    await manager.getByRole('button',{name:'Close',exact:true}).click();
+    const after=await run('auth');expect(after.useBound).toMatchObject({ok:false,code:'permission_denied'});
+    expect(server.requests.some(request=>request.url==='/auth3')).toBe(false);
+    expect(errors).toEqual([]);
+  }finally{await server.close();}
+});

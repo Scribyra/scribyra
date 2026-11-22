@@ -17,7 +17,7 @@ export function splitLines(text){
 // Myers' O(ND) difference algorithm over lines. Beyond MAX_EDITS the result falls back
 // to one replaced block between the common prefix and suffix: still correct, only less
 // precise, so a pathological file cannot stall the page or the plugin.
-const MAX_EDITS=4000;
+const MAX_EDITS=1500;
 /**
  * Hunks turning a into b: [{aStart, aEnd, bStart, bEnd}] with half-open line ranges,
  * sorted, non-overlapping, never empty on both sides.
@@ -31,7 +31,9 @@ export function diffLines(a,b){
   const n=x.length,m=y.length,max=Math.min(n+m,MAX_EDITS),offset=max+1;
   const v=new Int32Array(2*max+3),trace=[];let found=-1;
   for(let d=0;d<=max&&found<0;d++){
-    trace.push(v.slice());
+    // Only the diagonals -d…d can be read back for step d, so keep just that window:
+    // memory grows with the number of edits squared, at most about 9 MB.
+    trace.push(v.slice(offset-d-1,offset+d+2));
     for(let k=-d;k<=d;k+=2){
       let i=k===-d||(k!==d&&v[offset+k-1]<v[offset+k+1])?v[offset+k+1]:v[offset+k-1]+1,j=i-k;
       while(i<n&&j<m&&x[i]===y[j]){i++;j++;}
@@ -43,9 +45,9 @@ export function diffLines(a,b){
   // Walk back through the saved frontiers to recover the edit script.
   const steps=[];let i=n,j=m;
   for(let d=found;d>0;d--){
-    const frontier=trace[d],k=i-j;
-    const down=k===-d||(k!==d&&frontier[offset+k-1]<frontier[offset+k+1]);
-    const prevK=down?k+1:k-1,prevI=frontier[offset+prevK],prevJ=prevI-prevK;
+    const window=trace[d],at=index=>window[index+d+1],k=i-j;
+    const down=k===-d||(k!==d&&at(k-1)<at(k+1));
+    const prevK=down?k+1:k-1,prevI=at(prevK),prevJ=prevI-prevK;
     while(i>prevI&&j>prevJ){i--;j--;}
     if(down){j--;steps.push({type:'insert',i,j});}else{i--;steps.push({type:'delete',i,j});}
     i=prevI;j=prevJ;

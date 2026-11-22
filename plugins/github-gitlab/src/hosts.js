@@ -17,9 +17,11 @@ const segments=value=>value.split('/').map(encodeURIComponent).join('/');
 const parse=text=>{try{return JSON.parse(text);}catch{return null;}};
 const when=seconds=>{const at=new Date(seconds*1000);return `${at.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'})} (in about ${Math.max(1,Math.round((seconds*1000-Date.now())/60000))} minutes)`;};
 
-// Requests carry at most 8 MiB, so a pushed file is at most 6 MiB (base64 grows it by a
-// third) and a GitLab commit, sent as one request, at most 6 MiB of changed content.
-export const PUSH_FILE_BYTES=6*1024*1024,GITLAB_PUSH_BYTES=6*1024*1024,TREE_BATCH_BYTES=6*1024*1024;
+// Requests carry at most 8 MiB. Base64 grows bytes by a third and JSON escapes LaTeX's
+// backslashes, so a pushed file is at most 5.5 MiB, request bodies are measured as the
+// JSON actually sent, and a GitLab commit (one request) holds at most that much JSON.
+export const PUSH_FILE_BYTES=5.5*1024*1024,REQUEST_BYTES=7.5*1024*1024,INLINE_TEXT_BYTES=1024*1024;
+const jsonBytes=value=>encoder.encode(JSON.stringify(value)).length;
 
 export const GITHUB={
   kind:'github',name:'GitHub',origin:'https://api.github.com',web:'https://github.com',
@@ -98,15 +100,16 @@ export function githubClient({net,repository,secret}){
     async push({branch,newBranch,base,baseTree,message,changes}){
       const entries=[];
       for(const change of changes){
-        if(change.op==='delete'){entries.push({path:change.path,mode:change.mode||'100644',type:'blob',sha:null,size:0});continue;}
-        if(typeof change.text==='string')entries.push({path:change.path,mode:change.mode||'100644',type:'blob',content:change.text,size:change.bytes.length});
-        else{const blob=await request(`${root}/git/blobs`,{method:'POST',body:{content:base64(change.bytes),encoding:'base64'},what:'a file'});entries.push({path:change.path,mode:change.mode||'100644',type:'blob',sha:blob.sha,size:0});}
+        if(change.op==='delete'){entries.push({path:change.path,mode:change.mode||'100644',type:'blob',sha:null});continue;}
+        // Small text goes inline in the tree; larger and binary files become blobs first.
+        if(typeof change.text==='string'&&change.bytes.length<=INLINE_TEXT_BYTES)entries.push({path:change.path,mode:change.mode||'100644',type:'blob',content:change.text});
+        else{const blob=await request(`${root}/git/blobs`,{method:'POST',body:{content:base64(change.bytes),encoding:'base64'},what:'a file'});entries.push({path:change.path,mode:change.mode||'100644',type:'blob',sha:blob.sha});}
       }
       // Trees are built in batches that each fit in one request, each on top of the last.
       let tree=baseTree;
       for(let i=0;i<entries.length;){
-        const batch=[];let size=0;
-        while(i<entries.length&&(!batch.length||size+entries[i].size<=TREE_BATCH_BYTES)){size+=entries[i].size;const {size:_,...entry}=entries[i++];batch.push(entry);}
+        const batch=[];let size=200;
+        while(i<entries.length&&(!batch.length||size+jsonBytes(entries[i])<=REQUEST_BYTES)){size+=jsonBytes(entries[i])+1;batch.push(entries[i++]);}
         tree=(await request(`${root}/git/trees`,{method:'POST',body:{base_tree:tree,tree:batch},what:'the new file list'})).sha;
       }
       const commit=await request(`${root}/git/commits`,{method:'POST',body:{message,tree,parents:[base]},what:'the commit'});
@@ -161,11 +164,16 @@ export function gitlabClient({net,origin,repository,secret}){
         const response=await request(url,{raw:true});
         if(response.status===404&&subfolder&&!entries.length)return {commit,tree:null,entries:[]};
         if(response.status!==200)throw gitlabError(response,'the file list',host);
-        for(const item of parse(response.body)||[])entries.push({path:item.path,mode:item.mode,type:item.type,sha:item.id,size:null});
+        const page=parse(response.body);if(!Array.isArray(page))throw new HostError('failed',`${host.name} sent a file list Scribyra could not read.`);
+        for(const item of page)entries.push({path:item.path,mode:item.mode,type:item.type,sha:item.id,size:null});
         if(entries.length>20000)throw new HostError('too_large','This repository folder lists more than 20,000 entries. Link a smaller subfolder.');
         const next=/<([^>]+)>;\s*rel="next"/.exec(response.headers.get('link')||'')?.[1]||null;
+        // A full page without a readable next link may be cut short (a proxy that hides
+        // Link): stop rather than take missing files for deleted ones.
+        if(!next&&page.length>=100)throw new HostError('failed',`${host.name} did not say whether more files follow (its Link header is not readable). Scribyra stops rather than guess.`);
         // Follow only links to this same API.
-        url=next&&next.startsWith(`${api}/`)?next:null;
+        if(next&&!next.startsWith(`${api}/`))throw new HostError('failed',`${host.name} pointed the file list at another address.`);
+        url=next;
       }
       return {commit,tree:null,entries};
     },
@@ -175,7 +183,10 @@ export function gitlabClient({net,origin,repository,secret}){
     async lastCommit(path,ref){
       const response=await request(`${project}/repository/files/${encodeURIComponent(path)}?ref=${encodeURIComponent(ref)}`,{method:'HEAD',raw:true});
       if(response.status!==200)throw gitlabError(response,`file ${path}`,host);
-      return response.headers.get('x-gitlab-last-commit-id');
+      // Without it GitLab cannot refuse a concurrent edit, so Scribyra does not push blind.
+      const id=response.headers.get('x-gitlab-last-commit-id');
+      if(!/^[0-9a-f]{40}$/.test(id||''))throw new HostError('failed',`${host.name} did not say which commit last changed ${path} (its X-Gitlab-Last-Commit-Id header is not readable), so Scribyra cannot push safely.`);
+      return id;
     },
     /**
      * One commit with actions. GitLab applies them on the branch as it is; each changed or
@@ -183,15 +194,15 @@ export function gitlabClient({net,origin,repository,secret}){
      * meanwhile GitLab refuses the whole commit, and a created file must not exist yet.
      */
     async push({branch,newBranch,base,message,changes}){
-      const size=changes.reduce((sum,change)=>sum+(change.bytes?.length||0),0);
-      if(size>GITLAB_PUSH_BYTES)throw new HostError('too_large',`GitLab takes a commit in one request: at most ${GITLAB_PUSH_BYTES/1024/1024} MiB of changed files at once. Push fewer files at a time.`);
       const actions=[];
       for(const change of changes){
         const last=change.op==='add'?null:await this.lastCommit(change.path,base);
         if(change.op==='delete'){actions.push({action:'delete',file_path:change.path,...(last?{last_commit_id:last}:{})});continue;}
         actions.push({action:change.op==='add'?'create':'update',file_path:change.path,...(typeof change.text==='string'?{content:change.text,encoding:'text'}:{content:base64(change.bytes),encoding:'base64'}),...(last?{last_commit_id:last}:{}),...(change.op==='add'&&change.mode==='100755'?{execute_filemode:true}:{})});
       }
-      const data=await request(`${project}/repository/commits`,{method:'POST',body:{branch:newBranch||branch,commit_message:message,actions,...(newBranch?{start_sha:base}:{})},what:'the commit'}).catch(error=>{if(newBranch&&error.code==='moved'&&/already exists/i.test(error.message))throw new HostError('branch_exists',`A branch called ${newBranch} already exists on ${host.name}. Choose another name.`);throw error;});
+      const body={branch:newBranch||branch,commit_message:message,actions,...(newBranch?{start_sha:base}:{})};
+      if(jsonBytes(body)>REQUEST_BYTES)throw new HostError('too_large',`GitLab takes a commit in one request: at most about ${(REQUEST_BYTES/1024/1024).toFixed(1)} MiB of changes at once. Push fewer files at a time.`);
+      const data=await request(`${project}/repository/commits`,{method:'POST',body,what:'the commit'}).catch(error=>{if(newBranch&&error.code==='moved'&&/already exists/i.test(error.message))throw new HostError('branch_exists',`A branch called ${newBranch} already exists on ${host.name}. Choose another name.`);throw error;});
       return {commit:data.id,tree:null,parents:Array.isArray(data.parent_ids)?data.parent_ids:[]};
     },
   };

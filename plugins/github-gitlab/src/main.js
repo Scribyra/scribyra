@@ -233,9 +233,17 @@ async function linkDialog({prefill=null}={}){
 
 // ---- Pull -----------------------------------------------------------------------------
 const KIND_TEXT={added:'Added on',changed:'Changed on',removed:'Removed on'};
-function diffNode(label,before,after){
-  const diff=displayDiff(before??'',after??'',{limit:300});
-  return {type:'diff',label,lines:diff.lines.length?diff.lines:[{kind:'gap',text:'No line differences (only line endings or the final newline)'}],note:diff.truncated?`Showing the first 300 lines of the difference (${diff.added} added, ${diff.removed} removed in all).`:undefined};
+// Scribyra bounds a dialog (2,000 parts, 6,000 diff lines, 2,000 characters a line), so
+// long lines are cut and each dialog spends a budget of diff lines across its files.
+const LINE_CHARS=1000,DIALOG_DIFF_LINES=4000,COMPACT_AFTER=120;
+const label=text=>text.length>190?`…${text.slice(-189)}`:text;
+function diffBudget(){let left=DIALOG_DIFF_LINES;return {take(n){const granted=Math.max(0,Math.min(n,left));left-=granted;return granted;}};}
+function diffNode(name,before,after,budget){
+  const limit=budget?budget.take(300):300;
+  if(!limit)return {type:'text',tone:'muted',text:'Too many changes to show here; the change is applied as listed.'};
+  const diff=displayDiff(before??'',after??'',{limit});
+  const lines=diff.lines.map(line=>line.text.length>LINE_CHARS?{...line,text:`${line.text.slice(0,LINE_CHARS)} … (${line.text.length-LINE_CHARS} more characters)`}:line);
+  return {type:'diff',label:label(name),lines:lines.length?lines:[{kind:'gap',text:'No line differences (only line endings or the final newline)'}],note:diff.truncated?`Showing the first ${limit} lines of the difference (${diff.added} added, ${diff.removed} removed in all).`:undefined};
 }
 async function pull(){
   const open=await context(),blocked=modeBlocked(open.mode,'pull')||(open.project.transient?'Accept and save this project before pulling.':'');
@@ -253,14 +261,17 @@ async function pull(){
   for(const item of plan.items)if(item.kind==='check')item.kind=await localBlobId(item.file)===item.remote.sha?'same':'conflict';
   const shown=plan.items.filter(item=>item.kind==='take'||item.kind==='conflict');
   // Download what the dialog shows: theirs, the base for text conflicts, and ours.
-  const contents=new Map(),skipped=[...plan.skipped];
+  const contents=new Map(),skipped=[...plan.skipped],outcomes={};
   for(const item of shown){
     const entry={theirs:null,base:null,mine:null,text:false};
+    const skip=reason=>{skipped.push({path:item.path,reason});item.kind='skip';outcomes[item.path]={result:'skip',reason};};
     if(item.remote){
-      const bytes=await remote.blob(item.remote.sha);
-      if(isLfsPointer(bytes)){skipped.push({path:item.path,reason:'lfs'});item.kind='skip';continue;}
+      let bytes;
+      // GitLab's tree has no sizes, so a large file shows only when it is downloaded.
+      try{bytes=await remote.blob(item.remote.sha);}catch(error){if(error.code==='too_large'){skip('large');continue;}throw error;}
+      if(isLfsPointer(bytes)){skip('lfs');continue;}
       const text=(item.file?!item.file.binary:isTextPath(item.path))?decodeText(bytes):null;
-      if((item.file?!item.file.binary:isTextPath(item.path))&&text===null){skipped.push({path:item.path,reason:'encoding'});item.kind='skip';continue;}
+      if((item.file?!item.file.binary:isTextPath(item.path))&&text===null){skip('encoding');continue;}
       entry.theirs={bytes,text};entry.text=text!==null;
     }
     if(item.file){const mine=await readFile(item.file);entry.mine=mine;entry.text=mine.text!==null;}
@@ -268,7 +279,6 @@ async function pull(){
     contents.set(item.path,entry);
   }
   const items=shown.filter(item=>item.kind!=='skip'),quiet=plan.items.filter(item=>item.kind==='same'||item.kind==='record');
-  const outcomes={};
   for(const item of quiet)outcomes[item.path]={result:'same',exists:!!item.file,hash:item.file?.hash};
   if(!items.length){
     await save({...link,sync:{commit:head,tree:tree.tree,at:Date.now(),behind:0,checkedAt:Date.now()}},recordsAfterPull({records,remote:files,outcomes}));
@@ -317,24 +327,25 @@ async function pull(){
 
 function pullDialog({items,contents,skipped,head,host,mode}){
   const choices=items.map(item=>item.kind==='take'?'apply':''),edits=items.map(()=>null);
-  let status='',version=0;
-  const conflicts=items.filter(item=>item.kind==='conflict').length;
+  let status='',version=0,budget=diffBudget();
+  const conflicts=items.filter(item=>item.kind==='conflict').length,compact=items.length>COMPACT_AFTER;
   const node=(item,i)=>{
     const entry=contents.get(item.path),theirs=entry.theirs,mine=entry.mine,text=entry.text;
     const badges=[{text:`${KIND_TEXT[item.remoteState]} ${host.name}`,tone:item.remoteState}];
     if(item.kind==='conflict')badges.push({text:item.localState==='deleted'?'Deleted here':item.localState==='added'?'Added here too':'Changed here too',tone:'conflict'});
     if(!text)badges.push({text:'Binary',tone:'neutral'});
     const children=[{type:'badges',items:badges}];
-    if(!text){
+    if(compact&&item.kind==='take'){}
+    else if(!text){
       const sizes=[mine?`here ${size(mine.bytes.length)}`:'',theirs?`on ${host.name} ${size(theirs.bytes.length)}`:''].filter(Boolean).join(' · ');
       children.push({type:'text',tone:'summary',text:`Binary file${sizes?`: ${sizes}`:''}. Choose which version to keep.`});
-    }else if(item.kind==='take')children.push(diffNode(`Changes to ${item.path}`,mine?.text??'',theirs?.text??''));
+    }else if(item.kind==='take')children.push(diffNode(`Changes to ${item.path}`,mine?.text??'',theirs?.text??'',budget));
     else{
       const base=entry.base?.text;
       if(base!==undefined&&base!==null){
-        if(mine)children.push(diffNode(`Your changes to ${item.path}`,base,mine.text));
-        if(theirs)children.push(diffNode(`Changes on ${host.name} to ${item.path}`,base,theirs.text));
-      }else children.push(diffNode(`Differences between yours and ${host.name}’s ${item.path}`,mine?.text??'',theirs?.text??''));
+        if(mine)children.push(diffNode(`Your changes to ${item.path}`,base,mine.text,budget));
+        if(theirs)children.push(diffNode(`Changes on ${host.name} to ${item.path}`,base,theirs.text,budget));
+      }else children.push(diffNode(`Differences between yours and ${host.name}’s ${item.path}`,mine?.text??'',theirs?.text??'',budget));
     }
     let options;
     if(item.kind==='take')options=[{value:'apply',label:item.remoteState==='removed'?'Delete it here too':item.remoteState==='added'?'Add it here':'Apply this change'},{value:'skip',label:'Not now'}];
@@ -343,20 +354,21 @@ function pullDialog({items,contents,skipped,head,host,mode}){
       if(text&&mine&&theirs&&entry.base){const merged=merge3(entry.base.text??'',mine.text,theirs.text);if(merged.clean)options.push({value:'merged',label:'Combine both (they changed different lines)'});}
       if(text&&mine&&theirs)options.push({value:'edit',label:'Edit the result'});
     }
-    children.push({type:'choice',id:`c${i}`,label:`Choice for ${item.path}`,options,value:choices[i]});
+    children.push({type:'choice',id:`c${i}`,label:label(`Choice for ${item.path}`),options,value:choices[i]});
     if(choices[i]==='edit'){
       const start=edits[i]??merge3(entry.base?.text??'',mine.text,theirs.text,{labels:{mine:'mine (this project)',base:'base (last sync)',theirs:`theirs (${host.name})`}}).text;
       edits[i]??=start;
-      children.push({type:'field',id:`e${i}`,input:'textarea',label:`Result for ${item.path}`,value:start,version:version,rows:14,help:'Edit the file as it should be. Remove every <<<<<<<, ||||||| , ======= and >>>>>>> line Scribyra added.'});
+      children.push({type:'field',id:`e${i}`,input:'textarea',label:label(`Result for ${item.path}`).slice(0,120),value:start,version:version,rows:14,help:'Edit the file as it should be. Remove every <<<<<<<, ||||||| , ======= and >>>>>>> line Scribyra added.'});
     }
-    return {type:'group',legend:item.path,legendCode:true,tone:item.kind==='conflict'?'conflict':undefined,kind:item.kind,children};
+    return {type:'group',legend:label(item.path),legendCode:true,tone:item.kind==='conflict'?'conflict':undefined,kind:item.kind,children};
   };
-  const spec=()=>({title:`Pull from ${host.name}`,wide:true,children:[
+  const spec=()=>(budget=diffBudget(),{title:`Pull from ${host.name}`,wide:true,children:[
     {type:'text',tone:'source',text:`${link.repository}${link.subfolder?`/${link.subfolder}`:''} · ${link.branch} · ${short(link.sync?.commit)||'first pull'} → ${short(head)}`},
+    ...(compact?[{type:'text',tone:'note',text:`Many files changed, so changes without a conflict are listed without their differences.`}]:[]),
     {type:'text',text:`${plural(items.length,'file')} changed on ${host.name} since your last sync${conflicts?`; ${plural(conflicts,'of them was','of them were')} also changed here. Choose for each conflict: nothing is overwritten unless you say so`:''}. Nothing changes until you apply.${mode==='reviewing'?' You are Reviewing: text changes become suggestions credited to this plugin; added, deleted and binary files wait for Editing.':''}`},
     ...(conflicts?[{type:'section',label:'Conflicts',children:items.map((item,i)=>item.kind==='conflict'?node(item,i):null).filter(Boolean)}]:[]),
     ...(items.length>conflicts?[{type:'section',label:'Changes',children:items.map((item,i)=>item.kind==='take'?node(item,i):null).filter(Boolean)}]:[]),
-    ...(skipped.length?[{type:'heading',text:'Not synced'},{type:'list',label:'Not synced',items:skipped.slice(0,200).map(item=>({title:item.path,detail:SKIP_REASONS[item.reason]||item.reason}))}]:[]),
+    ...(skipped.length?[{type:'heading',text:'Not synced'},{type:'list',label:'Not synced',items:skipped.slice(0,100).map(item=>({title:label(item.path),detail:SKIP_REASONS[item.reason]||item.reason}))},...(skipped.length>100?[{type:'text',tone:'muted',text:`And ${skipped.length-100} more.`}]:[])]:[]),
     {type:'status',id:'status',text:status},
     {type:'actions',buttons:[{id:'cancel',label:'Cancel'},{id:'none',label:'Apply none'},{id:'apply',label:mode==='reviewing'?'Suggest selected':'Apply selected',primary:true}]},
   ]});
@@ -391,15 +403,17 @@ async function push(){
   }
   const local=await localFiles(),excluded=await exclusions(local),plan=planPush({records,local,excluded});
   if(plan.behind.length){await notify(`Pull first: ${plural(plan.behind.length,'file')} changed on ${host.name} that you have not taken yet (${plan.behind.slice(0,3).join(', ')}${plan.behind.length>3?'…':''}).`);return;}
-  if(!plan.items.length){await notify(`Nothing to push: the project matches ${link.branch} at ${short(head)}.${plan.excluded.length?` ${plural(plan.excluded.length,'excluded file')} stay here.`:''}`);return;}
+  const blockedText=plan.blocked.length?` Not pushed, because on ${host.name} ${plan.blocked.length===1?'it is':'they are'} not ordinary files Scribyra syncs: ${plan.blocked.slice(0,3).map(item=>`${item.path} (${SKIP_REASONS[item.reason]||item.reason})`).join(', ')}${plan.blocked.length>3?'…':''}.`:'';
+  if(!plan.items.length){await notify(`Nothing to push: the project matches ${link.branch} at ${short(head)}.${plan.excluded.length?` ${plural(plan.excluded.length,'excluded file')} stay here.`:''}${blockedText}`);return;}
   const items=[];
   for(const item of plan.items){
-    const content=item.file?await readFile(item.file):null,problem=content?secretProblem(item.path,content.text):null;
+    // Files stored as binary (no text extension: deploy.sh, Makefile…) are scanned too.
+    const content=item.file?await readFile(item.file):null,problem=content?secretProblem(item.path,content.text??(content.bytes.length<=4*1024*1024?decodeText(content.bytes):null)):null;
     let base=null;
     if(item.record?.base&&(content?.text!==null||!item.file)&&items.length<60&&(!item.file||!item.file.binary)){try{const bytes=await remote.blob(item.record.base);base=decodeText(bytes);}catch{base=null;}}
     items.push({...item,content,base,problem,tooLarge:content&&content.bytes.length>PUSH_FILE_BYTES});
   }
-  const decision=await pushDialog({items,host,excludedPaths:plan.excluded,head});
+  const decision=await pushDialog({items,host,excludedPaths:plan.excluded,blocked:plan.blocked,head});
   if(!decision)return;
   const now=await context(),again=modeBlocked(now.mode,'push');if(again)throw new Error(again);
   const chosen=items.filter((item,i)=>decision.include[i]);
@@ -425,27 +439,30 @@ async function push(){
   await notify(`Pushed ${plural(chosen.length,'file')} to ${target} on ${host.name} as ${short(result.commit)}.${decision.newBranch?` This project now follows ${target}.`:''}${left?` ${plural(left,'change')} stay here, not pushed.`:''}`);
 }
 
-function pushDialog({items,host,excludedPaths,head}){
+function pushDialog({items,host,excludedPaths,blocked,head}){
   const include=items.map(item=>!item.problem&&!item.tooLarge);
-  let message='',target='branch',newBranch='',status='';
+  let message='',target='branch',newBranch='',status='',budget=diffBudget();
+  const compact=items.length>COMPACT_AFTER;
   const OP={add:['Added here','added'],update:['Changed here','changed'],delete:['Deleted here','removed']};
-  const spec=()=>({title:`Push to ${host.name}`,wide:true,initialFocus:'message',children:[
+  const spec=()=>(budget=diffBudget(),{title:`Push to ${host.name}`,wide:true,initialFocus:'message',children:[
     {type:'text',tone:'source',text:`${link.repository}${link.subfolder?`/${link.subfolder}`:''} · ${link.branch} at ${short(head)||'—'}`},
     {type:'text',text:`Commits the files you tick as one commit on top of ${short(head)}. If anyone pushes before you, ${host.name} refuses it and nothing changes there: Scribyra never force-pushes. Comments, reviews and history stay on this device.`},
     {type:'field',id:'message',input:'text',label:'Commit message',value:message,placeholder:'Describe your changes'},
     {type:'choice',id:'target',label:'Where to push',options:[{value:'branch',label:`To ${link.branch}`},{value:'new',label:'To a new branch'}],value:target},
     ...(target==='new'?[{type:'field',id:'newbranch',input:'text',label:'New branch name',value:newBranch,placeholder:'scribyra/my-changes',help:`It starts at ${short(head)}; this project then follows it.`}]:[]),
     {type:'section',label:'Files',children:items.map((item,i)=>{
-      const [label,tone]=OP[item.op],children=[{type:'badges',items:[{text:label,tone},...(item.content&&item.content.text===null?[{text:'Binary',tone:'neutral'}]:[])]}];
+      const [opLabel,tone]=OP[item.op],children=[{type:'badges',items:[{text:opLabel,tone},...(item.content&&item.content.text===null?[{text:'Binary',tone:'neutral'}]:[])]}];
       if(item.problem)children.push({type:'text',tone:'warning',text:item.problem.reason});
-      if(item.tooLarge)children.push({type:'text',tone:'warning',text:`Larger than ${PUSH_FILE_BYTES/1024/1024} MiB, more than Scribyra sends in one request. Push it with Git instead.`});
-      if(item.content?.text!==null&&item.content?.text!==undefined)children.push(diffNode(`Changes to ${item.path}`,item.base??'',item.content.text));
-      else if(item.op==='delete'&&item.base!==null)children.push(diffNode(`Changes to ${item.path}`,item.base,''));
+      if(item.tooLarge)children.push({type:'text',tone:'warning',text:`Larger than ${(PUSH_FILE_BYTES/1024/1024).toFixed(1)} MiB, more than Scribyra sends in one request. Push it with Git instead.`});
+      if(compact){}
+      else if(item.content?.text!==null&&item.content?.text!==undefined)children.push(diffNode(`Changes to ${item.path}`,item.base??'',item.content.text,budget));
+      else if(item.op==='delete'&&item.base!==null)children.push(diffNode(`Changes to ${item.path}`,item.base,'',budget));
       else if(item.content)children.push({type:'text',tone:'summary',text:`Binary file, ${size(item.content.bytes.length)}.`});
-      children.push({type:'field',id:`p${i}`,input:'checkbox',label:`Include ${item.path}`,value:include[i],disabled:!!item.problem?.block||item.tooLarge});
-      return {type:'group',legend:item.path,legendCode:true,kind:item.op,children};
+      children.push({type:'field',id:`p${i}`,input:'checkbox',label:label(`Include ${item.path}`).slice(0,120),value:include[i],disabled:!!item.problem?.block||item.tooLarge});
+      return {type:'group',legend:label(item.path),legendCode:true,kind:item.op,children};
     })},
-    ...(excludedPaths.length?[{type:'details',summary:`${plural(excludedPaths.length,'excluded file')} (.scribyraignore or settings)`,text:excludedPaths.join('\n')}]:[]),
+    ...(excludedPaths.length?[{type:'details',summary:`${plural(excludedPaths.length,'excluded file')} (.scribyraignore or settings)`,text:excludedPaths.join('\n').slice(0,20000)}]:[]),
+    ...(blocked.length?[{type:'details',summary:`${plural(blocked.length,'file')} not pushed: not ordinary files on ${host.name}`,text:blocked.map(item=>`${item.path}: ${SKIP_REASONS[item.reason]||item.reason}`).join('\n').slice(0,20000)}]:[]),
     {type:'status',id:'status',text:status},
     {type:'actions',buttons:[{id:'cancel',label:'Cancel'},{id:'push',label:'Push',primary:true}]},
   ]});

@@ -14,8 +14,8 @@
       "version": "1.0.0",
       "api": 1,
       "package": "com.scribyra.github-gitlab-1.0.0.scribyra-plugin.json",
-      "sha256": "84b75a8948e833781f5068e02e0b9dc7c647a64b35ef5e2cdfb00ae41cf7fe24",
-      "size": 97581,
+      "sha256": "b091c0773d9244952faa1739b319dcdd126c644131ff50ef5da2a9703a9672f5",
+      "size": 101450,
       "permissions": {
        "network": [
         "https://api.github.com",
@@ -90,6 +90,6 @@
  "signature": {
   "alg": "ECDSA-P256-SHA256",
   "keyId": "scribyra-plugins-dev-2026-11",
-  "value": "5+pUqWTMWfIftCPchefkTPmzAJG7EG/ztDwH3pXdiSYOYRN+Rgq2mYR1om0UabILfHviyBzTqk3QWiLIrmdPug=="
+  "value": "vjJAJcHwJZXFGv1bEsBKrxfSW7MeN/LcU2jS3Dr/W79EXoJysT/vGnc/NfURAM9PFyjdHiYJBAxwMb1AfJ0BUg=="
  }
 }

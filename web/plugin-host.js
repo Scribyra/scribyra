@@ -22,6 +22,8 @@ export const LIMITS=Object.freeze({applyMessage:160*1024*1024,applyChanges:1024,
 const isObject=value=>!!value&&typeof value==='object'&&!Array.isArray(value);
 const text=(value,max,name)=>{if(typeof value!=='string'||value.length>max)throw failure('invalid_request',`${name} must be text of at most ${max} characters.`);return value;};
 const KEY=/^[A-Za-z0-9._:/-]{1,128}$/;
+// Control, bidirectional and zero-width characters can disguise text (as in plugin-manifest.js).
+const HIDDEN=/[\u0000-\u001f\u007f\u00ad\u061c\u200b-\u200f\u202a-\u202e\u2060-\u2069\ufeff]/;
 // BibTeX citation keys: what \cite{…} accepts, so a contributed key cannot carry TeX.
 const CITATION_KEY=/^[^\s{}%,\\#~"'()=]{1,200}$/;
 /**
@@ -68,7 +70,7 @@ export function startPlugin({record,pkg,env,container}){
   const opened=env.project();
   if(!opened)throw new PluginError('project_closed','Open a project first.');
   const session={doc:opened.doc,projectId:opened.projectId};
-  let stopped=false,inflight=0,activationUntil=0,dismissedAt=0,errors=0,nextHostId=1;const notices=[];let picking=null;const lastRender=new Map();
+  let stopped=false,inflight=0,activationUntil=0,confirmedUntil=0,dismissedAt=0,errors=0,nextHostId=1,asking=false,askPausedUntil=0;const notices=[];let picking=null;const lastRender=new Map();
   const owned=new Map(),dialogs=new Map(),fetches=new Map(),waiting=new Map();
   const decorations=new Map();let citations=[],completions=[],status=null;
   // Origins the person allowed later through network.ask; kept in the plugin's record.
@@ -205,7 +207,9 @@ export function startPlugin({record,pkg,env,container}){
       need('project.write');await ready;const now=project();
       const file=readableFile(now.doc,params?.fileId);
       if(file.binary)throw failure('invalid_request','Binary files have no text to patch.');
-      if(!changeable(file))throw failure('permission_denied','This plugin can change only files it created or files you picked for it.');
+      // Files reachable only through `change` are changed with project.apply, which needs
+      // the person's confirmation; a patch stays limited to owned or picked files.
+      if(!owned.has(file.id))throw failure('permission_denied','This plugin can change only files it created or files you picked for it.');
       writeMode(now);
       if(!Array.isArray(params.edits)||!params.edits.length||params.edits.length>LIMITS.patchEdits)throw failure('invalid_request',`Send one to ${LIMITS.patchEdits} edits.`);
       const source=now.doc.getText(`text:${file.id}`).toString();
@@ -242,6 +246,7 @@ export function startPlugin({record,pkg,env,container}){
       need('secrets');const name=secretName(params),value=text(params?.value,LIMITS.secretBytes,'A secret');
       const origin=params.origin===undefined||params.origin===null?null:text(params.origin,200,'Origin');
       if(origin&&!allowedOrigin(origin))throw failure('network_denied',`A secret can be bound only to an origin this plugin may contact; ${origin} is not one.`);
+      if(origin&&!/^[\x21-\x7e]+$/.test(value))throw failure('invalid_request','A secret bound to an origin is sent as a header, so it holds printable ASCII only.');
       alive();
       const names=await pluginStore.secretNames(plugin.id);if(!names.includes(name)&&names.length>=LIMITS.secretNames)throw failure('quota_exceeded',`A plugin can keep at most ${LIMITS.secretNames} secrets.`);
       alive();await pluginStore.secretSet(plugin.id,name,value,origin);return {};
@@ -255,9 +260,14 @@ export function startPlugin({record,pkg,env,container}){
       let origin;try{origin=normalOrigin(text(params?.origin,200,'Origin'));}catch(error){throw failure('invalid_request',error.message);}
       if(allowedOrigin(origin))return {granted:true,origin};
       if(!activated())throw failure('not_allowed','A plugin can ask for an address only right after you used it.');
+      if(asking)throw failure('rate_limited','This plugin is already asking about an address.');
+      if(Date.now()<askPausedUntil)throw failure('not_allowed','You declined this plugin’s last request for an address.');
       const reason=text(params?.reason??'',200,'Reason');
-      const allowed=await env.askOrigin?.({plugin,origin,reason,purpose:granted['network.ask'].purpose});alive();
-      if(allowed)extraOrigins.add(origin);
+      if(HIDDEN.test(reason))throw failure('invalid_request','The reason has hidden characters.');
+      asking=true;let allowed=false;
+      try{allowed=await env.askOrigin?.({plugin,origin,reason,purpose:granted['network.ask'].purpose});}finally{asking=false;}
+      alive();
+      if(allowed)extraOrigins.add(origin);else{askPausedUntil=Date.now()+LIMITS.dismissPauseMs;activationUntil=0;}
       return {granted:!!allowed,origin};
     },
     'ui.dialog.open':async params=>{
@@ -271,7 +281,9 @@ export function startPlugin({record,pkg,env,container}){
           if(stopped)return;
           // Clicks and changes are the person using the plugin; cancel and Dismiss are not.
           if(event.type==='click'||event.type==='change')gesture();
-          if(event.type==='close'){dismissedAt=Date.now();activationUntil=0;}
+          // Only a click inside the plugin's own dialog confirms a project.apply.
+          if(event.type==='click')confirmedUntil=Date.now()+LIMITS.activationMs;
+          if(event.type==='close'){dismissedAt=Date.now();activationUntil=0;confirmedUntil=0;}
           send({type:'event',event:'dialog.event',data:{dialogId,...event}});
         },
         onClosed:()=>{dialogs.delete(dialogId);}});
@@ -303,6 +315,7 @@ export function startPlugin({record,pkg,env,container}){
       if(params?.status!==null&&params?.status!==undefined){
         const value=params.status;if(!isObject(value))throw failure('invalid_request','A status is an object.');
         const actions=Array.isArray(value.actions)?value.actions:[];if(actions.length>3)throw failure('invalid_request','A status has at most three buttons.');
+        for(const key of ['label','text','title'])if(typeof value[key]==='string'&&HIDDEN.test(value[key]))throw failure('invalid_request','Status text cannot hold control, bidirectional or zero-width characters.');
         next={label:text(value.label,60,'Status label'),text:text(value.text,160,'Status text'),title:value.title===undefined?'':text(value.title,300,'Status title'),tone:['neutral','attention','error'].includes(value.tone)?value.tone:'neutral',actions:actions.map(action=>{
           if(!isObject(action)||typeof action.id!=='string'||!/^[a-z][a-z0-9-]{0,31}$/.test(action.id))throw failure('invalid_request','Status buttons need an id.');
           const modes=Array.isArray(action.modes)?action.modes.filter(mode=>['editing','reviewing','viewing'].includes(mode)):['editing','reviewing','viewing'];
@@ -350,12 +363,15 @@ export function startPlugin({record,pkg,env,container}){
     // A bound secret goes only to its own origin, added here so the plugin never holds it.
     if(params.auth!==undefined&&params.auth!==null){
       const auth=params.auth;if(!isObject(auth)||!['Authorization','PRIVATE-TOKEN'].includes(auth.header)||!['Bearer','token',''].includes(auth.scheme??''))throw failure('invalid_request','auth is {secret, header: Authorization | PRIVATE-TOKEN, scheme: Bearer | token | ""}.');
+      need('secrets');
       const saved=await pluginStore.secretRecord(plugin.id,secretName({name:auth.secret}));alive();
       if(!saved)throw failure('not_found','That secret is not saved on this device.');
       if(saved.origin!==url.origin)throw failure('network_denied',`That secret may be sent only to ${saved.origin||'no origin (it is not bound)'}.`);
-      headers.set(auth.header,auth.scheme?`${auth.scheme} ${saved.value}`:saved.value);
+      // Never echo a secret in an error the plugin could read.
+      try{headers.set(auth.header,auth.scheme?`${auth.scheme} ${saved.value}`:saved.value);}catch{throw failure('invalid_request','That secret cannot be sent as a header.');}
     }
-    const body=params.body===undefined||params.body===null?undefined:typeof params.body==='string'||params.body instanceof Uint8Array?params.body:null;
+    // A view's whole buffer travels with it; send only the bytes it shows.
+    const body=params.body===undefined||params.body===null?undefined:typeof params.body==='string'?params.body:params.body instanceof Uint8Array?params.body.slice():null;
     if(body===null||body?.length>LIMITS.message)throw failure('invalid_request','A request body is text or bytes of at most 8 MiB.');
     if(body!==undefined&&(method==='GET'||method==='HEAD'))throw failure('invalid_request','GET and HEAD requests have no body.');
     if(globalThis.navigator?.onLine===false)throw failure('offline','This device is offline.');
@@ -382,7 +398,10 @@ export function startPlugin({record,pkg,env,container}){
   // changes to existing files are possible, and each changed block becomes a suggestion.
   async function applyChanges(params){
     need('project.write');await ready;const now=project();writeMode(now);
-    if(!activated())throw failure('not_allowed','A plugin can apply changes only right after you confirmed them in its dialog.');
+    // A gesture elsewhere (a menu item, the status item) is not a confirmation: only a click
+    // in the plugin's dialog in the last minute, and it covers one change set.
+    if(Date.now()>=confirmedUntil)throw failure('not_allowed','A plugin can apply changes only right after you confirmed them in its dialog.');
+    confirmedUntil=0;
     const list=Array.isArray(params?.changes)?params.changes:null;
     if(!list||!list.length||list.length>LIMITS.applyChanges)throw failure('invalid_request',`Send one to ${LIMITS.applyChanges} changes.`);
     const create=granted['project.write'].create,doc=now.doc,seen=new Set(),deleted=new Set(),plan=[];
@@ -396,14 +415,14 @@ export function startPlugin({record,pkg,env,container}){
         const path=text(change.path,240,'Path');try{assertPath(path);}catch(error){throw failure('invalid_request',error.message);}
         if(!matchesAny(create,path))throw failure('permission_denied',`This plugin may not create “${path}”.`);
         const key=path.normalize('NFC').toLowerCase();if(seen.has(key))throw failure('invalid_request',`${path} appears twice.`);seen.add(key);
-        plan.push({op:'add',path,content:typeof change.text==='string'?change.text:content(change,true)});continue;
+        plan.push({op:'add',path,content:typeof change.text==='string'?change.text:content(change,true).slice()});continue;
       }
       const file=readableFile(doc,change.fileId);
       if(!changeable(file))throw failure('permission_denied',`This plugin may not change ${file.path}.`);
       if(seen.has(file.id))throw failure('invalid_request',`${file.path} appears twice.`);seen.add(file.id);
       if(typeof change.expect!=='string'||change.expect!==fingerprint(doc,file).hash)throw failure('revision_conflict',`${file.path} changed after the plugin read it. Nothing was applied.`);
       if(change.op==='delete'){deleted.add(file.path.normalize('NFC').toLowerCase());plan.push({op:'delete',file});}
-      else plan.push({op:'update',file,content:content(change,file.binary)});
+      else{const value=content(change,file.binary);plan.push({op:'update',file,content:typeof value==='string'?value:value.slice()});}
     }
     for(const item of plan)if(item.op==='add'&&projectFiles(doc).some(file=>file.path.normalize('NFC').toLowerCase()===item.path.normalize('NFC').toLowerCase()&&!deleted.has(file.path.normalize('NFC').toLowerCase())))throw failure('exists',`${item.path} already exists.`);
     if(now.mode==='reviewing'){

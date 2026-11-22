@@ -103,6 +103,12 @@ test('a remote tree: only files under the subfolder, with symlinks, submodules, 
   assert.deepEqual([...files.keys()],['main.tex','run.sh','link.tex','vendor','huge.bin','.git/config','../escape.tex']);
   assert.deepEqual([...files.values()].map(file=>file.skip||''),['','','symlink','submodule','large','private','unsafe']);
   assert.equal(files.get('run.sh').mode,'100755');
+  // Names that differ only in case or Unicode form: the second is not synced.
+  const twins=remoteFiles([{path:'A.tex',type:'blob',mode:'100644',sha:'1',size:1},{path:'a.tex',type:'blob',mode:'100644',sha:'2',size:1},{path:'caf\u00e9.tex',type:'blob',mode:'100644',sha:'3',size:1},{path:'cafe\u0301.tex',type:'blob',mode:'100644',sha:'4',size:1}],'');
+  assert.deepEqual([...twins.values()].map(file=>file.skip||''),['','case','','case']);
+  // A local file where the remote has a symlink or submodule is never pushed over it.
+  const linked=recordsAtLink({remote:files,local:new Map(),blobIds:{}});
+  assert.deepEqual(planPush({records:linked,local:local({'link.tex':'mine','vendor':'mine'})}).blocked,[{path:'link.tex',reason:'symlink'},{path:'vendor',reason:'submodule'}]);
 });
 
 test('.scribyraignore follows .gitignore: anchors, folders, ** and re-inclusion',()=>{
@@ -208,7 +214,13 @@ test('records after a pull: applied, same, kept mine and pending changes',()=>{
   assert.deepEqual(next['u.tex'],record('u1','hu'));
   assert.deepEqual(next['n.tex'],record('n1','hn'));
   assert.deepEqual(next['k.tex'],record('k2','hk-edited'));
-  assert.equal(next['skip.tex'],undefined);
+  // A remote entry that is not synced is remembered, so a push never replaces it.
+  assert.deepEqual(next['skip.tex'],{remote:'z',base:null,mode:'120000',hash:null,local:false,skip:'symlink'});
+  const lfs=recordsAfterPull({records:{'big.pdf':record('b1','hb')},remote:remote({'big.pdf':'b2'}),outcomes:{'big.pdf':{result:'skip',reason:'lfs'}}});
+  assert.deepEqual(lfs['big.pdf'],{...record('b1','hb'),remote:'b2',skip:'lfs'});
+  assert.deepEqual(planPush({records:lfs,local:local({'big.pdf':'hb-edited'})}),{items:[],behind:[],excluded:[],blocked:[{path:'big.pdf',reason:'lfs'}]});
+  // Once the remote entry is an ordinary file again, the path syncs as usual.
+  assert.equal(recordsAfterPull({records:lfs,remote:remote({'big.pdf':'b3'}),outcomes:{}})['big.pdf'].skip,undefined);
   // A combined or edited result differs from theirs (no fingerprint): the next push sends it.
   const merged=recordsAfterPull({records:{'c.tex':record('c1','hc')},remote:remote({'c.tex':'c2'}),outcomes:{'c.tex':{result:'applied',exists:true,hash:null}}});
   assert.deepEqual(planPush({records:merged,local:local({'c.tex':'hc-merged'})}).items.map(item=>[item.path,item.op]),[['c.tex','update']]);
@@ -222,7 +234,7 @@ test('records after a push and at link time',()=>{
   const next=recordsAfterPush({records:{'a.tex':record('a1','ha'),'b.tex':record('b1','hb'),'c.tex':record('c1','hc')},pushed:[{path:'a.tex',op:'update',sha:'a2',hash:'ha2'},{path:'b.tex',op:'delete'},{path:'n.tex',op:'add',sha:'n1',hash:'hn',mode:'100644'}]});
   assert.deepEqual(next,{'a.tex':record('a2','ha2'),'c.tex':record('c1','hc'),'n.tex':record('n1','hn')});
   const linked=recordsAtLink({remote:remote({'same.tex':'s1','edited.tex':'e1','skipped.pdf':'p1','link.tex':{sha:'l',mode:'120000',skip:'symlink'}}),local:local({'same.tex':'hs','edited.tex':'he','mine.tex':'hm'}),blobIds:{'same.tex':'s1','edited.tex':'e-local'}});
-  assert.deepEqual(linked,{'same.tex':record('s1','hs'),'edited.tex':record('e1',null),'skipped.pdf':record('p1',null,{local:false})});
+  assert.deepEqual(linked,{'same.tex':record('s1','hs'),'edited.tex':record('e1',null),'skipped.pdf':record('p1',null,{local:false}),'link.tex':{remote:'l',base:null,mode:'120000',hash:null,local:false,skip:'symlink'}});
   // A file skipped at import (absent here) is neither deleted by a push nor offered again unless it changes.
   assert.deepEqual(planPush({records:linked,local:local({'same.tex':'hs','edited.tex':'he','mine.tex':'hm'})}).items.map(item=>[item.path,item.op]),[['edited.tex','update'],['mine.tex','add']]);
   assert.deepEqual(planPull({records:linked,remote:remote({'same.tex':'s1','edited.tex':'e1','skipped.pdf':'p1'}),local:local({'same.tex':'hs','edited.tex':'he'})}).items,[]);

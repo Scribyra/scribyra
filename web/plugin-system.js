@@ -175,7 +175,14 @@ export function pluginSystem({env,policy,notify,changed,askOrigin=async()=>false
     async grant(id,permission){await load();const record=records.get(id);if(!record||!record.manifest.permissions[permission])return;const revoked=(record.revoked||[]).filter(key=>key!==permission);await pluginStore.put({...record,revoked,granted:effective(record.manifest.permissions,revoked)});await restart(id);},
     async uninstall(id){stop(id);await pluginStore.uninstall(id);await reload();update();},
     /** Forgets an origin the person allowed through network.ask; the plugin restarts without it. */
-    async removeOrigin(id,origin){await load();const record=records.get(id);if(!record)return;await pluginStore.put({...record,addedOrigins:(record.addedOrigins||[]).filter(item=>item!==origin)});await restart(id);},
+    async removeOrigin(id,origin){
+      await load();const record=records.get(id);if(!record)return;
+      stop(id);
+      await pluginStore.put({...record,addedOrigins:(record.addedOrigins||[]).filter(item=>item!==origin)});
+      // Secrets bound to it go too, so allowing the origin again does not revive a token.
+      await pluginStore.secretsForOrigin(id,origin).then(names=>Promise.all(names.map(name=>pluginStore.secretDelete(id,name))));
+      await restart(id);
+    },
     /** After developer mode changes: sideloaded plugins start or stop. */
     async refresh(){await reload();for(const record of records.values()){if(!runnable(record))stop(record.id);}if(env.project())await startAll();update();},
     newerVersion(record,entry){const versions=(entry?.versions||[]).filter(version=>version.compatible&&compareVersions(version.version,record.version)>0);return versions.sort((a,b)=>compareVersions(b.version,a.version))[0]||null;},

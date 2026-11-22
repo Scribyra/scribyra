@@ -217,7 +217,16 @@ export function addedPermissions(granted,requested){
   }
   return added;
 }
-const privateOrigin=origin=>{const host=new URL(origin).hostname.replace(/^\[|\]$/g,'');return /^(localhost|127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|169\.254\.|::1$|f[cd]|fe80:)/i.test(host)||host.endsWith('.local');};
+/** True for an origin on this computer or a local network: loopback, private, link-local,
+ * carrier-grade NAT and unspecified addresses, and local-only or single-label names. */
+export function privateOrigin(origin){
+  const host=new URL(origin).hostname.toLowerCase().replace(/^\[|\]$/g,'');
+  if(host==='localhost'||/\.(localhost|local|internal|home\.arpa|lan)$/.test(host))return true;
+  const v4=/^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
+  if(v4){const a=+v4[1],b=+v4[2];return a===0||a===10||a===127||a===169&&b===254||a===172&&b>=16&&b<=31||a===192&&b===168||a===100&&b>=64&&b<=127;}
+  if(host.includes(':'))return host==='::'||host==='::1'||host.startsWith('::ffff:')||/^f[cd][0-9a-f]{0,2}:/.test(host)||/^fe[89ab][0-9a-f]?:/.test(host);
+  return !host.includes('.');
+}
 const list=items=>items.length<=1?items.join(''):`${items.slice(0,-1).join(', ')} and ${items.at(-1)}`;
 /** Plain words for the consent dialog and the manager, one line per permission. */
 // Most consequential first: what it reads and changes, where it sends, what it keeps.

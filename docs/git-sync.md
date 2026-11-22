@@ -323,17 +323,57 @@ An allowed origin is kept in the plugin's record and listed in the Plugins manag
 
 ## Security review
 
-An independent adversarial review covered token handling, scope, path traversal from
-remote trees, conflict application and pushing unintended files. Findings and fixes are in
-[Security review](#review-findings) below.
+An independent adversarial review (November 22, 2026) covered:
 
-## Review findings
+- token handling;
+- scope;
+- path traversal from remote trees;
+- conflict application;
+- pushes of unintended files;
+- denial of service.
 
-See the table at the end of this file once the review completes.
+It found no way for the token to reach an origin other than its bound one. It confirmed six
+bugs and listed further hardening. All were fixed, with regression tests: in
+`tests/git-sync.test.mjs`, in `tests/browser/plugins.spec.js` ("review: change globs…")
+and in the specs above.
 
-## Verification
+| Finding | Severity | Fix |
+| --- | --- | --- |
+| `project.write.change` also widened `project.patch`. A plugin could rewrite any matching file silently, without a dialog. | high | `project.patch` stays limited to owned and picked files. Files reached only through `change` are changed only with `project.apply`. |
+| `project.apply` needed only "activation", which any host request gives, for example a status-item button. | medium | `project.apply` needs a click inside the plugin's own dialog in the last minute. One click covers one change set. |
+| Revoking `secrets` did not stop the host adding a bound secret to requests. | medium | `net.fetch {auth}` needs `secrets` too. |
+| A remote symlink, submodule or large file was forgotten. A local file at that path was then pushed over it on GitHub. | medium | Skipped remote entries are remembered (`skip`), and pushing to such a path is blocked and listed. The same holds for LFS pointers and non-UTF-8 text found on download. |
+| Pull and push dialogs could exceed Scribyra's dialog bounds and fail on ordinary files: 2,000-character lines, 6,000 diff lines, 2,000 parts, 200-character labels. | medium | Lines are cut at 1,000 characters. Each dialog spends a budget of 4,000 diff lines. More than 120 files switch to a compact list. Labels are shortened. |
+| GitLab protection failed open. A missing `X-Gitlab-Last-Commit-Id` dropped the per-file check. A missing `Link` header cut the file list, so missing files looked deleted. | medium | Both now stop with an explanation. A `Link` to another address is refused. |
+| Remote names differing only in case or Unicode form made every pull fail. | low | Skipped as "differs only in letter case". |
+| A GitLab blob over 16 MiB aborted the whole pull. | low | Skipped as large, per file. |
+| The Myers diff kept every frontier, about 128 MB for a pathological file, on the main thread in Reviewing. | low | Only the reachable window is kept, and at most 1,500 edits before a coarse fallback (about 9 MB). |
+| Files stored as binary (`deploy.sh`, `Makefile`) skipped the secret scan. | low | They are decoded and scanned when they are UTF-8. |
+| A 6 MiB file encodes to just over the 8 MiB request limit. Escaped JSON could grow text batches past it. | low | The limit is 5.5 MiB per file. Request bodies are measured as the JSON sent. Text over 1 MiB goes as a blob. |
 
-See [Verification](#verification-results).
+**Hardening, also done:**
+
+- Removing an allowed origin deletes the secrets bound to it, so allowing it again does not
+  revive a token.
+- `net.requestOrigin` allows one prompt at a time. After a Cancel, it needs a new gesture
+  and a 2 s pause.
+- The local-network warning now covers `0.0.0.0`, `100.64.0.0/10`, IPv4-mapped IPv6 and
+  single-label names. It no longer flags public names such as `fdroid.org`.
+- Status text refuses control, bidirectional and zero-width characters.
+- Bytes are copied at the host boundary, so a view's whole buffer never travels with it.
+- Bound secrets must be printable ASCII, so they are header-safe.
+- A header error never echoes the secret.
+
+**Accepted and documented:**
+
+- In Reviewing, a failure part-way through a set of suggestions leaves the earlier ones.
+  They are only suggestions, and the next pull offers the rest.
+- An imported project's recorded source is shown as recorded. Linking it still checks
+  access with the host and, for a new origin, asks.
+
+## Verification results
+
+See [Verification](#verification) at the end.
 
 ## Limits
 

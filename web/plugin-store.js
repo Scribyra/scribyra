@@ -86,6 +86,7 @@ export const pluginStore={
   },
   async secretGet(pluginId,name){return (await (await secretDb()).get('secrets',[pluginId,name]))?.value??null;},
   async secretRecord(pluginId,name){return (await (await secretDb()).get('secrets',[pluginId,name]))||null;},
+  async secretsForOrigin(pluginId,origin){return (await (await secretDb()).getAllFromIndex('secrets','plugin',pluginId)).filter(item=>item.origin===origin).map(item=>item.name);},
   async secretNames(pluginId){return (await (await secretDb()).getAllFromIndex('secrets','plugin',pluginId)).map(item=>item.name).sort();},
   async secretSet(pluginId,name,value,origin=null){await (await secretDb()).put('secrets',{pluginId,name,value,...(origin?{origin}:{})});},
   async secretDelete(pluginId,name){await (await secretDb()).delete('secrets',[pluginId,name]);},
