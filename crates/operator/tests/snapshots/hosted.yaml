@@ -33,7 +33,7 @@ stringData:
           "active_per_owner": 2,
           "concurrency": 2,
           "cpu_seconds": 300,
-          "memory_mib": 2048,
+          "memory_mib": 3072,
           "output_mib": 64,
           "passes": 4,
           "per_member_per_hour": 120,
@@ -557,7 +557,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: cd1a825e13abc0fe
+        scribyra.com/config-hash: fee2954d76cc13b5
       labels:
         app.kubernetes.io/component: api
         app.kubernetes.io/instance: tenant-42
@@ -964,7 +964,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: cd1a825e13abc0fe
+        scribyra.com/config-hash: fee2954d76cc13b5
       labels:
         app.kubernetes.io/component: worker
         app.kubernetes.io/instance: tenant-42
@@ -1019,7 +1019,7 @@ spec:
           timeoutSeconds: 3
         resources:
           limits:
-            memory: 4352Mi
+            memory: 6400Mi
           requests:
             cpu: 1000m
             memory: 2304Mi
@@ -1163,7 +1163,7 @@ spec:
   template:
     metadata:
       annotations:
-        scribyra.com/config-hash: cd1a825e13abc0fe
+        scribyra.com/config-hash: fee2954d76cc13b5
       labels:
         app.kubernetes.io/component: migrate
         app.kubernetes.io/instance: tenant-42

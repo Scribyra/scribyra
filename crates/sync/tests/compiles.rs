@@ -439,7 +439,7 @@ fn library(sr: &mut Sr) -> (tokio::runtime::Runtime, std::sync::Arc<scribyra_syn
     (runtime, compiles)
 }
 fn finished(pdf: &[u8]) -> scribyra_sync::compiles::Finished {
-    scribyra_sync::compiles::Finished { outcome: "success".into(), error: None, content_hash: None, cpu_ms: 1, passes: 1, pdf: Some(pdf.to_vec()), log: Some("log".into()) }
+    scribyra_sync::compiles::Finished { outcome: "success".into(), error: None, content_hash: None, cpu_ms: 1, passes: 1, pdf: Some(pdf.to_vec()), log: Some("log".into()), packages: Vec::new() }
 }
 
 #[test]
@@ -497,7 +497,7 @@ impl scribyra_compile::Runner for Waiting {
         if cancel.is_cancelled() {
             self.cancelled.fetch_add(1, SeqCst);
         }
-        scribyra_compile::Outcome { status: scribyra_compile::Status::Cancelled, pdf: None, log: String::new(), cpu_ms: 0, passes: 0, peak_memory: 0 }
+        scribyra_compile::Outcome { status: scribyra_compile::Status::Cancelled, pdf: None, log: String::new(), cpu_ms: 0, passes: 0, peak_memory: 0, packages: Vec::new(), engine_memory: 0 }
     }
     fn texlive_id(&self) -> &str {
         "waiting"
@@ -755,6 +755,29 @@ fn the_webassembly_engine_is_the_default_and_compiles_like_the_browser() {
     let got = ben.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf"), None);
     assert!(got.status == 200 && got.body.starts_with(b"%PDF-"));
     assert!(std::fs::read_dir(&cache).unwrap().count() >= 1, "bundled archives went through the cache");
+    // What the compile installed is remembered with the project, for this engine version only.
+    let texlive = status["texlive"].as_str().unwrap().to_owned();
+    let remembered = |p: &str| postgres().psql(&sr.db(), &format!("SELECT texlive || ':' || array_to_string(packages, ',') FROM compile_packages WHERE project = '{p}' ORDER BY texlive"));
+    let first = remembered(&p);
+    assert!(first.starts_with(&format!("{texlive}:")) && first.contains("biblatex") && !first.contains('\n'), "{first}");
+    let passes = |job: &str| postgres().psql(&sr.db(), &format!("SELECT passes FROM compiles WHERE job = '{job}'")).parse::<u32>().unwrap();
+    let first_passes = passes(&job);
+    // A set kept for another engine version is not this engine's, and goes with the next success.
+    postgres().psql(&sr.db(), &format!("INSERT INTO compile_packages (project, texlive, packages) VALUES ('{p}', 'wasm-0000000000000000', ARRAY['dist--siunitx'])"));
+    // The next job of the project starts with the remembered set: same PDF pages, no more passes,
+    // and the same set stored again.
+    assert_eq!(ana.append(&p, "a", 4, &doc.type_text("f1", "% edited\n")).status, 201);
+    let again = ana.compile(&p, None).json()["job"].as_str().unwrap().to_owned();
+    let status = ana.compiled(&p, &again);
+    let log = String::from_utf8_lossy(&ana.call("GET", &format!("/v1/sr/projects/{p}/compile/log"), None).body).into_owned();
+    assert_eq!(status["job"]["outcome"], "success", "{status}\n{log}");
+    assert!(passes(&again) <= first_passes, "{} passes, {first_passes} before", passes(&again));
+    assert!(!log.contains("could not be fetched before compiling"), "{log}");
+    assert_eq!(remembered(&p), first);
+    let second = ben.call("GET", &format!("/v1/sr/projects/{p}/compile/pdf"), None);
+    assert!(second.status == 200 && second.body.starts_with(b"%PDF-"));
+    // The same source (a comment added): the same PDF but for its ID and dates.
+    assert!(second.body.len().abs_diff(got.body.len()) <= 64, "{} bytes, {} before", second.body.len(), got.body.len());
     // An error names its file and line.
     let (bad, bdoc) = paper(&ana, "Broken", "\\documentclass{article}\n\\begin{document}\n\\input{ch/one}\n\\end{document}\n");
     assert_eq!(ana.append(&bad, "a", 3, &bdoc.add_text("f2", "ch/one.tex", None, "Text.\n\\nosuchmacro\n")).status, 201);
@@ -770,6 +793,6 @@ fn the_webassembly_engine_is_the_default_and_compiles_like_the_browser() {
     // The worker's metrics count the package cache's work, naming no package or project.
     let text = support::sso::fetch(&format!("http://127.0.0.1:{metrics_port}/metrics"), None).body;
     assert!(text.contains("scribyra_compile_package_requests_total{result=\"bundled\"}") && !text.contains("scribyra_compile_package_requests_total{result=\"bundled\"} 0"), "{text}");
-    assert!(text.contains("scribyra_compile_jobs_total{outcome=\"success\"} 1") && !text.contains(&p) && !text.contains("biblatex"), "{text}");
+    assert!(text.contains("scribyra_compile_jobs_total{outcome=\"success\"} 2") && !text.contains(&p) && !text.contains("biblatex"), "{text}");
     let _ = std::fs::remove_dir_all(&cache);
 }

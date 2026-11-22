@@ -441,7 +441,9 @@ fn web(cr: &Scribyra, env: &Env, plan: &Plan) -> Vec<Object> {
 }
 
 /// Pod memory the WebAssembly engine typically uses per concurrent job (Node, the engine's heap
-/// and the job's in-memory scratch: 0.5–0.9 GiB measured, docs/compile-engines.md).
+/// and the job's in-memory scratch: 0.5–1 GiB measured on the benchmark documents,
+/// docs/compile-engines.md). The limit is `memoryMiB` per job (default 3072: the engine's 2 GiB
+/// heap ceiling plus 1 GiB for Node), so a job at the ceiling fits beside the others.
 const WORKER_REQUEST_MIB_PER_JOB: u64 = 1024;
 /// The worker process itself and Node's start-up, besides the jobs.
 const WORKER_OVERHEAD_MIB: u64 = 256;

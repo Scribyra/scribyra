@@ -81,7 +81,7 @@ fn limits() -> Limits {
 }
 
 fn job(files: &[(&str, &str)]) -> Job {
-  Job { files: files.iter().map(|(p, s)| (p.to_string(), s.as_bytes().to_vec())).collect(), main: files[0].0.into(), engine: Engine::Lualatex, bibliography: Bibliography::None, source_date_epoch: 1_700_000_000 }
+  Job { files: files.iter().map(|(p, s)| (p.to_string(), s.as_bytes().to_vec())).collect(), main: files[0].0.into(), engine: Engine::Lualatex, bibliography: Bibliography::None, source_date_epoch: 1_700_000_000, packages: vec![] }
 }
 
 fn leftovers(m: &str) -> Vec<String> {
@@ -135,6 +135,71 @@ fn a_missing_package_comes_through_the_cache_once() {
   assert_eq!(mirror.hits.load(Ordering::SeqCst), before + 1);
   // The job read the entry itself (read-only); the worker was not asked again.
   assert_eq!(packages.stats.mirror.load(Ordering::Relaxed), 1);
+}
+
+/// What the service stores for a project after a successful compile and passes with its next job.
+fn with_packages(mut j: Job, packages: &[String]) -> Job { j.packages = packages.to_vec(); j }
+
+#[test]
+fn a_remembered_package_saves_the_pass_that_would_find_it() {
+  // Named through a macro: the up-front scan cannot see it, so the first compile fails a pass.
+  let doc = "\\documentclass{article}\\def\\tablepackage{booktabs}\\usepackage{\\tablepackage}\\begin{document}\\begin{tabular}{ll}\\toprule a&b\\\\\\bottomrule\\end{tabular}\\end{document}\n";
+  let first = runner().run(&job(&[("main.tex", doc)]), &limits(), &Cancel::new());
+  assert_pdf(&first);
+  assert_eq!(first.passes, 3, "{}", &first.log[..first.log.len().min(3000)]);
+  assert_eq!(first.packages, ["dist--booktabs"]);
+  let again = runner().run(&with_packages(job(&[("main.tex", doc)]), &first.packages), &limits(), &Cancel::new());
+  assert_pdf(&again);
+  // Installed before the first pass: no failing pass to find it.
+  assert_eq!(again.passes, 2, "{}", &again.log[..again.log.len().min(3000)]);
+  assert_eq!(again.packages, first.packages, "the set stays remembered");
+}
+
+#[test]
+fn remembered_packages_are_fetched_together_before_the_sandbox_starts() {
+  let doc = "\\documentclass{article}\n\\usepackage[romanian]{babel}\n\\usepackage{algpseudocode}\n\\begin{document}\n\\today\n\\begin{algorithmic}\\State $x \\gets 1$\\end{algorithmic}\n\\end{document}\n";
+  let (cache, mirror) = (temp_dir("remember-first"), mirror());
+  let (b, _) = runner_with(&cache, Some(mirror.url.clone()));
+  let first = b.run(&job(&[("main.tex", doc)]), &limits(), &Cancel::new());
+  assert_pdf(&first);
+  for name in ["babel-romanian", "algorithmicx"] { assert!(first.packages.iter().any(|p| p == name), "{name} in {:?}", first.packages); }
+  // Another worker with an empty cache: the remembered set (as the service passes it), once
+  // repeated, and a name the catalog does not have.
+  let (cache, mirror) = (temp_dir("remember-cold"), mirror_serving(&[]));
+  let (b, packages) = runner_with(&cache, Some(mirror.url.clone()));
+  let mut known = first.packages.clone();
+  known.push(first.packages[0].clone());
+  known.push("no-such-package-scribyra".into());
+  let o = b.run(&with_packages(job(&[("main.tex", doc)]), &known), &limits(), &Cancel::new());
+  assert_pdf(&o);
+  // Both mirror packages came in the batch before the job started, each once; the job read
+  // them from the cache and asked the worker for nothing on its channel (a request for an entry
+  // already there counts as a hit).
+  assert_eq!(mirror.hits.load(Ordering::SeqCst), 2);
+  assert_eq!(packages.stats.mirror.load(Ordering::Relaxed), 2);
+  assert_eq!(packages.stats.hits.load(Ordering::Relaxed), 0);
+  for name in ["babel-romanian", "algorithmicx"] { assert!(cache.join(format!("{}.tar.xz", packages.package(name).unwrap().sha512)).is_file(), "{name}"); }
+  assert!(o.log.contains("[1 of the packages this project used last time could not be fetched before compiling: no-such-package-scribyra]"), "{}", &o.log[o.log.len().saturating_sub(2000)..]);
+  assert!(o.passes <= first.passes, "{} passes, {} without the remembered set", o.passes, first.passes);
+  let (mut got, mut want) = (o.packages.clone(), first.packages.clone());
+  got.sort(); want.sort();
+  assert_eq!(got, want);
+}
+
+#[test]
+fn the_engine_ceiling_stays_within_the_job_memory_limit() {
+  // The patched runtime's own ceiling (its glue's getHeapMax reads Module.scribyraHeapMax).
+  assert_eq!(runner().engine_memory_build_mib(), Some(ENGINE_MEMORY_MAX_MIB));
+  assert_eq!(ENGINE_MEMORY_MAX_MIB, 2047);
+  let at = |memory_mib| engine_memory_mib(ENGINE_MEMORY_MAX_MIB, &Limits { memory_mib, ..limits() });
+  assert_eq!((at(4096), at(3072), at(2048), at(1536), at(640)), (2047, 2047, 1024, 512, 256));
+  assert_eq!(engine_memory_mib(576, &Limits { memory_mib: 3072, ..limits() }), 576, "never above the build's own");
+  // With 2048 MiB per job the engine stops at 1024 MiB, with a message naming it, before the
+  // job's cgroup would end it.
+  let o = runner().run(&job(&[("main.tex", BOMB)]), &Limits { memory_mib: 2048, ..limits() }, &Cancel::new());
+  assert_eq!(o.status, Status::LimitExceeded(Limit::Memory), "{}", o.log);
+  assert!(o.log.contains("needs more memory than the WebAssembly TeX engine can use on this server (1024 MiB per compile") && o.log.contains("raise the compile memory limit"), "{}", &o.log[..o.log.len().min(2000)]);
+  assert!(!o.log.contains("[stopped: memory limit"), "the engine stopped first: {}", &o.log[o.log.len().saturating_sub(2000)..]);
 }
 
 #[test]
@@ -213,7 +278,8 @@ fn memory_limits_name_the_engine_ceiling_or_the_job_limit() {
   // The engine's own WebAssembly heap ceiling is below the job's limit: a clear message.
   let o = runner().run(&job(&[("main.tex", BOMB)]), &Limits { memory_mib: 3072, ..limits() }, &Cancel::new());
   assert_eq!(o.status, Status::LimitExceeded(Limit::Memory), "{}", o.log);
-  assert!(o.log.contains("needs more memory than the WebAssembly TeX engine can use") && o.log.contains("4 GB"), "{}", &o.log[..o.log.len().min(2000)]);
+  assert!(o.log.contains("needs more memory than the WebAssembly TeX engine can use (2047 MiB") && o.log.contains("4 GB"), "{}", &o.log[..o.log.len().min(2000)]);
+  assert!(!o.log.contains("[stopped: memory limit"), "the engine stopped first: {}", &o.log[o.log.len().saturating_sub(2000)..]);
   // A document cannot pass a TeX error off as the engine's memory limit.
   let spoof = "\\documentclass{article}\\begin{document}\\typeout{/bin/busytex stderr: Cannot enlarge memory, Aborted(OOM)}\\undefinedmacro\\end{document}\n";
   let o = runner().run(&job(&[("main.tex", spoof)]), &limits(), &Cancel::new());

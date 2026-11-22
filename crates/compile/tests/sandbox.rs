@@ -22,7 +22,7 @@ fn marker(tag: &str) -> String {
 }
 
 fn job(engine: Engine, files: &[(&str, &str)]) -> Job {
-  Job { files: files.iter().map(|(p, s)| (p.to_string(), s.as_bytes().to_vec())).collect(), main: files[0].0.into(), engine, bibliography: Bibliography::Bibtex, source_date_epoch: 1_700_000_000 }
+  Job { files: files.iter().map(|(p, s)| (p.to_string(), s.as_bytes().to_vec())).collect(), main: files[0].0.into(), engine, bibliography: Bibliography::Bibtex, source_date_epoch: 1_700_000_000, packages: vec![] }
 }
 
 fn run(j: &Job, l: &Limits) -> Outcome { runner().run(j, l, &Cancel::new()) }

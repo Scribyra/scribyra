@@ -343,8 +343,9 @@ pub struct CompileSpec {
     /// Per-job limits enforced inside the worker's sandbox (`deployment.compile_limits`).
     #[serde(default)]
     pub limits: CompileLimits,
-    /// Resources of each worker pod; by default about 1 GiB requested per concurrent job, and
-    /// a limit of `limits.memoryMiB` per concurrent job.
+    /// Resources of each worker pod; by default about 1 GiB requested per concurrent job (what
+    /// jobs typically use), and a limit of `limits.memoryMiB` per concurrent job (what each may
+    /// reach: the engine at its ceiling).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(schema_with = "preserve_object")]
     pub resources: Option<ResourceRequirements>,
@@ -440,7 +441,9 @@ pub struct CompileLimits {
     pub cpu_seconds: u32,
     #[schemars(range(min = 1, max = 7200))]
     pub wall_seconds: u32,
-    /// Keep at 1536 or more for the WebAssembly engine (docs/compile-engines.md).
+    /// The job's cgroup memory. The WebAssembly engine's heap may use this less 1024 MiB for Node,
+    /// up to its 2 GiB ceiling: the default 3072 gives it the full ceiling; keep at 1536 or more
+    /// (docs/compile-engines.md).
     #[schemars(range(min = 64, max = 65536))]
     pub memory_mi_b: u32,
     #[schemars(range(min = 16, max = 65536))]

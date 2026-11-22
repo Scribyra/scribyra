@@ -295,9 +295,10 @@ fn workers_are_sandbox_ready() {
     assert_eq!(claim.value["spec"]["storageClassName"], "shared-files");
     assert_eq!(claim.value["spec"]["resources"]["requests"]["storage"], "10Gi");
     // About 1 GiB requested per concurrent job (two here) plus the worker; the limit lets each
-    // job reach its own memoryMiB cap.
+    // job reach its own memoryMiB cap (3072 by default: the engine's 2 GiB ceiling plus Node).
+    assert_eq!(cr.spec.compile.limits.memory_mi_b, 3072);
     assert_eq!(container["resources"]["requests"]["memory"], "2304Mi");
-    assert_eq!(container["resources"]["limits"]["memory"], "4352Mi");
+    assert_eq!(container["resources"]["limits"]["memory"], "6400Mi");
     assert_eq!(worker.value["spec"]["replicas"], 1, "operator scaler without KEDA");
     let keda = resources::desired(&cr, &env(true), &plan(&cr));
     assert!(keda.iter().all(|o| o.kind() != "ScaledObject"), "KEDA needs prometheusAddress");

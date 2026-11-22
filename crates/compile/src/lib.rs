@@ -16,7 +16,7 @@ mod wasm;
 
 pub use bwrap::{store_closure, Bubblewrap, RawOutcome};
 pub use cache::{PackageCache, Packages};
-pub use wasm::wasm_runtime_id;
+pub use wasm::{engine_memory_mib, wasm_runtime_id, ENGINE_MEMORY_MAX_MIB, NODE_RESERVE_MIB};
 pub use cgroup::Confinement;
 
 /// The in-sandbox driver script (for tests that run it under the raw hook).
@@ -96,10 +96,15 @@ pub struct Outcome {
   /// The job's peak memory (its cgroup's `memory.peak`: every process, the scratch tmpfs);
   /// 0 without a cgroup or on kernels without `memory.peak`.
   pub peak_memory: u64,
+  /// WebAssembly engine: the TeX packages the compile installed (those of [`Job::packages`]
+  /// included), by catalog name, for the project's next job. Empty for native TeX Live.
+  pub packages: Vec<String>,
+  /// WebAssembly engine: the engine's WebAssembly heap at the end (it only grows, so its peak).
+  pub engine_memory: u64,
 }
 
 impl Outcome {
-  fn fail(status: Status, log: impl Into<String>) -> Outcome { Outcome { status, pdf: None, log: log.into(), cpu_ms: 0, passes: 0, peak_memory: 0 } }
+  fn fail(status: Status, log: impl Into<String>) -> Outcome { Outcome { status, pdf: None, log: log.into(), cpu_ms: 0, passes: 0, peak_memory: 0, packages: Vec::new(), engine_memory: 0 } }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -132,6 +137,11 @@ pub struct Job {
   pub bibliography: Bibliography,
   /// `SOURCE_DATE_EPOCH` for the run (PDF dates, reproducible output).
   pub source_date_epoch: u64,
+  /// WebAssembly engine: the packages the project's previous successful compile installed
+  /// ([`Outcome::packages`]). The worker fetches them into the package cache together before
+  /// the sandbox starts, and the engine installs them before its first pass. Ignored by native
+  /// TeX Live.
+  pub packages: Vec<String>,
 }
 
 /// A relative path that is safe to create inside the scratch directory: no absolute path,
@@ -225,7 +235,7 @@ mod tests {
   use super::*;
 
   fn job(files: &[&str], main: &str) -> Job {
-    Job { files: files.iter().map(|p| (p.to_string(), b"x".to_vec())).collect(), main: main.into(), engine: Engine::Pdflatex, bibliography: Bibliography::Bibtex, source_date_epoch: 0 }
+    Job { files: files.iter().map(|p| (p.to_string(), b"x".to_vec())).collect(), main: main.into(), engine: Engine::Pdflatex, bibliography: Bibliography::Bibtex, source_date_epoch: 0, packages: vec![] }
   }
 
   #[test]

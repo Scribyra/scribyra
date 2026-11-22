@@ -31,13 +31,46 @@ fn runtime_id(info: &[u8]) -> String { format!("wasm-{}", &format!("{:x}", Sha25
 /// [`runtime_id`] of the compile runtime at `runtime`.
 pub fn wasm_runtime_id(runtime: &Path) -> io::Result<String> { Ok(runtime_id(&std::fs::read(runtime.join("runtime.json"))?)) }
 
-/// The WebAssembly heap ceiling of the runtime's BusyTeX build (Emscripten's `getHeapMax`).
+/// The most the patched engine can address: 2 GiB - 64 KiB (32767 pages; `scripts/wasm-memory.mjs`,
+/// `ENGINE_MEMORY_MAX` in `web/compile-driver.js`). This glue was linked without 4 GB pointers.
+pub const ENGINE_MEMORY_MAX_MIB: u64 = 32767 * 65536 >> 20;
+/// What a job needs besides the engine's heap within its cgroup: Node and V8 (its JavaScript heap,
+/// at most [`Wasm::heap_mib`]), the engine's in-memory file system (the LuaLaTeX baseline and the
+/// installed packages) and the runner. Measured at 0.3-0.7 GiB on the benchmark documents
+/// (docs/compile-engines.md); the engine's ceiling is set this far below the job's memory limit,
+/// so a document that needs too much ends with the engine's message, not a cgroup kill.
+pub const NODE_RESERVE_MIB: u64 = 1024;
+/// The engine's ceiling never goes below this, whatever the job's limit.
+const ENGINE_MEMORY_MIN_MIB: u64 = 256;
+/// At most this many remembered packages are fetched up front (the runner installs no more).
+const MAX_KNOWN: usize = 64;
+
+/// The WebAssembly heap ceiling of the runtime's BusyTeX build. The pipeline patches Emscripten's
+/// `getHeapMax` to return `Module.scribyraHeapMax` ([`ENGINE_MEMORY_MAX_MIB`]); an unpatched
+/// build returns its link-time constant (576 MiB for the pinned one). The expression is read
+/// after the comment lines that precede it (they mention "4GB").
 fn engine_heap_mib(runtime: &Path) -> io::Result<u64> {
   let js = std::fs::read_to_string(runtime.join("public/core/busytex/busytex.js"))?;
   let at = js.find("var getHeapMax = () =>").ok_or_else(|| io::Error::other("busytex.js has no heap limit"))?;
-  let rest = &js[at..];
-  let digits: String = rest.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
-  digits.parse::<u64>().map(|b| b >> 20).map_err(|_| io::Error::other("busytex.js heap limit is not a number"))
+  let rest = &js[at + "var getHeapMax = () =>".len()..];
+  let expr: String = rest.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with("//")).take_while(|l| !l.starts_with("var ")).collect::<Vec<_>>().join(" ");
+  let expr = &expr[..expr.find(';').ok_or_else(|| io::Error::other("busytex.js heap limit has no end"))?];
+  if expr.contains("scribyraHeapMax") { return Ok(ENGINE_MEMORY_MAX_MIB); }
+  let digits: String = expr.chars().skip_while(|c| !c.is_ascii_digit()).take_while(|c| c.is_ascii_digit()).collect();
+  digits.parse::<u64>().map(|b| (b >> 20).min(ENGINE_MEMORY_MAX_MIB)).map_err(|_| io::Error::other("busytex.js heap limit is not a number"))
+}
+
+/// The engine's heap ceiling for a job: the build's own ceiling, within the job's cgroup memory
+/// limit less [`NODE_RESERVE_MIB`].
+pub fn engine_memory_mib(build_mib: u64, limits: &Limits) -> u64 {
+  build_mib.min(limits.memory_mib.saturating_sub(NODE_RESERVE_MIB)).max(ENGINE_MEMORY_MIN_MIB).min(build_mib)
+}
+
+/// The remembered packages worth asking for: catalog names, each once, at most [`MAX_KNOWN`].
+fn known_packages(names: &[String]) -> Vec<String> {
+  let mut seen = std::collections::BTreeSet::new();
+  names.iter().filter(|n| !n.is_empty() && n.len() <= 128 && !n.starts_with('.') && n.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)))
+    .filter(|n| seen.insert(n.as_str())).take(MAX_KNOWN).cloned().collect()
 }
 
 impl Wasm {
@@ -53,6 +86,8 @@ impl Wasm {
   }
   pub(crate) fn id(&self) -> &str { &self.id }
   pub(crate) fn runtime(&self) -> &Path { &self.runtime }
+  /// The runtime build's engine heap ceiling ([`engine_heap_mib`]).
+  pub(crate) fn engine_mib(&self) -> u64 { self.engine_mib }
   pub(crate) fn cache(&self) -> &Path { &self.cache }
 
   /// Node's own JavaScript heap: a quarter of the job's memory, 192–1024 MiB. The engine's
@@ -62,6 +97,18 @@ impl Wasm {
 
   pub(crate) fn run(&self, b: &Bubblewrap, job: &Job, limits: &Limits, cancel: &Cancel) -> Outcome {
     if let Err(e) = job.validate(limits) { return Outcome::fail(Status::Rejected(e.clone()), e.to_string()); }
+    let engine_mib = engine_memory_mib(self.engine_mib, limits);
+    // The remembered packages, fetched into the shared cache together before the sandbox
+    // starts (bundled archives and the mirror, MAX_FILLS at once, each verified). Only those
+    // now in the cache are passed on; the others the engine finds by itself if still needed.
+    let wanted = known_packages(&job.packages);
+    let (mut known, mut unavailable, mut fetched) = (Vec::new(), Vec::new(), 0u64);
+    if !wanted.is_empty() && !cancel.is_cancelled() {
+      for (name, r) in wanted.iter().zip(self.packages.fill_all(&wanted)) {
+        match r { Ok(n) if fetched <= crate::bwrap::FILL_BYTES => { fetched += n; known.push(name.clone()) } _ => unavailable.push(name.clone()) }
+      }
+    }
+    if cancel.is_cancelled() { return Outcome::fail(Status::Cancelled, "cancelled"); }
     let log_bytes = (limits.log_kib << 10).saturating_sub(16 << 10).max(4096);
     let inner = |fds: &[RawFd]| -> Vec<OsString> {
       let l = inner_limits(limits);
@@ -73,9 +120,10 @@ impl Wasm {
       v.push("/runtime/server/compile/runner.mjs".into());
       for (k, val) in [("--runtime", "/runtime".to_string()), ("--cache", "/cache".into()), ("--work", "/work".into()), ("--main", job.main.clone()),
         ("--status", fds[0].to_string()), ("--pdf", fds[1].to_string()), ("--log", fds[2].to_string()), ("--fill", fds[3].to_string()), ("--reply", fds[4].to_string()),
-        ("--budget-ms", (limits.wall_seconds * 1000 + 60_000).to_string()), ("--engine-memory-mib", self.engine_mib.to_string()), ("--log-bytes", log_bytes.to_string())] {
+        ("--budget-ms", (limits.wall_seconds * 1000 + 60_000).to_string()), ("--engine-memory-mib", engine_mib.to_string()), ("--log-bytes", log_bytes.to_string())] {
         v.push(k.into()); v.push(val.into());
       }
+      if !known.is_empty() { v.push("--packages".into()); v.push(known.join(",").into()); }
       v
     };
     let mounts = [(self.runtime.clone(), "/runtime"), (self.cache.clone(), "/cache")];
@@ -122,7 +170,12 @@ impl Wasm {
         Status::SandboxFailure
       }
     };
+    if !unavailable.is_empty() {
+      log.push_str(&format!("\n[{} of the packages this project used last time could not be fetched before compiling: {}]\n", unavailable.len(), unavailable.join(", ")));
+    }
+    let packages = result.as_ref().and_then(|r| r["packages"].as_array()).map(|a| known_packages(&a.iter().filter_map(|p| p.as_str().map(str::to_owned)).collect::<Vec<_>>())).unwrap_or_default();
+    let engine_memory = result.as_ref().and_then(|r| r["engineMemoryBytes"].as_u64()).unwrap_or(0);
     let pdf = (status == Status::Success).then(|| ran.pipes.into_iter().nth(1).unwrap().0);
-    Outcome { status, pdf, log, cpu_ms: ran.cpu_ms, passes: passes.min(64), peak_memory: usage.peak_bytes }
+    Outcome { status, pdf, log, cpu_ms: ran.cpu_ms, passes: passes.min(64), peak_memory: usage.peak_bytes, packages, engine_memory }
   }
 }

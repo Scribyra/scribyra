@@ -135,7 +135,7 @@ spec:
                     activePerMember: 2
                     activePerOwner: 2
                     cpuSeconds: 300
-                    memoryMiB: 2048
+                    memoryMiB: 3072
                     outputMiB: 64
                     passes: 4
                     perMemberPerHour: 120
@@ -181,7 +181,7 @@ spec:
                       activePerMember: 2
                       activePerOwner: 2
                       cpuSeconds: 300
-                      memoryMiB: 2048
+                      memoryMiB: 3072
                       outputMiB: 64
                       passes: 4
                       perMemberPerHour: 120
@@ -211,8 +211,11 @@ spec:
                         minimum: 1.0
                         type: integer
                       memoryMiB:
-                        default: 2048
-                        description: Keep at 1536 or more for the WebAssembly engine (docs/compile-engines.md).
+                        default: 3072
+                        description: |-
+                          The job's cgroup memory. The WebAssembly engine's heap may use this less 1024 MiB for Node,
+                          up to its 2 GiB ceiling: the default 3072 gives it the full ceiling; keep at 1536 or more
+                          (docs/compile-engines.md).
                         format: uint32
                         maximum: 65536.0
                         minimum: 64.0
@@ -288,8 +291,9 @@ spec:
                     type: string
                   resources:
                     description: |-
-                      Resources of each worker pod; by default about 1 GiB requested per concurrent job, and
-                      a limit of `limits.memoryMiB` per concurrent job.
+                      Resources of each worker pod; by default about 1 GiB requested per concurrent job (what
+                      jobs typically use), and a limit of `limits.memoryMiB` per concurrent job (what each may
+                      reach: the engine at its ceiling).
                     type: object
                     x-kubernetes-preserve-unknown-fields: true
                   runtimeClassName:

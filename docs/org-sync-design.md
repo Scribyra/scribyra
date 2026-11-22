@@ -120,7 +120,7 @@ Everything about a deployment is in its one configuration file (`SCRIBYRA_SERVIC
     ],
     "quotas": {"deployment_bytes": 107374182400, "project_bytes": 1073741824, "member_bytes": 10737418240},
     "audit_retention_days": 400,
-    "compile_limits": {"cpu_seconds": 300, "wall_seconds": 600, "memory_mib": 2048, "scratch_mib": 512, "output_mib": 64, "passes": 4, "concurrency": 2, "queue": 32, "per_member_per_hour": 120, "per_project_per_minute": 30, "active_per_member": 2, "active_per_owner": 2, "retention_days": 90},
+    "compile_limits": {"cpu_seconds": 300, "wall_seconds": 600, "memory_mib": 3072, "scratch_mib": 512, "output_mib": 64, "passes": 4, "concurrency": 2, "queue": 32, "per_member_per_hour": 120, "per_project_per_minute": 30, "active_per_member": 2, "active_per_owner": 2, "retention_days": 90},
     "texlive": "/nix/store/…-texlive-2025-env"
   }
 }
@@ -399,7 +399,7 @@ spec:
     texlive: small                      # native only: small | medium | full image variant
     runtimeClassName: gvisor            # optional
     workers: {min: 0, max: 8, jobsPerWorker: 2}
-    limits: {cpuSeconds: 300, wallSeconds: 600, memoryMiB: 2048, scratchMiB: 512, outputMiB: 64}
+    limits: {cpuSeconds: 300, wallSeconds: 600, memoryMiB: 3072, scratchMiB: 512, outputMiB: 64}
   offline: true
   linkSharing: false
   guests: "off"

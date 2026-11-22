@@ -17,7 +17,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -27,6 +27,24 @@ pub trait Packages: Send + Sync {
   /// Makes `<cache>/<sha512>.tar.xz` hold the verified archive of package `name`; returns the
   /// bytes newly written (0 when it was there already), which count against the job's budget.
   fn fill(&self, name: &str) -> Result<u64, String>;
+
+  /// Fills several packages together, [`MAX_FILLS`] at a time: a job's remembered package set,
+  /// before its sandbox starts, so the engine finds them all in the cache instead of asking for
+  /// them one by one. One result per name, in order.
+  fn fill_all(&self, names: &[String]) -> Vec<Result<u64, String>> {
+    let next = AtomicUsize::new(0);
+    let results: Vec<Mutex<Option<Result<u64, String>>>> = names.iter().map(|_| Mutex::new(None)).collect();
+    std::thread::scope(|s| {
+      for _ in 0..MAX_FILLS.min(names.len()) {
+        s.spawn(|| loop {
+          let i = next.fetch_add(1, Ordering::Relaxed);
+          let Some(name) = names.get(i) else { break };
+          *results[i].lock().unwrap() = Some(self.fill(name));
+        });
+      }
+    });
+    results.into_iter().map(|r| r.into_inner().unwrap().unwrap_or_else(|| Err("not filled".into()))).collect()
+  }
 }
 
 /// How the cache answered, for `/metrics`.
@@ -34,7 +52,7 @@ pub trait Packages: Send + Sync {
 pub struct CacheStats { pub hits: AtomicU64, pub bundled: AtomicU64, pub mirror: AtomicU64, pub rejected: AtomicU64, pub failed: AtomicU64, pub fill_ms: AtomicU64 }
 
 /// Fills running at once in one worker, whatever the number of jobs.
-const MAX_FILLS: usize = 4;
+pub const MAX_FILLS: usize = 4;
 
 #[derive(serde::Deserialize)]
 struct Pin { path: String, sha256: String, size: u64 }
@@ -217,4 +235,35 @@ fn read_pinned(base: &Path, pin: &Pin, max: u64) -> io::Result<Vec<u8>> {
   let bytes = fs::read(base.join(&pin.path))?;
   if bytes.len() as u64 != pin.size || sha256_hex(&bytes) != pin.sha256 { return Err(bad(format!("{} differs from the runtime's pinned checksum", pin.path))); }
   Ok(bytes)
+}
+
+#[cfg(test)]
+mod tests {
+  use super::*;
+
+  /// Counts fills running at once.
+  struct Slow { running: AtomicUsize, most: AtomicUsize }
+  impl Packages for Slow {
+    fn fill(&self, name: &str) -> Result<u64, String> {
+      let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
+      self.most.fetch_max(now, Ordering::SeqCst);
+      std::thread::sleep(Duration::from_millis(30));
+      self.running.fetch_sub(1, Ordering::SeqCst);
+      if name == "missing" { Err("not in the catalog".into()) } else { Ok(name.len() as u64) }
+    }
+  }
+
+  #[test]
+  fn a_batch_is_filled_together_in_order_and_bounded() {
+    let p = Slow { running: AtomicUsize::new(0), most: AtomicUsize::new(0) };
+    let names: Vec<String> = (0..10).map(|i| if i == 3 { "missing".into() } else { format!("p{i}") }).collect();
+    let started = Instant::now();
+    let r = p.fill_all(&names);
+    assert_eq!(r.len(), 10);
+    for (i, r) in r.iter().enumerate() { assert_eq!(r.is_ok(), i != 3, "{i}: {r:?}"); }
+    assert_eq!(r[0], Ok(2));
+    assert_eq!(p.most.load(Ordering::SeqCst), MAX_FILLS, "four at once, never more");
+    assert!(started.elapsed() < Duration::from_millis(30 * 10), "together, not one after another: {:?}", started.elapsed());
+    assert!(p.fill_all(&[]).is_empty());
+  }
 }

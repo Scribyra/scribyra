@@ -12,7 +12,10 @@
 //! sealed with the project's data key under the claim's slot. A job whose worker stops
 //! heartbeating is requeued once, then failed; SIGTERM requeues what does not finish within
 //! `shutdown_grace_seconds`. Only the newest successful PDF and log and the newest failed log
-//! keep their blobs. Every change `NOTIFY`s the project, so heads polls wake.
+//! keep their blobs. Every change `NOTIFY`s the project, so heads polls wake. With the WebAssembly
+//! engine a successful job's installed packages are remembered with the project per engine
+//! version (`compile_packages`) and handed to its next job, which fetches them into the package
+//! cache together and installs them before the first pass (docs/compile-engines.md).
 //!
 //! Never logged: content, file names, names, emails, tokens.
 use crate::{
@@ -56,6 +59,13 @@ const POLL: Duration = Duration::from_secs(2);
 const NO_MAIN: &str = "choose a main .tex file first";
 /// The log members see when the sandbox itself failed.
 const SANDBOX_FAILED: &str = "The compile sandbox on the server failed before TeX could finish. This is not caused by the project; the server's operator has the details.";
+
+/// At most this many remembered packages per project (the runner installs no more up front).
+const MAX_REMEMBERED: usize = 64;
+/// A TeX package name as the catalog spells them.
+fn valid_package(n: &str) -> bool {
+    !n.is_empty() && n.len() <= 128 && !n.starts_with('.') && n.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+}
 
 /// The compile mode members see for a project: the deployment's, or with `both` the project's.
 pub fn effective_mode(config: &Config, project_setting: &str) -> &'static str {
@@ -186,10 +196,13 @@ pub struct Finished {
     pub passes: u32,
     pub pdf: Option<Vec<u8>>,
     pub log: Option<String>,
+    /// The TeX packages the compile installed (WebAssembly engine): remembered for the project's
+    /// next job when it succeeded.
+    pub packages: Vec<String>,
 }
 impl Finished {
     fn failed(outcome: &str, error: &'static str, log: Option<String>) -> Finished {
-        Finished { outcome: outcome.into(), error: Some(error), content_hash: None, cpu_ms: 0, passes: 0, pdf: None, log }
+        Finished { outcome: outcome.into(), error: Some(error), content_hash: None, cpu_ms: 0, passes: 0, pdf: None, log, packages: Vec::new() }
     }
     fn from_outcome(o: Outcome, content_hash: String) -> Finished {
         let (outcome, error): (String, Option<&'static str>) = match &o.status {
@@ -218,7 +231,7 @@ impl Finished {
         } else {
             o.log
         };
-        Finished { outcome, error, content_hash: Some(content_hash), cpu_ms: o.cpu_ms, passes: o.passes, pdf: o.pdf, log: Some(log) }
+        Finished { outcome, error, content_hash: Some(content_hash), cpu_ms: o.cpu_ms, passes: o.passes, pdf: o.pdf, log: Some(log), packages: o.packages }
     }
 }
 fn ms(column: &str) -> String {
@@ -530,8 +543,17 @@ impl Compiles {
             }
             files.push((f.path.clone(), bytes));
         }
-        let job = scribyra_compile::Job { files, main: s.main.clone(), engine: s.engine, bibliography: s.bibliography, source_date_epoch: claimed.queued_secs.max(0) as u64 };
+        let packages = if self.engine == CompileEngine::Wasm { self.remembered(&claimed.project).await } else { Vec::new() };
+        let job = scribyra_compile::Job { files, main: s.main.clone(), engine: s.engine, bibliography: s.bibliography, source_date_epoch: claimed.queued_secs.max(0) as u64, packages };
         Ok((job, s.content_hash))
+    }
+
+    /// The packages the project's last successful compile with this engine version installed
+    /// (`compile_packages`); none when there was none, or it could not be read (the job then
+    /// finds its packages as it runs).
+    pub async fn remembered(&self, project: &str) -> Vec<String> {
+        let row: Result<Option<Vec<String>>, sqlx::Error> = sqlx::query_scalar("SELECT packages FROM compile_packages WHERE project = $1 AND texlive = $2").bind(project).bind(&self.texlive).fetch_optional(self.pool()).await;
+        row.ok().flatten().unwrap_or_default().into_iter().filter(|n| valid_package(n)).take(MAX_REMEMBERED).collect()
     }
 
     /// Stores a finished job (sealed PDF and log, sizes, CPU time) if this claim still holds it,
@@ -643,6 +665,18 @@ impl Compiles {
         }
         sqlx::query("UPDATE sr_projects SET bytes = greatest(bytes + $2, 0) WHERE project = $1").bind(project).bind(net).execute(&mut *tx).await?;
         sqlx::query("UPDATE usage SET bytes = greatest(bytes + $1, 0) WHERE scope = 'sr:deployment'").bind(net).execute(&mut *tx).await?;
+        // The engine version's remembered package set: what this successful compile installed
+        // (the remembered ones included), replacing the project's sets for other versions.
+        if state == "done" && self.engine == CompileEngine::Wasm {
+            let packages: Vec<&String> = f.packages.iter().filter(|n| valid_package(n)).take(MAX_REMEMBERED).collect();
+            sqlx::query("DELETE FROM compile_packages WHERE project = $1 AND texlive <> $2").bind(project).bind(&self.texlive).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO compile_packages (project, texlive, packages) VALUES ($1, $2, $3) ON CONFLICT (project, texlive) DO UPDATE SET packages = EXCLUDED.packages, updated = now()")
+                .bind(project)
+                .bind(&self.texlive)
+                .bind(packages)
+                .execute(&mut *tx)
+                .await?;
+        }
         server_projects::notify(&mut tx, project).await?;
         tx.commit().await?;
         if freed > 0 {
@@ -1191,12 +1225,12 @@ mod tests {
 
     #[test]
     fn a_sandbox_failure_shows_members_no_host_details() {
-        let o = Outcome { status: Status::SandboxFailure, pdf: None, log: "could not start the sandbox: No such file or directory (os error 2): /var/lib/scribyra/cgroup/job-1".into(), cpu_ms: 0, passes: 0, peak_memory: 0 };
+        let o = Outcome { status: Status::SandboxFailure, pdf: None, log: "could not start the sandbox: No such file or directory (os error 2): /var/lib/scribyra/cgroup/job-1".into(), cpu_ms: 0, passes: 0, peak_memory: 0, packages: Vec::new(), engine_memory: 0 };
         let f = Finished::from_outcome(o, "h".into());
         assert_eq!((f.outcome.as_str(), f.error), ("sandbox_failure", Some("the compile sandbox failed")));
         assert_eq!(f.log.as_deref(), Some(SANDBOX_FAILED));
         // Other outcomes keep TeX's log.
-        let o = Outcome { status: Status::TexError, pdf: None, log: "! Undefined control sequence.".into(), cpu_ms: 5, passes: 1, peak_memory: 0 };
+        let o = Outcome { status: Status::TexError, pdf: None, log: "! Undefined control sequence.".into(), cpu_ms: 5, passes: 1, peak_memory: 0, packages: Vec::new(), engine_memory: 0 };
         assert_eq!(Finished::from_outcome(o, "h".into()).log.as_deref(), Some("! Undefined control sequence."));
     }
 }

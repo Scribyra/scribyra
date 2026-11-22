@@ -33,7 +33,7 @@ fn job(dir: &Path) -> Job {
   let files = files(dir);
   let main = String::from_utf8_lossy(&files.iter().find(|(p, _)| p == "main.tex").expect("main.tex").1).into_owned();
   let bibliography = if main.contains("{biblatex}") { Bibliography::Biber } else if main.contains("\\bibliography{") { Bibliography::Bibtex } else { Bibliography::None };
-  Job { files, main: "main.tex".into(), engine: Engine::Lualatex, bibliography, source_date_epoch: 1_700_000_000 }
+  Job { files, main: "main.tex".into(), engine: Engine::Lualatex, bibliography, source_date_epoch: 1_700_000_000, packages: vec![] }
 }
 
 fn limits() -> Limits {
@@ -54,7 +54,7 @@ fn native() -> Arc<Bubblewrap> {
   Arc::new(Bubblewrap::new(bwrap, texlive).unwrap().confine(Confinement::from_env()).unwrap())
 }
 
-fn run(r: &Bubblewrap, j: &Job, engine: &str, doc: &str, cache: &str, n: usize, out: &Path) {
+fn run(r: &Bubblewrap, j: &Job, engine: &str, doc: &str, cache: &str, n: usize, out: &Path) -> Outcome {
   let t = Instant::now();
   let o = r.run(j, &limits(), &Cancel::new());
   let wall = t.elapsed().as_millis();
@@ -68,7 +68,8 @@ fn run(r: &Bubblewrap, j: &Job, engine: &str, doc: &str, cache: &str, n: usize, 
     std::fs::create_dir_all(f.parent().unwrap()).unwrap();
     std::fs::write(&f, &o.log).unwrap();
   }
-  println!("{}", serde_json::json!({"engine": engine, "doc": doc, "cache": cache, "run": n, "status": status, "wall_ms": wall, "cpu_ms": o.cpu_ms, "peak_mib": o.peak_memory >> 20, "passes": o.passes, "pdf_bytes": o.pdf.as_ref().map_or(0, |p| p.len())}));
+  println!("{}", serde_json::json!({"engine": engine, "doc": doc, "cache": cache, "run": n, "status": status, "wall_ms": wall, "cpu_ms": o.cpu_ms, "peak_mib": o.peak_memory >> 20, "passes": o.passes, "pdf_bytes": o.pdf.as_ref().map_or(0, |p| p.len()), "engine_mib": o.engine_memory >> 20, "known": j.packages.len(), "packages": o.packages.len()}));
+  o
 }
 
 fn main() {
@@ -85,10 +86,12 @@ fn main() {
     for engine in &engines {
       if engine == "wasm" {
         // Cold: an empty package cache for every run (bundled archives and the mirror refill it).
+        let mut remembered = vec![];
         for i in 0..n {
           let dir = caches.join(format!("cold-{doc}-{i}"));
           let _ = std::fs::remove_dir_all(&dir);
-          run(&wasm(&dir), &j, "wasm", doc, "cold", i, &out);
+          let o = run(&wasm(&dir), &j, "wasm", doc, "cold", i, &out);
+          if o.status == Status::Success { remembered = o.packages; }
           let _ = std::fs::remove_dir_all(&dir);
         }
         // Warm: one cache that a first, untimed run filled.
@@ -97,6 +100,19 @@ fn main() {
         let r = wasm(&dir);
         let _ = r.run(&j, &limits(), &Cancel::new());
         for i in 0..n { run(&r, &j, "wasm", doc, "warm", i, &out); }
+        // The project's remembered packages (as the service passes them), with an empty cache
+        // (fetched together before the sandbox starts) and with the warm one. A runner that
+        // does not report packages (before the service passed them) has none to pass.
+        if !remembered.is_empty() {
+          let known = Job { packages: remembered, ..j.clone() };
+          for i in 0..n {
+            let dir = caches.join(format!("cold-project-{doc}-{i}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            run(&wasm(&dir), &known, "wasm", doc, "cold+project", i, &out);
+            let _ = std::fs::remove_dir_all(&dir);
+          }
+          for i in 0..n { run(&r, &known, "wasm", doc, "warm+project", i, &out); }
+        }
       } else {
         let r = native();
         for i in 0..n { run(&r, &j, "native", doc, "installed", i, &out); }

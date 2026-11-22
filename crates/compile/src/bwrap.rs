@@ -162,6 +162,9 @@ impl Bubblewrap {
   pub fn has_biber(&self) -> bool { match &self.kind { Kind::Native { texlive } => texlive.join("bin/biber").exists(), Kind::Wasm(_) => true } }
   /// Whether this runner is the WebAssembly engine.
   pub fn is_wasm(&self) -> bool { matches!(self.kind, Kind::Wasm(_)) }
+  /// WebAssembly engine: the runtime build's engine heap ceiling in MiB (a job gets at most this,
+  /// within its memory limit: [`crate::engine_memory_mib`]).
+  pub fn engine_memory_build_mib(&self) -> Option<u64> { match &self.kind { Kind::Wasm(w) => Some(w.engine_mib()), _ => None } }
 
   /// Test hook: runs a bash `script` in the same sandbox (closure binds plus `extra_ro`, same
   /// seccomp filter, rlimits and wall clock) with `files` in `/work`. Not used by compiles.
@@ -330,7 +333,7 @@ fn pipe_caps(l: &Limits, n: usize) -> Vec<usize> {
 pub(crate) type Captured = (Vec<u8>, u64);
 
 /// Package bytes one job may have the worker fetch (the browser's limit is 96 MiB).
-const FILL_BYTES: u64 = 256 << 20;
+pub(crate) const FILL_BYTES: u64 = 256 << 20;
 
 pub(crate) struct Ran { pub code: Option<i32>, pub cpu_ms: u64, pub usage: Option<Usage>, pub killed: Option<Status>, pub stdout: Captured, pub stderr: Captured, pub pipes: Vec<Captured> }
 
@@ -474,7 +477,7 @@ impl Runner for Bubblewrap {
     // With a cgroup, CPU time comes from cpu.stat (orphans included); the driver's own figure
     // is only a fallback for unconfined development runs.
     let cpu_ms = if ran.usage.is_some() { ran.cpu_ms } else { ran.cpu_ms + children_cpu_ms(&report) };
-    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)), peak_memory: usage.peak_bytes }
+    Outcome { status, pdf, log, cpu_ms, passes: passes.min(limits.passes.max(1)), peak_memory: usage.peak_bytes, packages: Vec::new(), engine_memory: 0 }
   }
 }
 

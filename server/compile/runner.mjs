@@ -141,8 +141,12 @@ export function serverLog(result){
  return head+(result.log||'');
 }
 
+// `limitMib`: the job's engine ceiling, the build's (ENGINE_MEMORY_MIB) or less when the server's
+// compile memory limit leaves less beside Node (crates/compile/src/wasm.rs, engine_memory_mib).
 export function memoryMessage(limitMib){
- return `The document needs more memory than the WebAssembly TeX engine can use (${limitMib} MiB; this build of BusyTeX addresses at most 2 GiB, wasm32 itself stops at 4 GB). Simplify the document, split it, or ask the administrator to compile it with the native engine.`;
+ return limitMib<Math.floor(ENGINE_MEMORY_MIB)
+  ?`The document needs more memory than the WebAssembly TeX engine can use on this server (${limitMib} MiB per compile; this build of BusyTeX addresses at most ${Math.floor(ENGINE_MEMORY_MIB)} MiB, wasm32 itself stops at 4 GB). Simplify the document, split it, or ask the administrator to raise the compile memory limit.`
+  :`The document needs more memory than the WebAssembly TeX engine can use (${limitMib} MiB; this build of BusyTeX addresses at most 2 GiB, wasm32 itself stops at 4 GB). Simplify the document, split it, or ask the administrator to compile it with the native engine.`;
 }
 
 // TeX's log, bounded to its last `bytes` (UTF-8), behind the diagnostics.
@@ -178,7 +182,7 @@ async function main(){
   const ok=result.success&&result.pdf?.byteLength>4&&String.fromCharCode(...result.pdf.subarray(0,5))==='%PDF-';
   let log=boundedLog(result,logBytes);
   if(!ok&&result.memory&&!log.includes(memoryMessage(limit)))log=`${memoryMessage(limit)}\n\n${log}`;
-  finish({event:'result',status:ok?'success':result.memory?'memory':'tex_error',passes:result.passes,diagnostic:result.diagnostic||null,packages:result.packages.map(p=>p.name)},log,ok?result.pdf:null);
+  finish({event:'result',status:ok?'success':result.memory?'memory':'tex_error',passes:result.passes,diagnostic:result.diagnostic||null,packages:[...new Set(result.packages.map(p=>p.name))],engineMemoryBytes:result.engineMemoryBytes||0,engineMemoryLimitMib:limit},log,ok?result.pdf:null);
  }catch(error){failed(error);}
 }
 

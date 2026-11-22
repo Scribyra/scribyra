@@ -33,7 +33,7 @@ spec:
     runtimeClassName: gvisor
     cache: {size: 10Gi, storageClassName: shared-files, accessMode: ReadWriteMany}
     workers: {minReplicas: 0, maxReplicas: 6, concurrency: 2}
-    limits: {cpuSeconds: 300, wallSeconds: 600, memoryMiB: 2048, scratchMiB: 512}
+    limits: {cpuSeconds: 300, wallSeconds: 600, memoryMiB: 3072, scratchMiB: 512}
   policy: {offlineAllowed: false, linkSharing: true, guests: shared, notifyOnAdminAccess: true}
   postgres:
     provisioned: {storageSize: 50Gi, instances: 2, storageClassName: fast}

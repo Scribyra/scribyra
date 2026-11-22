@@ -535,6 +535,14 @@ async fn pruning_and_invalid_spec(admin: Client, operator: Client) {
     let pod = worker.spec.unwrap().template.spec.unwrap();
     assert_eq!(pod.runtime_class_name.as_deref(), Some("gvisor"));
     assert_eq!(pod.host_users, Some(false));
+    // Default limits: each job's cgroup may reach 3072 MiB (the engine's 2 GiB heap ceiling plus
+    // Node), and the pod's limit leaves room for both concurrent jobs at once.
+    let resources = pod.containers[0].resources.as_ref().unwrap();
+    assert_eq!(resources.limits.as_ref().unwrap()["memory"].0, "6400Mi");
+    assert_eq!(resources.requests.as_ref().unwrap()["memory"].0, "2304Mi");
+    let config: Api<Secret> = Api::namespaced(admin.clone(), ns);
+    let service = config.list(&ListParams::default()).await.unwrap().items.into_iter().flat_map(|s| s.data.unwrap_or_default().into_values()).map(|b| String::from_utf8_lossy(&b.0).into_owned()).find(|t| t.contains("compile_limits"));
+    assert!(service.as_deref().is_some_and(|t| t.contains("\"memory_mib\": 3072") || t.contains("\"memory_mib\":3072")), "service config: {service:?}");
     // The WebAssembly engine's shared package cache, a claim the workers mount writable.
     let pvcs: Api<PersistentVolumeClaim> = Api::namespaced(admin.clone(), ns);
     let cache = pvcs.get("p-compile-cache").await.unwrap();
