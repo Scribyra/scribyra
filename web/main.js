@@ -36,7 +36,7 @@ import {companionDialog} from './companion-dialog.js';
 import {environmentDialog} from './environment-dialog.js';
 import {checkImport} from './bibliography-import.js';
 import {pluginSystem} from './plugin-system.js';
-import {pluginManager,pickFileDialog} from './plugin-ui.js';
+import {pluginManager,pickFileDialog,originConsentDialog} from './plugin-ui.js';
 import {openPluginDialog} from './plugin-dialog.js';
 import {normalPolicy} from './plugin-manifest.js';
 import {migrateLegacyZotero} from './plugin-migration.js';
@@ -137,7 +137,7 @@ const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision
 const pluginPolicy=normalPolicy(import.meta.env.VITE_SCRIBYRA_PLUGIN_POLICY);
 const pluginCatalog=()=>import('./plugin-catalog.js');
 let pluginMode=null,pluginActive=null;
-plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),changed:()=>emit(),env:{
+plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),changed:()=>emit(),askOrigin:request=>originConsentDialog(request),env:{
   project:()=>doc&&!leavingProject&&commands&&collaboration?{doc,projectId,commands,collaboration,owner:agentOwner,mode:collaboration.review.state.mode,transient:transientProject,activeFileId:state.active}:null,
   notify:message=>notice(message),activate:id=>activateFile(id),
   openDialog:options=>openPluginDialog(options),pickFile:options=>pickFileDialog(options),
@@ -147,11 +147,11 @@ plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),change
 plugins.before(migrateLegacyZotero({catalog:pluginCatalog,policy:pluginPolicy}).then(moved=>{if(moved)notice(`Zotero is now a plugin. Your ${moved.links} Zotero ${moved.links===1?'link':'links'} and ${moved.keys} ${moved.keys===1?'key':'keys'} moved into it on this device; see More tools → Plugins.`);}));
 /** What plugins contribute to the next render; also tells them about mode and file changes. */
 function pluginRender(){
-  if(!plugins)return {fileBar:null,pluginCommands:[]};
+  if(!plugins)return {fileBar:null,pluginCommands:[],pluginStatus:[]};
   const mode=collaboration?.review.state.mode||null,current=doc&&!leavingProject?state.active||null:null;
   if(mode!==pluginMode){pluginMode=mode;if(mode)plugins.modeChanged(mode);}
   if(current!==pluginActive){pluginActive=current;plugins.activeFileChanged(current);}
-  return {fileBar:current?plugins.bar(current,mode):null,pluginCommands:doc?plugins.commands():[]};
+  return {fileBar:current?plugins.bar(current,mode):null,pluginCommands:doc?plugins.commands():[],pluginStatus:doc&&!leavingProject?plugins.statusItems(mode):[]};
 }
 function persistWorkspace() {
   if (!projectId || !doc || transientProject) return;
@@ -870,6 +870,7 @@ async function action(name, value = '', detail = {}) {
       // Plugin contributions: “<plugin id>:<command or action>”, and for tree actions “:<node id>”.
       case 'plugin-command': {const [plugin,command]=value.split(':');await plugins.runCommand(plugin,command);break;}
       case 'plugin-bar': {const [plugin,action]=value.split(':');if(state.active)await plugins.runBarAction(plugin,action,state.active);break;}
+      case 'plugin-status': {const [plugin,action]=value.split(':');await plugins.runStatusAction(plugin,action);break;}
       case 'plugin-file-action': {
         const [plugin,action,nodeId='']=value.split(':'),node=nodeId?projectNode(doc,nodeId):null;
         if(nodeId&&!node)break;
