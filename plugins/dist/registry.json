@@ -5,6 +5,49 @@
   "keyId": "scribyra-plugins-dev-2026-11",
   "plugins": [
    {
+    "id": "com.scribyra.github-gitlab",
+    "name": "GitHub and GitLab",
+    "publisher": "Scribyra",
+    "description": "Link a project to a GitHub or GitLab repository. Pull the latest commit with a reviewable diff, resolve conflicts file by file, and push your changes as one commit. Your access token stays on this device and goes only to the host you link.",
+    "versions": [
+     {
+      "version": "1.0.0",
+      "api": 1,
+      "package": "com.scribyra.github-gitlab-1.0.0.scribyra-plugin.json",
+      "sha256": "b3bd3e64f2b4a3c7da5dfb8669b0e9ebcfe8f31a5ed6e7f35f7a51ae89d58369",
+      "size": 97380,
+      "permissions": {
+       "network": [
+        "https://api.github.com",
+        "https://gitlab.com"
+       ],
+       "network.ask": {
+        "purpose": "self-hosted GitLab servers you add"
+       },
+       "project.read": {
+        "files": [
+         "**"
+        ],
+        "binary": true
+       },
+       "project.write": {
+        "create": [
+         "**"
+        ],
+        "pick": false,
+        "change": [
+         "**"
+        ]
+       },
+       "secrets": true,
+       "ui.command": true,
+       "ui.dialog": true,
+       "ui.status": true
+      }
+     }
+    ]
+   },
+   {
     "id": "com.scribyra.zotero",
     "name": "Zotero",
     "publisher": "Scribyra",
@@ -47,6 +90,6 @@
  "signature": {
   "alg": "ECDSA-P256-SHA256",
   "keyId": "scribyra-plugins-dev-2026-11",
-  "value": "vFOg32nW01s14GGTrAKvwxT9WYkl2OaqCn+84LmYGIarzOvCFja7Fro6+3FjsoIreowa78L/+7nUvfjWDqs7Ow=="
+  "value": "9YkpIhtyErtT6AZhz3f1Q+/UwgYv7HSfZvHCJKGQnOpma2zoEM4AzrTTHP12mcTt0gg67OPBELb5N+YXnlvMHg=="
  }
 }
