@@ -3,10 +3,12 @@
 How Scribyra changes reach staging and production. The code is at
 https://github.com/Scribyra/scribyra; CI runs on GitHub Actions (GitHub-hosted
 runners) and every site is served by GitHub Pages. Until November 2026 the project
-lived on GitLab (`gitlab.com/urundead-labs/scribyra`, now archived); its Pages
-deployment still serves the app's address from before the custom domains,
-`https://scribyra-aca39a.gitlab.io/app/`, which the app's "could not load" message
-links to. Releases `web-1` to `web-95` were built there.
+lived on GitLab (`gitlab.com/urundead-labs/scribyra`, now archived); releases
+`web-1` to `web-95` were built there. The app's address from before the custom
+domains, `https://scribyra-aca39a.gitlab.io/app/`, no longer serves the app to
+the public: on November 20, 2026 it redirected to a GitLab sign-in. The app's
+"could not load" message still links to it (`legacyApplication` in
+`ops/pages/domains.json`).
 
 ## Branch model
 

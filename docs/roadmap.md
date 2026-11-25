@@ -62,7 +62,7 @@ Numbered milestones keep their identities and relative order; new work has a let
 | 9 | 9. Application plugins and Zotero | Zotero import, link and refresh delivered on `feature/zotero`, review pending; plugins queued | Static extension delivery; provider access as needed | A permission-limited Zotero integration updates citations without overwriting unrelated source. |
 | 10 | 10. Connect to remote backup, sync, and collaboration | Queued | Static UI plus optional Rust service | Authenticated devices reconnect, catch up, and distinguish local saves from remotely durable saves. |
 | 11 | 11. End-to-end encrypted backup and sync | Queued | Encryption on clients; opaque remote storage and relay | Recovery, device addition, revocation, offline edits, and tampering are tested together. |
-| 12 | 12. Presentation website and public launch | Queued; private presentation deployed | Static HTML/assets; hosting account/billing service when used | Public claims match shipped capabilities and self-hosting installs are independently reproducible. |
+| 12 | 12. Presentation website and public launch | Queued; presentation deployed at scribyra.com | Static HTML/assets; hosting account/billing service when used | Public claims match shipped capabilities and self-hosting installs are independently reproducible. |
 | Parked | 4b. Folder synchronization | Paused | Browser folder adapter, or the discontinued companion | Concurrent edits and external file changes reconcile without silently discarding data. Live folder linking is [not selected](reorientation.md#decision) for now, because without the companion it would be Chromium-only. |
 | Replaced | 4c. Paired local devices | Queued | Frozen LAN hub, or browser route through D | Its browser route moves to D. Its gate of disconnect and rejoin moves with it. SSH/VPN-assisted connections stay unscheduled. |
 
@@ -115,7 +115,7 @@ This is the R2 mapping. "Tab" means it needs nothing beyond the browser and the 
 
 ## Working rules
 
-LuaLaTeX is the only supported compiler for now. Split substantial work into reviewable goals. A goal is done only after its acceptance checks pass and its implementation is committed and pushed. The repository stays private. The owner made the Pages site publicly reachable without sign-in on November 6, 2026; it stays out of search indexes, and this is not the public launch, which requires a later explicit instruction. No milestone is complete merely because its baseline or presentation exists. Record remaining limitations alongside the implementation rather than silently narrowing the roadmap.
+LuaLaTeX is the only supported compiler for now. Split substantial work into reviewable goals. A goal is done only after its acceptance checks pass and its implementation is committed and pushed. The repository has been public at https://github.com/Scribyra/scribyra since the beta commit of November 12, 2026. The sites need no sign-in and may be indexed by search engines (see [development](development.md)). No milestone is complete merely because its baseline or presentation exists. Record remaining limitations alongside the implementation rather than silently narrowing the roadmap.
 
 ## Milestone R: Reorientation
 
@@ -380,7 +380,7 @@ the overall goal is paused.
 4. **T4 — test and development evidence.** Collect actual Rust, JavaScript and
    browser suite/run outcomes, durations, failures, skipped cases, build/revision
    identity and available performance measurements. Distinguish local runs from
-   GitLab CI and synthetic fixtures from application usage. Link a failed test or
+   CI and synthetic fixtures from application usage. Link a failed test or
    traced operation to its safe diagnostic artifact. Include repeatable fault
    scenarios, regression views and instructions for reproducing failures locally.
 
@@ -590,7 +590,7 @@ Rows retain the evidence and limits at each delivery. Later integration rows sup
 
 Status and evidence for each goal, retained from earlier roadmap versions.
 
-Milestone T's completed instrumentation and retained browser/native/CI evidence remain valid. Native exporter overhead, continuous managed HTTPS/CI publication and the operational acceptance matrix remain pending; see the delivery rows below. Folder synchronization remains paused and incomplete; do not continue it automatically. Its companion-based parts are parked. The private presentation → pipeline-built app release was verified in GitLab pipeline 3028249673 and deployed release web-47; both custom domains are registered, with DNS verification still pending at the last check. The workspace, pinned LuaLaTeX delivery and both MCP directions have passed their gates.
+Milestone T's completed instrumentation and retained browser/native/CI evidence remain valid. Native exporter overhead, continuous managed HTTPS/CI publication and the operational acceptance matrix remain pending; see the delivery rows below. Folder synchronization remains paused and incomplete; do not continue it automatically. Its companion-based parts are parked. The presentation → CI-built app release was first verified on the former GitLab project (pipeline 3028249673, release web-47); releases are now built by GitHub Actions and both custom domains are live (see [delivery](delivery.md)). The workspace, pinned LuaLaTeX delivery and both MCP directions have passed their gates.
 
 | Goal | Status | Acceptance evidence |
 | --- | --- | --- |
