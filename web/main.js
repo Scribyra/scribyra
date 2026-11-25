@@ -13,6 +13,15 @@ let initialTexLink=takeTexFragment(window);
 import {takeOpenFragment,openLinkEntry} from './open-link-dialog.js';
 import './open-link.css';
 let initialOpenLink=takeOpenFragment(window);
+// Template links (#template=<id>, docs/templates.md) only preselect a card in the gallery.
+import {takeTemplateFragment} from './template-catalog.js';
+let initialTemplateLink=takeTemplateFragment(window);
+import {templateCatalog,templateById,templateEntries,previewUrl} from './templates.js';
+import {openTemplateGallery} from './template-gallery.js';
+import {welcomePending,welcomeVisible,dismissWelcome,welcomeStarted} from './onboarding.js';
+import {analyzeImport,needsSummary} from './project-import.js';
+import {showImportSummary,showOverleafGuide,askGitLink} from './import-summary.js';
+import './welcome.css';
 import {initializeCollaborationSchema} from './collaboration-schema.js';
 import {mountCollaboration} from './collaboration.js';
 import {agentCommands,localAgentOwner} from './agent-commands.js';
@@ -27,7 +36,7 @@ import {companionDialog} from './companion-dialog.js';
 import {environmentDialog} from './environment-dialog.js';
 import {checkImport} from './bibliography-import.js';
 import {pluginSystem} from './plugin-system.js';
-import {pluginManager,pickFileDialog} from './plugin-ui.js';
+import {pluginManager,pickFileDialog,originConsentDialog} from './plugin-ui.js';
 import {openPluginDialog} from './plugin-dialog.js';
 import {normalPolicy} from './plugin-manifest.js';
 import {migrateLegacyZotero} from './plugin-migration.js';
@@ -117,7 +126,7 @@ const plaintextDemo=(()=>{try{return localStorage.getItem('scribyra-plaintext-de
 // providers stay reachable only behind this test-only switch; production never
 // offers it and never contacts a local address by itself.
 const companionDev=(()=>{try{return localStorage.getItem('scribyra-companion-dev')==='1';}catch{return false;}})();
-const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '' };
+const state = { plaintextDemo,companionDev,macPlatform:/^Mac/.test(navigator.platform),downloadLoaded:0,downloadTotal:0,...editorState(), ...pdfState(), ...sourceMapState(), fontSize: 14, tabSize: 2, wrap: true, autocomplete: true, projects: [], files: [], tree: [], selected: '', trashCount: 0, treeError: '', current: false, name: '', active: '', mainFile: '', engine: 'lualatex', busy: false, status: 'Ready to compile', saveStatus: 'Saved locally', syncStatus: 'Local only', notice: '', log: '', showLog: false, showIssues: false, buildIssues: [], auto: false, hasPdf: false, stale: false, storage: '', peers: 0, companionStatus: 'Disconnected', tabSyncStatus:'Local tabs', recoveryAvailable:false, filter: '', welcome: welcomePending() };
 const emit = () => window.dispatchEvent(new CustomEvent('scribyra:state', { detail: JSON.stringify({...state,...pluginRender(),...(state.directActive?{syncStatus:'Direct session'}:{}),...(state.saveStatus==='Saved locally'&&(state.comments?.draft||state.comments?.pendingSave)?{saveStatus:'Comment draft · not yet submitted'}:state.reviewDraftPending?{saveStatus:'Review draft · not yet published'}:{})}) }));
 configurePdf({onState:patch=>{Object.assign(state,patch);emit();},onError:displayError,onNavigate:point=>navigation.inverse(point)});
 const editorOptions = new Compartment(), selections = new Map();
@@ -129,7 +138,7 @@ const navigation=sourceNavigation({state,getDoc:()=>doc,getRevision:()=>revision
 const pluginPolicy=normalPolicy(import.meta.env.VITE_SCRIBYRA_PLUGIN_POLICY);
 const pluginCatalog=()=>import('./plugin-catalog.js');
 let pluginMode=null,pluginActive=null;
-plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),changed:()=>emit(),env:{
+plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),changed:()=>emit(),askOrigin:request=>originConsentDialog(request),env:{
   project:()=>doc&&!leavingProject&&commands&&collaboration?{doc,projectId,commands,collaboration,owner:agentOwner,mode:collaboration.review.state.mode,transient:transientProject,activeFileId:state.active}:null,
   notify:message=>notice(message),activate:id=>activateFile(id),
   openDialog:options=>openPluginDialog(options),pickFile:options=>pickFileDialog(options),
@@ -139,11 +148,11 @@ plugins=pluginSystem({policy:pluginPolicy,notify:message=>notice(message),change
 plugins.before(migrateLegacyZotero({catalog:pluginCatalog,policy:pluginPolicy}).then(moved=>{if(moved)notice(`Zotero is now a plugin. Your ${moved.links} Zotero ${moved.links===1?'link':'links'} and ${moved.keys} ${moved.keys===1?'key':'keys'} moved into it on this device; see More tools → Plugins.`);}));
 /** What plugins contribute to the next render; also tells them about mode and file changes. */
 function pluginRender(){
-  if(!plugins)return {fileBar:null,pluginCommands:[]};
+  if(!plugins)return {fileBar:null,pluginCommands:[],pluginStatus:[]};
   const mode=collaboration?.review.state.mode||null,current=doc&&!leavingProject?state.active||null:null;
   if(mode!==pluginMode){pluginMode=mode;if(mode)plugins.modeChanged(mode);}
   if(current!==pluginActive){pluginActive=current;plugins.activeFileChanged(current);}
-  return {fileBar:current?plugins.bar(current,mode):null,pluginCommands:doc?plugins.commands():[]};
+  return {fileBar:current?plugins.bar(current,mode):null,pluginCommands:doc?plugins.commands():[],pluginStatus:doc&&!leavingProject?plugins.statusItems(mode):[]};
 }
 function persistWorkspace() {
   if (!projectId || !doc || transientProject) return;
@@ -219,6 +228,7 @@ async function pickFiles(accept, multiple = false, directory = false) {
 }
 async function refreshProjects() {
   allProjects = await storage.listProjects();
+  state.welcome = welcomeVisible(allProjects.length);
   state.projects = allProjects.filter(p => p.name.toLowerCase().includes(state.filter.toLowerCase())).map(p => ({ ...p, date: new Date(p.updatedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) })); emit();
 }
 function refreshDoc(openFirst = false) {
@@ -387,9 +397,29 @@ async function createProject(name, files = [{ path: 'main.tex', content: STARTER
     if(importSource)newDoc.getMap('meta').set('importSource',importSource);
     if(fromTexLink){texLinks.mark(newDoc);await openProject(id,{transientDoc:newDoc,directAttempt});return;}
     await storage.saveProject(id,newDoc);
+    welcomeStarted();
   }finally{client.close();if(doc!==newDoc)newDoc.destroy();}
   await refreshProjects();directAttempt?.signal.throwIfAborted();await openProject(id,{directAttempt});
   return id;
+}
+/** New project: the template gallery, then a project made from the chosen template. */
+async function chooseTemplate({selected='sample',note}={}){
+  const choice=await openTemplateGallery({catalog:templateCatalog(),previewUrl,selected,note});
+  if(!choice)return;
+  const template=templateById(choice.id),entries=await templateEntries(choice.id);
+  await createProject(choice.name,entries,{mainPath:template.main});
+}
+function openTemplateLink(link){
+  if(!link)return;
+  if(link.error){notice(link.error);return;}
+  const template=templateById(link.id);
+  if(!template){notice('That template is not in this version of Scribyra. Choose another one.');void chooseTemplate().catch(displayError);return;}
+  void chooseTemplate({selected:template.id,note:`A link suggested the ${template.name} template. Nothing is created until you choose Create project.`}).catch(displayError);
+}
+/** Opens a project file at a line (from the import summary). */
+function revealSource(path,line){
+  const file=state.files.find(entry=>entry.path===path&&!entry.binary);if(!file)return;
+  activateFile(file.id);if(line)requestAnimationFrame(()=>selectSourceLine(line));
 }
 function sourceUndo(id){
   let undo=undoManagers.get(id);if(!undo){undo=new Y.UndoManager(doc.getText(`text:${id}`),{trackedOrigins:new Set([null,CompanionOrigin,AgentOrigin])});undoManagers.set(id,undo);}return undo;
@@ -788,7 +818,10 @@ async function action(name, value = '', detail = {}) {
       case 'pdf-to-source': {const point=selectedPdfPosition();if(point)await navigation.inverse(point);else notice('Select text in the PDF or choose a visible PDF page first.');break;}
       case 'direct-share': if(transientProject)throw Error('Accept and save this project before sharing.');direct?.toggle();break;
       case 'home': await leaveProject(); state.current = false; state.filter = ''; await refreshProjects(); break;
-      case 'new': await createProject(await modal('New project', 'Give your next idea a name.', { value: 'Untitled project', label: 'Create project' })); break;
+      case 'new': case 'templates': await chooseTemplate(); break;
+      case 'welcome-dismiss': dismissWelcome(); state.welcome = false; emit(); requestAnimationFrame(() => document.querySelector('.welcome-row .button.primary')?.focus()); break;
+      case 'overleaf-guide': if (await showOverleafGuide() === 'import') await action('import'); break;
+      case 'git-link': { const fragment = await askGitLink(); if (fragment) openLinks.offer(fragment); break; }
       case 'starter': await createProject('A space for your next great idea'); break;
       case 'open': await openProject(value); break;
       case 'open-file': activateFile(value); break;
@@ -838,6 +871,7 @@ async function action(name, value = '', detail = {}) {
       // Plugin contributions: “<plugin id>:<command or action>”, and for tree actions “:<node id>”.
       case 'plugin-command': {const [plugin,command]=value.split(':');await plugins.runCommand(plugin,command);break;}
       case 'plugin-bar': {const [plugin,action]=value.split(':');if(state.active)await plugins.runBarAction(plugin,action,state.active);break;}
+      case 'plugin-status': {const [plugin,action]=value.split(':');await plugins.runStatusAction(plugin,action);break;}
       case 'plugin-file-action': {
         const [plugin,action,nodeId='']=value.split(':'),node=nodeId?projectNode(doc,nodeId):null;
         if(nodeId&&!node)break;
@@ -868,7 +902,14 @@ async function action(name, value = '', detail = {}) {
         guard();if(JSON.stringify(doc.getMap('assets').get(value)??null)!==blob)throw Object.assign(new Error(`Someone else replaced “${node.path}” while you were choosing its replacement. Nothing was changed.`),{code:'revision_conflict'});
         const added=entryCommand([{path:node.path,content:bytes}]);client.run({op:'asset.replace',id:value,blob:added.command.entries[0].blob},expected,added.attachments); notice('File replaced. Its project path and LaTeX references are unchanged.'); break;
       }
-      case 'import': { const [file] = await pickFiles('.zip'); if (!file) break; if (file.size > MAX_BYTES) throw new Error('ZIP exceeds 64 MiB.'); const entries = importZip(new Uint8Array(await file.arrayBuffer())); await createProject(file.name.replace(/\.zip$/i, ''), entries); break; }
+      case 'import': {
+        const [file] = await pickFiles('.zip'); if (!file) break; if (file.size > MAX_BYTES) throw new Error('ZIP exceeds 64 MiB.');
+        // Recognises Overleaf downloads, finds the main file and explains what LuaLaTeX needs (docs/templates.md).
+        const entries = importZip(new Uint8Array(await file.arrayBuffer())), report = analyzeImport(entries), name = file.name.replace(/\.zip$/i, '');
+        const id = await createProject(name, entries, report.main ? { mainPath: report.main } : {});
+        if (id && projectId === id && needsSummary(report) && await showImportSummary({ name, report, reveal: revealSource }) === 'compile' && projectId === id) await action('compile-start');
+        break;
+      }
       case 'export': download(client.run({op:'project.export'},expected).bytes, `${state.name.replace(/[^a-zA-Z0-9_-]/g,'_')}.zip`, 'application/zip'); notice('Source ZIP exported. Keep it somewhere safe as a backup.'); break;
       case 'engine': if (value==='lualatex') client.run({op:'project.configure',engine:value},expected); break;
       case 'main-file': if (state.files.some(f => f.id === value && f.path.toLowerCase().endsWith('.tex'))) client.run({op:'project.configure',mainFile:value},expected); break;
@@ -924,7 +965,7 @@ async function action(name, value = '', detail = {}) {
 }
 installPopups();
 installTreeMenus((id,origin)=>action('file-menu',id,origin));
-window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects();texLinks.start();openLinks.start(); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
+window.scribyra = { composing:()=>compositionInProgress(document.activeElement)||!!editor?.composing, action, lastCompile: null, ready() { queueMicrotask(async () => { try { await refreshProjects();texLinks.start();openLinks.start();openTemplateLink(initialTemplateLink);initialTemplateLink=null;window.addEventListener('hashchange',()=>openTemplateLink(takeTemplateFragment(window))); if (allProjects.length === 0) { /* Keep first-run dashboard empty and honest. */ } } catch(e) { displayError(e); } }); } };
 window.addEventListener('keydown', e => {
   if(e.defaultPrevented||document.querySelector('dialog[open]')||e.getModifierState('AltGraph')||composingEvent(e)||editor?.composing&&editor.dom.contains(e.target))return;
   if(state.current&&!document.querySelector('dialog[open]')){

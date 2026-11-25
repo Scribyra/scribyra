@@ -1,0 +1,10 @@
+{
+  "id": "beamer",
+  "name": "Beamer presentation",
+  "category": "slides",
+  "order": 10,
+  "description": "Widescreen slides with a title slide, an outline, columns, blocks, step-by-step lists and a references slide.",
+  "keywords": ["slides", "talk", "presentation", "lecture", "beamer", "16:9"],
+  "main": "main.tex",
+  "preview": [1, 5, 6, 7]
+}

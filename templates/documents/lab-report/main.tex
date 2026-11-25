@@ -1,0 +1,110 @@
+% Lab report.
+% Units: \SI{9.81}{\metre\per\second\squared} or \qty{9.81}{m/s^2} (siunitx).
+% Plots: pgfplots reads numbers from data.csv, so the figure updates with the data.
+\documentclass[11pt,a4paper]{article}
+
+\usepackage[a4paper,margin=2.5cm]{geometry}
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage{amsmath}
+\usepackage{siunitx}   % numbers and units
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
+
+\usepackage[style=numeric,backend=biber]{biblatex}
+\addbibresource{references.bib}
+\usepackage{csquotes}
+\usepackage[hidelinks]{hyperref}
+\usepackage[capitalise]{cleveref}
+
+% ---- Report details: change these ------------------------------------------
+\title{Measuring the Acceleration Due to Gravity with a Simple Pendulum}
+\author{Your Name \and Lab Partner\\[0.3em]\small Course, Group 3}
+\date{Experiment performed on 10 March 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+  We measured the period of a simple pendulum for five lengths and obtained
+  $g = \qty{9.79(6)}{m/s^2}$, in agreement with the accepted value.
+\end{abstract}
+
+\section{Aim}
+To determine the local gravitational acceleration $g$ from the period of a
+simple pendulum.
+
+\section{Theory}
+For small amplitudes, the period $T$ of a pendulum of length $L$ is
+\cite{halliday2013}
+\begin{equation}
+  T = 2\pi\sqrt{\frac{L}{g}}
+  \quad\Longrightarrow\quad
+  T^2 = \frac{4\pi^2}{g}\,L .
+  \label{eq:period}
+\end{equation}
+A plot of $T^2$ against $L$ is therefore a straight line with slope $4\pi^2/g$.
+
+\section{Apparatus and method}
+\begin{itemize}
+  \item A steel bob of mass \qty{50}{g} on a light string.
+  \item A metre rule (resolution \qty{1}{mm}) and a stopwatch (\qty{0.01}{s}).
+\end{itemize}
+For each length we timed 20 oscillations three times and took the mean.
+
+\section{Results}
+\Cref{tab:data} lists the measurements; \cref{fig:plot} shows $T^2$ against $L$.
+
+\begin{table}[htbp]
+  \centering
+  \caption{Pendulum length and mean period.}
+  \label{tab:data}
+  \begin{tabular}{S[table-format=1.2] S[table-format=1.3] S[table-format=1.3]}
+    \toprule
+    {$L$ (\unit{m})} & {$T$ (\unit{s})} & {$T^2$ (\unit{s^2})} \\
+    \midrule
+    0.20 & 0.898 & 0.806 \\
+    0.40 & 1.270 & 1.613 \\
+    0.60 & 1.555 & 2.418 \\
+    0.80 & 1.796 & 3.226 \\
+    1.00 & 2.008 & 4.032 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[htbp]
+  \centering
+  \begin{tikzpicture}
+    \begin{axis}[
+        width=0.75\linewidth, height=6cm,
+        xlabel={$L$ (\unit{m})}, ylabel={$T^2$ (\unit{s^2})},
+        grid=major, legend pos=north west]
+      \addplot[only marks,mark=*,blue] table[col sep=comma,x=L,y=T2] {data.csv};
+      \addlegendentry{measured}
+      \addplot[red,thick,domain=0.15:1.05] {4.033*x};
+      \addlegendentry{fit: $T^2 = 4.033\,L$}
+    \end{axis}
+  \end{tikzpicture}
+  \caption{$T^2$ against $L$ with a least-squares line through the origin.}
+  \label{fig:plot}
+\end{figure}
+
+\section{Analysis}
+From the slope $k = \qty{4.033(25)}{s^2/m}$ and \cref{eq:period},
+\[
+  g = \frac{4\pi^2}{k} = \qty{9.79(6)}{m/s^2}.
+\]
+
+\section{Discussion}
+Compare with the accepted value, name the largest source of uncertainty
+(here, reaction time when starting and stopping the watch) and suggest how to
+reduce it.
+
+\section{Conclusion}
+State the result with its uncertainty in one sentence.
+
+\printbibliography
+
+\end{document}

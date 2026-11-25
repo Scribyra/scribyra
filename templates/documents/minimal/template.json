@@ -1,0 +1,9 @@
+{
+  "id": "minimal",
+  "name": "Minimal",
+  "category": "start",
+  "order": 20,
+  "description": "A blank page with just enough LaTeX to compile. For when you know what you want.",
+  "keywords": ["blank", "empty", "plain", "simple"],
+  "main": "main.tex"
+}

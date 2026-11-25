@@ -3,7 +3,8 @@
 A link or badge on a repository that opens Scribyra with that repository imported,
 after the person confirms. It is core (no plugin) and works for public GitHub and
 GitLab repositories and for any ZIP file whose host allows cross-origin downloads.
-Private repositories will come with the Git plugins.
+Private repositories are reached with the [GitHub and GitLab plugin](git-sync.md): link a
+project to the repository with an access token, then pull.
 
 Code: `site/open-link-format.js` (format, shared by the app and the generator page),
 `web/open-link.js` (planning, ZIP reading, main-file detection, provenance),
@@ -135,8 +136,9 @@ The project keeps `meta.importSource`:
 (`url` and `archiveSha256` for ZIP links.) Public facts only: never tokens, cookies or
 the person's identity. It travels with backups and local tabs; a direct-session peer
 can send it only with a well-formed value and only to an empty project
-(`web/replication.js`). Future Git plugins can offer to link the project to that
-repository for pulling and pushing. Separately, this browser keeps
+(`web/replication.js`). The [GitHub and GitLab plugin](git-sync.md) reads it
+(`project.source`), offers **Link to this repository**, and uses `commit` as the last
+synced commit, so the first pull merges against what was imported. Separately, this browser keeps
 `scribyra:open-links:v1` in local storage (source → project IDs) for **Open existing
 copy**.
 

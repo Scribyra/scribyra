@@ -1,0 +1,30 @@
+/* Import summary, Overleaf guide and Git link dialogs (web/import-summary.js). */
+.modal.import-summary,.modal.overleaf-guide{width:min(620px,94vw);max-height:90dvh;overflow:auto}
+.modal.git-link-dialog{width:min(520px,94vw)}
+.import-facts{display:grid;grid-template-columns:max-content 1fr;gap:8px 16px;margin:4px 0 12px;font-size:12px;line-height:1.55}
+.import-facts dt{color:var(--muted)}
+.import-facts dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.import-facts code,.import-warnings code{font:11.5px "SFMono-Regular",Consolas,"Liberation Mono",monospace}
+.import-aside{color:var(--muted)}
+.modal .import-signals{margin:-4px 0 12px;font-size:11.5px;color:var(--muted)}
+.import-subhead{font-size:13px;font-weight:600;margin:16px 0 8px}
+.import-warnings{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:8px}
+.import-warnings li{display:flex;gap:10px;align-items:flex-start;border:1px solid var(--border);border-radius:8px;padding:10px 12px;background:var(--subtle)}
+.import-warnings li[data-severity=error]{border-left:3px solid var(--log-error)}
+.import-warnings li[data-severity=warning]{border-left:3px solid var(--log-warning)}
+.import-badge{flex-shrink:0;font-size:10px;font-weight:650;letter-spacing:.02em;border-radius:4px;padding:2px 6px;background:var(--surface);border:1px solid var(--border);color:var(--muted);margin-top:1px;min-width:86px;text-align:center}
+.import-warnings li[data-severity=error] .import-badge{color:var(--log-error)}
+.import-warnings li[data-severity=warning] .import-badge{color:var(--log-warning)}
+.modal .import-warnings p{margin:0;white-space:normal;line-height:1.55}
+.modal .import-message{color:var(--text)}
+.modal .import-fix{color:var(--muted)}
+.import-where{color:var(--accent);text-decoration:underline;text-underline-offset:2px;font:inherit;font-size:11px;padding:0}
+.modal .import-ok{color:var(--text);margin:12px 0 0}
+.modal .import-guide{margin:14px 0 0;white-space:normal}
+.import-guide a,.guide-notes a{color:var(--accent);text-decoration:underline;text-underline-offset:2px}
+.guide-steps{padding-left:22px;margin:8px 0 0;font-size:12.5px;line-height:1.65;display:flex;flex-direction:column;gap:8px}
+.guide-notes{padding-left:20px;margin:0;font-size:12px;line-height:1.6;color:var(--muted);display:flex;flex-direction:column;gap:6px}
+.git-link-label{display:block;font-size:11px;font-weight:600;margin-top:6px}
+.modal.git-link-dialog input{margin:6px 0 4px}
+.modal .git-link-status{margin:0;min-height:1.5em;color:var(--log-error);white-space:normal}
+@media(max-width:520px){.import-facts{grid-template-columns:1fr}.import-facts dd{margin-bottom:6px}.import-warnings li{flex-direction:column;gap:6px}}

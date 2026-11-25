@@ -1,0 +1,10 @@
+{
+  "id": "thesis",
+  "name": "Thesis",
+  "category": "long",
+  "order": 20,
+  "description": "A thesis or dissertation: title page, declaration, abstract, contents and lists, chapters in separate files, appendices and a biblatex/Biber bibliography.",
+  "keywords": ["dissertation", "phd", "master", "bachelor", "chapters", "front matter", "biblatex", "biber"],
+  "main": "main.tex",
+  "preview": [1, 10]
+}

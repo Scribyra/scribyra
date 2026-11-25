@@ -1,0 +1,116 @@
+% Conference poster with tikzposter (A0 portrait).
+% Blocks are arranged in columns; widths are fractions of the poster width.
+% For landscape posters use [landscape]; for A1 use [a1paper].
+\documentclass[25pt,a0paper,portrait]{tikzposter}
+
+% tikzposter selects older Type 1 fonts; with LuaLaTeX, use OpenType fonts instead.
+% Any installed OpenType family works here, e.g. \setmainfont{TeX Gyre Heros}.
+\usepackage{fontspec}
+\setmainfont{Latin Modern Sans}
+\setsansfont{Latin Modern Sans}
+
+\usepackage[english]{babel}
+\usepackage{amsmath}
+\usepackage{unicode-math} % OpenType maths that scales to poster sizes
+\setmathfont{Latin Modern Math}
+\usepackage{booktabs}
+\usepackage{graphicx}
+
+% ---- Colours and style --------------------------------------------------------
+% Built-in themes: Default, Rays, Basic, Simple, Envelope, Wave, Board, Autumn, Desert.
+\usetheme{Simple}
+\definecolorstyle{ScribyraStyle}{
+  \definecolor{colorOne}{RGB}{91,77,200}   % accent: title bar and block titles
+  \definecolor{colorTwo}{RGB}{245,244,252} % block background
+  \definecolor{colorThree}{RGB}{38,38,48}  % text
+}{
+  \colorlet{backgroundcolor}{white}
+  \colorlet{framecolor}{colorOne}
+  \colorlet{titlefgcolor}{white}
+  \colorlet{titlebgcolor}{colorOne}
+  \colorlet{blocktitlebgcolor}{colorOne}
+  \colorlet{blocktitlefgcolor}{white}
+  \colorlet{blockbodybgcolor}{colorTwo}
+  \colorlet{blockbodyfgcolor}{colorThree}
+  \colorlet{innerblocktitlebgcolor}{colorOne!20}
+  \colorlet{innerblocktitlefgcolor}{colorThree}
+  \colorlet{innerblockbodybgcolor}{white}
+  \colorlet{innerblockbodyfgcolor}{colorThree}
+  \colorlet{notefgcolor}{colorThree}
+  \colorlet{notebgcolor}{colorOne!10}
+  \colorlet{noteframecolor}{colorOne}
+}
+\usecolorstyle{ScribyraStyle}
+
+% Title bar layout: title, authors, institute.
+\makeatletter
+\settitle{\centering\vbox{%
+  \color{titlefgcolor}{\bfseries\Huge\@title\par}\vspace*{0.8em}%
+  {\LARGE\@author\par}\vspace*{0.4em}{\Large\@institute\par}}}
+\makeatother
+
+\title{A Clear, Short Title for Your Poster}
+\author{First Author, Second Author and Third Author}
+\institute{Department, University, City \quad\textbullet\quad first.author@example.org}
+
+\begin{document}
+\maketitle
+
+\begin{columns}
+  % ---- Left column ------------------------------------------------------------
+  \column{0.33}
+  \block{Background}{
+    Two or three sentences that a passer-by can read in ten seconds.
+    What is the problem, and why should they stop?
+  }
+  \block{Aims}{
+    \begin{itemize}
+      \item The first aim of the study.
+      \item The second aim.
+    \end{itemize}
+  }
+
+  % ---- Middle column ----------------------------------------------------------
+  \column{0.34}
+  \block{Method}{
+    The model at the heart of the work:
+    \[
+      \frac{\partial u}{\partial t} = D\,\nabla^2 u + f(u)
+    \]
+    \textbf{Data.} Where the data came from and how much of it.
+  }
+  \block{Results}{
+    \begin{tikzfigure}[The main result at a glance.]
+      % Replace with \includegraphics[width=0.9\linewidth]{figure.png}
+      \begin{tikzpicture}
+        \foreach \h/\shade [count=\i] in {3/40,5/55,4/70,7/85,6/100}
+          \fill[colorOne!\shade] (\i*2.2,0) rectangle ++(1.6,\h);
+        \draw[thick] (1.5,0) -- (13.5,0);
+      \end{tikzpicture}
+    \end{tikzfigure}
+  }
+
+  % ---- Right column -----------------------------------------------------------
+  \column{0.33}
+  \block{Findings}{
+    \begin{center}
+      \begin{tabular}{lr}
+        \toprule
+        Group & Effect \\
+        \midrule
+        A & 0.42 \\
+        B & 0.67 \\
+        \bottomrule
+      \end{tabular}
+    \end{center}
+  }
+  \block{Conclusions}{
+    The single sentence you want people to remember.
+  }
+  \block{References}{
+    \small
+    [1] Author, A. (2025). \emph{Title of a key paper}. Journal, 1(1), 1--10.
+  }
+\end{columns}
+
+\end{document}

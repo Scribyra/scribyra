@@ -1,0 +1,10 @@
+{
+  "id": "book",
+  "name": "Book",
+  "category": "long",
+  "order": 10,
+  "description": "A book with parts, chapters in separate files, front and back matter, a copyright page and a table of contents.",
+  "keywords": ["book", "novel", "monograph", "chapters", "parts"],
+  "main": "main.tex",
+  "preview": [1, 6]
+}

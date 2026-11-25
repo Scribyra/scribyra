@@ -118,15 +118,16 @@ test('packages: JSON with a manifest and its main file; anything else is refused
 test('the committed official registry verifies against the pinned key and matches fresh builds',async()=>{
   const registry=await verifyAll();
   assert.equal(registry.keyId,'scribyra-plugins-dev-2026-11');
-  assert.deepEqual(registry.plugins.map(plugin=>plugin.id),['com.scribyra.zotero']);
+  assert.deepEqual(registry.plugins.map(plugin=>plugin.id),['com.scribyra.github-gitlab','com.scribyra.zotero']);
 });
 
 test('a tampered registry, an unknown key or a wrong signature is refused',async()=>{
   const text=await readFile(new URL('../plugins/dist/registry.json',import.meta.url),'utf8'),document=JSON.parse(text);
   await verifyRegistry(text);
-  const tampered=structuredClone(document);tampered.signed.plugins[0].versions[0].sha256='0'.repeat(64);
+  const zotero=document.signed.plugins.findIndex(plugin=>plugin.id==='com.scribyra.zotero');
+  const tampered=structuredClone(document);tampered.signed.plugins[zotero].versions[0].sha256='0'.repeat(64);
   await assert.rejects(verifyRegistry(tampered),/signature does not match/);
-  const widened=structuredClone(document);widened.signed.plugins[0].versions[0].permissions.network.push('https://evil.example');
+  const widened=structuredClone(document);widened.signed.plugins[zotero].versions[0].permissions.network.push('https://evil.example');
   await assert.rejects(verifyRegistry(widened),/signature does not match/);
   const unknown=structuredClone(document);unknown.signature.keyId='someone-else';unknown.signed.keyId='someone-else';
   await assert.rejects(verifyRegistry(unknown),/key Scribyra does not trust/);
@@ -136,7 +137,7 @@ test('a tampered registry, an unknown key or a wrong signature is refused',async
   const signed={...document.signed,keyId:'test-key'},value=sign('sha256',Buffer.from(canonicalJson(signed)),{key:privateKey,dsaEncoding:'ieee-p1363'}).toString('base64');
   const foreign={signed,signature:{alg:'ECDSA-P256-SHA256',keyId:'test-key',value}};
   await assert.rejects(verifyRegistry(foreign),/does not trust/);
-  assert.equal((await verifyRegistry(foreign,{keys:{'test-key':{kty:'EC',crv:'P-256',x:jwk.x,y:jwk.y}}})).plugins.length,1);
+  assert.equal((await verifyRegistry(foreign,{keys:{'test-key':{kty:'EC',crv:'P-256',x:jwk.x,y:jwk.y}}})).plugins.length,document.signed.plugins.length);
   assert.ok(Object.isFrozen(TRUSTED_REGISTRY_KEYS));
 });
 
@@ -148,7 +149,7 @@ test('canonical JSON sorts keys at every depth and drops nothing else',()=>{
 
 test('a package must match its registry entry: hash, id, version and permissions',async()=>{
   const document=JSON.parse(await readFile(new URL('../plugins/dist/registry.json',import.meta.url),'utf8'));
-  const entry={id:'com.scribyra.zotero',...document.signed.plugins[0].versions[0]};
+  const entry={id:'com.scribyra.zotero',...document.signed.plugins.find(plugin=>plugin.id==='com.scribyra.zotero').versions[0]};
   const bytes=new Uint8Array(await readFile(new URL(`../plugins/dist/${entry.package}`,import.meta.url)));
   assert.equal((await verifyPackage(bytes,entry)).manifest.id,'com.scribyra.zotero');
   const changed=bytes.slice();changed[100]^=1;
@@ -167,12 +168,43 @@ test('dialog specs: only known parts, https links, unique ids, bounded sizes, at
   bad({title:'T',children:[{type:'link',href:'javascript:alert(1)',text:'x'},actions]},/https/);
   bad({title:'T',children:[{type:'text',content:[{link:'http://example.org',text:'x'}]},actions]},/https/);
   bad({title:'T',children:[{type:'field',id:'a',input:'text',label:'A'},{type:'field',id:'a',input:'text',label:'B'},actions]},/unique/);
-  bad({title:'T',children:[{type:'field',id:'a',input:'file',label:'A'},actions]},/text, password, select or checkbox/);
+  bad({title:'T',children:[{type:'field',id:'a',input:'file',label:'A'},actions]},/text, password, select, checkbox or textarea/);
   bad({title:'T',children:[{type:'text',text:'no buttons'}]},/row of buttons/);
   bad({title:'T',children:[...Array.from({length:2001},()=>({type:'text',text:'x'})),actions]},/at most 2000/);
   let deep={type:'section',label:'x',children:[]},root=deep;for(let i=0;i<10;i++){const next={type:'section',label:'x',children:[]};root.children.push(next);root=next;}
   bad({title:'T',children:[deep,actions]},/nested at most 8 deep/);
   bad({title:'x'.repeat(121),children:[actions]},/Dialog title/);
+});
+
+test('the GitHub and GitLab manifest: binary reads, multi-file changes, asked-for origins and a status item',async()=>{
+  const manifest=validateManifest(JSON.parse(await readFile(new URL('../plugins/github-gitlab/manifest.json',import.meta.url),'utf8')));
+  assert.deepEqual(manifest.permissions,{network:['https://api.github.com','https://gitlab.com'],'network.ask':{purpose:'self-hosted GitLab servers you add'},'project.read':{files:['**'],binary:true},'project.write':{create:['**'],pick:false,change:['**']},secrets:true,'ui.command':true,'ui.dialog':true,'ui.status':true});
+  assert.deepEqual(describePermissions(manifest.permissions).map(line=>line.text),['Read every file in the open project, including images and other binary files','Add, change and delete any file in the open project, in changes you confirm','Contact https://api.github.com and https://gitlab.com','Ask you to allow other https:// addresses (self-hosted GitLab servers you add)','Keep secrets such as API keys on this device','Show dialogs','Add items to More tools','Show a status item above the open project']);
+  // The new shapes are as strict as the old ones; Zotero's stay exactly as they were.
+  rejects({...base,permissions:{'project.read':{files:['*.tex'],binary:'yes'}}},/binary/);
+  rejects({...base,permissions:{'project.read':{files:['*.tex']},'project.write':{change:['../*']}}},/invalid file pattern/);
+  rejects({...base,permissions:{'project.read':{files:['*.tex']},'project.write':{pick:false}}},/creating, picking or changing/);
+  rejects({...base,permissions:{'network.ask':true}},/purpose/);
+  rejects({...base,permissions:{'network.ask':{purpose:'x'.repeat(101)}}},/purpose/);
+  rejects({...base,permissions:{'network.ask':{purpose:'ok',origins:['https://x.org']}}},/unknown field/);
+  rejects({...base,permissions:{'ui.status':{}}},/must be true/);
+  assert.deepEqual(normalPermissions({'project.read':{files:['*.bib']},'project.write':{create:['*.bib']}}),{'project.read':{files:['*.bib']},'project.write':{create:['*.bib'],pick:false}});
+  // Widening to binary files, to changing files or to asking for origins needs consent again.
+  const before=normalPermissions({'project.read':{files:['**']},'project.write':{create:['*.bib']}});
+  assert.deepEqual(addedPermissions(before,manifest.permissions),{network:['https://api.github.com','https://gitlab.com'],'network.ask':{purpose:'self-hosted GitLab servers you add'},'project.read':{files:['**'],binary:true},'project.write':{create:['**'],pick:false,change:['**']},secrets:true,'ui.command':true,'ui.dialog':true,'ui.status':true});
+  assert.deepEqual(addedPermissions(manifest.permissions,manifest.permissions),{});
+});
+
+test('dialog specs: multi-line fields and bounded line diffs',()=>{
+  const actions={type:'actions',buttons:[{id:'ok',label:'OK'}]};
+  const spec=validateDialogSpec({title:'T',children:[{type:'field',id:'e',input:'textarea',label:'Result',value:'a\nb',rows:99},{type:'diff',label:'Changes',lines:[{kind:'context',text:'a',old:1,new:1},{kind:'added',text:'b',new:2},{kind:'gap',text:'3 unchanged lines',old:-4}]},actions]});
+  assert.equal(spec.children[0].rows,30);assert.equal(spec.children[0].value,'a\nb');
+  assert.deepEqual(spec.children[1].lines[2],{kind:'gap',text:'3 unchanged lines',old:null,new:null});
+  const bad=(value,pattern)=>assert.throws(()=>validateDialogSpec({title:'T',children:[value,actions]}),error=>error.code==='invalid_dialog'&&pattern.test(error.message));
+  bad({type:'diff',label:'x',lines:[{kind:'html',text:'<b>'}]},/context, added, removed or gap/);
+  bad({type:'diff',label:'x',lines:Array.from({length:1001},()=>({kind:'added',text:'x'}))},/at most 1000 lines/);
+  bad({type:'diff',label:'x',lines:[{kind:'added',text:'x'.repeat(2001)}]},/Diff line/);
+  assert.throws(()=>validateDialogSpec({title:'T',children:[...Array.from({length:7},()=>({type:'diff',label:'x',lines:Array.from({length:900},()=>({kind:'added',text:'x'}))})),actions]}),/a dialog 6000/);
 });
 
 // Regressions for the adversarial review (docs/plugins.md#security-review).

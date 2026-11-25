@@ -53,8 +53,9 @@ export async function pluginServer(){
   const server=http.createServer((request,response)=>{
     let body='';request.on('data',chunk=>{body+=chunk;});
     request.on('end',()=>{
-      requests.push({method:request.method,url:request.url,origin:request.headers.origin||null,cookie:request.headers.cookie||null,referer:request.headers.referer||null,body});
-      response.setHeader('Access-Control-Allow-Origin','*');response.setHeader('Access-Control-Allow-Headers','*');response.setHeader('Access-Control-Allow-Methods','GET, POST');
+      requests.push({method:request.method,url:request.url,origin:request.headers.origin||null,cookie:request.headers.cookie||null,referer:request.headers.referer||null,authorization:request.headers.authorization||null,body});
+      // "*" does not cover Authorization, so preflights are answered with what was asked.
+      response.setHeader('Access-Control-Allow-Origin','*');response.setHeader('Access-Control-Allow-Headers',request.headers['access-control-request-headers']||'*');response.setHeader('Access-Control-Allow-Methods','GET, POST');
       if(request.method==='OPTIONS'){response.writeHead(204);response.end();return;}
       if(request.url==='/report'&&request.method==='POST'){reports.push(JSON.parse(body));for(const resolve of waiters)resolve();waiters=[];response.writeHead(200,{'Content-Type':'application/json'});response.end('{}');return;}
       const file=files.get(request.url.split('?')[0]);

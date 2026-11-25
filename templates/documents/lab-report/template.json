@@ -1,0 +1,9 @@
+{
+  "id": "lab-report",
+  "name": "Lab report",
+  "category": "teaching",
+  "order": 20,
+  "description": "A science lab report: aims, theory, apparatus, method, results with units, a plotted data set, error analysis and references.",
+  "keywords": ["lab", "laboratory", "experiment", "physics", "chemistry", "siunitx", "pgfplots"],
+  "main": "main.tex"
+}

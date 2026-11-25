@@ -1,0 +1,9 @@
+{
+  "id": "homework",
+  "name": "Homework / problem set",
+  "category": "teaching",
+  "order": 10,
+  "description": "Numbered problems with parts and solutions, a course header on every page, and theorem-style environments for proofs.",
+  "keywords": ["homework", "assignment", "problem set", "exercises", "solutions", "proof"],
+  "main": "main.tex"
+}

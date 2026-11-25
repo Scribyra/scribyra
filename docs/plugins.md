@@ -4,7 +4,8 @@ Milestone 9 makes Scribyra extensible without giving extensions the app's author
 A plugin is a small package someone installs in their browser. It runs in a sandbox
 that has no access to the app's origin, and it can do only what its manifest declares
 and the person agreed to. Zotero is the first plugin. It used to be built in
-([zotero.md](zotero.md)).
+([zotero.md](zotero.md)). The second is [GitHub and GitLab](git-sync.md), which needed the
+additions marked *(Nov 22)* below.
 
 Summary:
 
@@ -41,6 +42,8 @@ These defaults are deliberate and easy to change; see [Open decisions](#open-dec
 | `web/plugin-catalog.js` | The bundled official registry and its packages, loaded only when the plugin browser opens. |
 | `web/plugin-migration.js` | Moves the built-in Zotero's keys and links into the Zotero plugin. |
 | `plugins/zotero/` | The Zotero plugin's source. `plugins/dist/` holds the built packages and the signed registry. |
+| `plugins/github-gitlab/` | The GitHub and GitLab plugin's source ([git-sync.md](git-sync.md)). |
+| `web/line-diff.js` | Pure. Line diffs, display diffs, edit hunks and the three-way merge, used by the host (Reviewing suggestions from `project.apply`) and bundled by the GitHub and GitLab plugin. |
 | `scripts/plugins.mjs` | Builds, packs, signs and verifies plugin packages and the registry. |
 | `templates/plugin-js/`, `templates/plugin-rust/` | Starting points for plugin authors. |
 
@@ -121,9 +124,11 @@ cannot ask for something the consent dialog would not show. The rules:
 
 | Permission | Shape | What it allows | Shown at install as |
 | --- | --- | --- | --- |
-| `project.read` | `{files: [glob…]}` | List and read text files of the **open project** whose path matches a glob. Never other projects, binary assets, history, comments, or the project list. | "Read files in the open project matching *.bib, *.tex, *.ltx" |
-| `project.write` | `{create: [glob…], pick: bool}` | Create files whose path matches `create`. Change only files it created, or files the person picked for it (`pick`). Respects modes. | "Create *.bib files and change the files it created" |
+| `project.read` | `{files: [glob…], binary?: true}` | List and read text files of the **open project** whose path matches a glob; with `binary` *(Nov 22)*, binary files too, as bytes. Never other projects, history, comments, or the project list. | "Read files in the open project matching *.bib, *.tex, *.ltx"; with `**` and `binary`: "Read every file in the open project, including images and other binary files" |
+| `project.write` | `{create: [glob…], pick: bool, change?: [glob…]}` | Create files whose path matches `create`. Patch only files it created, or files the person picked for it (`pick`). *(Nov 22)* Existing readable files matching `change` can be changed and deleted only through `project.apply`, which needs the person's click in the plugin's dialog. Respects modes. | "Create *.bib files and change the files it created"; with `change: ["**"]`: "Add, change and delete any file in the open project, in changes you confirm" |
 | `network` | `["https://host[:port]"]` | Requests through the host's fetch proxy to exactly these origins. `https:` only. No wildcards, credentials or redirects. | "Contact https://api.zotero.org" |
+| `network.ask` *(Nov 22)* | `{purpose: text}` | Ask the person, in Scribyra's own dialog, to allow one more `https:` origin at a time (`net.requestOrigin`), for example a self-hosted server. Allowed origins are kept in the plugin's record, listed in the manager with **Remove**, and then behave like `network` origins. | "Ask you to allow other https:// addresses (self-hosted GitLab servers you add)" |
+| `ui.status` *(Nov 22)* | `true` | Show one status item above the open project, with up to three buttons. | "Show a status item above the open project" |
 | `secrets` | `true` | Device-only storage for keys and tokens, for this plugin only. | "Keep secrets such as API keys on this device" |
 | `ui.dialog` | `true` | Open dialogs described declaratively and rendered by Scribyra. | "Show dialogs" |
 | `ui.command` | `true` | Add the items in `contributes.commands` to **More tools**. | "Add items to More tools" |
@@ -242,16 +247,21 @@ scribyra.files                            // the package's own files: text or Ui
 | `ui.notify` | — | `{text}` (≤ 500 chars) → `{}`; shown in the workspace notification |
 | `storage.get` / `set` / `delete` / `keys` | — | `{key[, value]}`; JSON values; 1 MiB per plugin |
 | `projectData.get` / `set` / `delete` / `keys` | open project | the same, for this plugin and the open project only; 4 MiB per plugin per project |
-| `project.files` | `project.read` | → `[{id, path, owned}]` for readable text files only |
-| `project.read` | `project.read` | `{fileId}` → `{id, path, text}` |
+| `project.files` | `project.read` | `{hashes?}` → `[{id, path, owned, binary?}]` for readable files (binary ones only with `project.read.binary`); with `hashes: true` also `{hash, size}`: an opaque fingerprint of the content (equal content, equal hash) and its byte size *(Nov 22)* |
+| `project.read` | `project.read` | `{fileId}` → `{id, path, text, hash}`, or `{id, path, binary: true, bytes, hash}` for a binary file |
+| `project.source` *(Nov 22)* | `project.read` | → the project's Open in Scribyra provenance (`meta.importSource`, public facts only) or `null` |
+| `project.apply` *(Nov 22)* | `project.write` | `{changes:[{op:'add', path, text \| bytes} \| {op:'update', fileId, expect, text \| bytes} \| {op:'delete', fileId, expect}]}` → Editing `{files:[{op, id, path, hash}]}`; Reviewing `{suggested, reviewId}`; Viewing refused. See [Multi-file changes](#multi-file-changes). |
 | `project.freePath` | `project.write` | `{path}` → a free path like `zotero-2.bib`; the path must match `create` |
 | `project.create` | `project.write` | `{path, content}` → `{id, path}`; path matches `create`; Editing only |
 | `project.patch` | `project.write` | `{fileId, edits:[{start, end, before, after}]}` → Editing `{applied}`; Reviewing `{suggested, reviewId}`; Viewing refused |
 | `project.pick` | `project.write.pick` | `{title, files:[glob]}` → `{id, path}` or `null`; the person chooses; grants read and write to that file |
 | `project.activate` | readable file | `{fileId}` → `{}`; opens the file in the editor |
-| `secrets.get` / `set` / `delete` / `keys` | `secrets` | `{name[, value]}` (strings ≤ 4 KiB, ≤ 32 names) |
-| `net.fetch` | `network` | `{url, method?, headers?, body?, requestId?}` → `{status, statusText, headers:[[k,v]], body}` |
+| `secrets.get` / `set` / `delete` / `keys` | `secrets` | `{name[, value, origin]}` (strings ≤ 4 KiB, ≤ 32 names). With `origin` *(Nov 22)* the secret is **bound**: printable ASCII, write-only (`get` returns `null`), and usable only through `net.fetch {auth}` to that origin, while `secrets` is granted. Removing an asked-for origin deletes the secrets bound to it |
+| `net.fetch` | `network` or `network.ask` | `{url, method?, headers?, body?, responseType?, auth?, requestId?}` → `{status, statusText, headers:[[k,v]], body}`; `auth: {secret, header: 'Authorization' \| 'PRIVATE-TOKEN', scheme: 'Bearer' \| 'token' \| ''}` makes the host add a bound secret *(Nov 22)* |
 | `net.abort` | `network` | `{requestId}` |
+| `net.origins` *(Nov 22)* | `network` or `network.ask` | → `{granted, added}` |
+| `net.requestOrigin` *(Nov 22)* | `network.ask`, activation | `{origin, reason}` → `{granted, origin}` after Scribyra's own consent dialog; one at a time, and after a Cancel only with a new gesture and a 2 s pause |
+| `ui.status.set` *(Nov 22)* | `ui.status` | `{status: {label, text, title?, tone?, actions:[{id, label, title?, modes?, blockedTitle?}]} \| null}` |
 | `ui.dialog.open` / `update` / `close` | `ui.dialog` | `{spec}` → `{dialogId}`; `{dialogId, spec}`; `{dialogId}` |
 | `ui.files.decorate` | `ui.fileAction` | `{fileId, tags:[…], bar:{label, text, actions:[{id,label,title,modes}]} \| null}` on a readable file |
 | `bibliography.set` | `bibliography` | `{entries:[{key, type?, author?, year?, title?}]}` (≤ 20,000) |
@@ -264,6 +274,8 @@ scribyra.files                            // the package's own files: text or Ui
 | event | `project.opened`, `project.closed` | `{transient}` / `{}` |
 | event | `project.activeFile` | `{fileId}`, or `null` if the plugin cannot read it |
 | event | `project.mode` | `{mode}` |
+| event | `project.changed` *(Nov 22)* | `{}`: the project changed; at most once a second, only to plugins with `project.read`, with no content |
+| request | `status.run` *(Nov 22)* | `{action}`: a button of the plugin's status item |
 | request | `command.run` | `{command}`: a `contributes.commands` id |
 | request | `fileAction.run` | `{action, fileId, directory}`. `fileId` is `null` for the tree root and is given only if readable; `directory` is the folder path the action was chosen on |
 | request | `fileBar.run` | `{action, fileId}` |
@@ -307,6 +319,37 @@ scribyra.files                            // the package's own files: text or Ui
    - Contributed citation keys must be BibTeX keys, with no spaces, braces, commas or
      backslashes, so accepting a completion cannot insert TeX the plugin chose.
 
+### Multi-file changes
+
+`project.apply` *(Nov 22)* applies a set of additions, changes and deletions the person
+confirmed in the plugin's dialog, all or nothing:
+
+- It needs **confirmation**: a click inside the plugin's own dialog in the last minute.
+  Other gestures, such as a More tools item or a status button, do not count. One click
+  covers one change set.
+- **Checks, before anything changes.**
+  - Every `add` path must pass `assertPath` and match `project.write.create`, and must not
+    exist, case-insensitively, unless the same set deletes it.
+  - Every `update` and `delete` must name a readable file matching `project.write.change`
+    (or owned).
+  - Each `expect` must equal the file's current fingerprint. A file edited after the
+    plugin read it refuses the whole set with `revision_conflict`.
+  - Text goes to text files and bytes to binary files.
+  - At most 1,024 changes; the project's 512 files and 64 MiB apply.
+  - The message may be up to 160 MiB (bytes count as bytes), against 8 MiB for everything
+    else.
+- **Trial, then commit.** The commands (`node.delete`, `text.patch` as minimal line
+  hunks, `asset.replace`, one `files.add`) run first on a copy of the project
+  (`cloneProject`). Only if all succeed do they run on the project, in one Yjs
+  transaction. Peers, tabs and history never see half of a set. Deletions go to
+  **Restore last deletion**. Text changes are minimal hunks, so comment anchors in
+  unchanged lines stay.
+- **Modes.**
+  - Reviewing accepts only `update`s of text files. Each changed block becomes a
+    suggestion in the plugin's review, credited to "<Plugin> (plugin)".
+  - Additions, deletions and binary changes are refused with `reviewing_mode`.
+  - Viewing and transient projects refuse everything.
+
 ### Modes
 
 The person's mode applies to plugins as to the agent API (`web/agent-commands.js`):
@@ -315,6 +358,7 @@ The person's mode applies to plugins as to the agent API (`web/agent-commands.js
 | --- | --- | --- | --- |
 | `project.read`, `project.files` | yes | yes | yes |
 | `project.patch` | applied | a suggestion in a review titled "<Plugin> suggestions", credited to the plugin | refused, `viewing_mode` |
+| `project.apply` | applied at once | text changes become suggestions (one per changed block); additions, deletions and binary changes refused, `reviewing_mode` | refused, `viewing_mode` |
 | `project.create` | yes | refused, `reviewing_mode` | refused, `viewing_mode` |
 | File actions and bar buttons with `modes:["editing"]` | enabled | disabled, with the reason | disabled, with the reason |
 
@@ -349,6 +393,10 @@ actor kind is a schema change for later.
   - `list`, `table` (caption, columns, rows of strings)
   - `choice` (a radio group), `status` (a polite live region)
   - `actions` (buttons: `primary`, `danger`, `disabled`)
+  - *(Nov 22)* `field` with `input: 'textarea'` (`rows` 3–30, up to 400,000 characters),
+    and `diff` (a labelled line diff: `lines:[{kind: context|added|removed|gap, text, old,
+    new}]`, at most 1,000 lines each and 6,000 per dialog), drawn with line numbers, `+`/`−`
+    signs and screen-reader prefixes ("Added:", "Removed:").
 
   `update` replaces the spec, and the renderer keeps elements by `id`. Focus, caret and
   typed values survive an update unless the plugin changes that field's `value`. A
@@ -456,7 +504,8 @@ until the old one is uninstalled, since it would inherit the plugin's data and s
 
 **Uninstall.** This stops the plugin and deletes everything it owns on this device:
 
-- its record, its packages (current and previous) and its grants;
+- its record, its packages (current and previous), its grants and the origins the person
+  allowed it later;
 - its `storage` and its `projectData` in every project;
 - its file ownership records and its secrets.
 
@@ -464,6 +513,16 @@ Files it created stay in the projects as ordinary files.
 
 **Project deleted.** Every plugin's `projectData` and ownership for that project are
 deleted.
+
+## Templates hook
+
+Not built. Document templates ([templates.md](templates.md)) are data: a `template.json`
+plus files, checked by `validateTemplate` in `web/template-catalog.js`. A later capability
+could let a plugin contribute templates of exactly that shape (for example a
+department's thesis template, or a publisher class bundled with the plugin). The gallery
+would show them in their category with the plugin's name, load their files only when
+chosen, and apply the same file rules. No permission, manifest field or API exists for
+it yet.
 
 ## Organisation allow-list (hook)
 
@@ -513,6 +572,9 @@ the person's trust in the UI, and the network destinations their data reaches.
 | Denial of service (loops, floods, modal spam) | The worker is isolated from the UI thread. Messages are measured by a bounded walk. In-flight limits, redraw pacing and notice limits apply. Dialogs need a fresh gesture, and Dismiss always closes. Plugins with persistent errors are stopped. Disabling always works because the manager never waits for the plugin. |
 | Sideloaded malware | Off unless developer mode is on, with a loud warning. Unsigned code is labelled. Official ids are reserved. The organisation policy can forbid it. |
 | Secrets leaking into projects, backups or telemetry | Secrets are in their own database, outside the project, history, backups, exports, diagnostics and telemetry. Plugin modules never call the telemetry recorder (`tests/telemetry-consent.test.mjs`). |
+| A token sent to the wrong origin *(Nov 22)* | Bound secrets: the host adds them only to requests to their origin, and never returns them to the plugin |
+| A plugin adds origins behind the person's back *(Nov 22)* | `network.ask` origins need Scribyra's own dialog after a gesture, show a local-network warning, are listed in the manager and can be removed |
+| A multi-file change lands half-way or over newer edits *(Nov 22)* | `project.apply` checks fingerprints, permission globs and paths first, runs on a copy, then commits in one transaction |
 
 **Not defended:**
 
@@ -603,6 +665,19 @@ Lower-risk items also fixed:
 - Migration respects the policy and takes the highest compatible version.
 - Package file names cannot be `__proto__` or similar.
 - "Scribyra" in a plugin's name or publisher is reserved for official plugins.
+
+The November 22 additions (binary reads, `project.apply`, bound secrets, `network.ask`,
+`ui.status`) had their own independent review. Its findings and fixes are in
+[git-sync.md](git-sync.md#security-review). The ones in the host:
+
+- `change` no longer widens `project.patch`.
+- `project.apply` needs a click in the plugin's dialog.
+- Revoked `secrets` stops bound-secret use.
+- Origin prompts are paced.
+- Removing an origin deletes its bound secrets.
+- The local-network check is wider.
+- Status text cannot hide characters.
+- Bytes are copied at the boundary.
 
 Accepted and documented:
 

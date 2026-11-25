@@ -1,0 +1,26 @@
+{
+  "manifestVersion": 1,
+  "id": "com.scribyra.github-gitlab",
+  "name": "GitHub and GitLab",
+  "version": "1.0.0",
+  "publisher": "Scribyra",
+  "description": "Link a project to a GitHub or GitLab repository. Pull the latest commit with a reviewable diff, resolve conflicts file by file, and push your changes as one commit. Your access token stays on this device and goes only to the host you link.",
+  "homepage": "https://scribyra.com/privacy.html",
+  "api": 1,
+  "main": "main.js",
+  "permissions": {
+    "project.read": {"files": ["**"], "binary": true},
+    "project.write": {"create": ["**"], "change": ["**"]},
+    "network": ["https://api.github.com", "https://gitlab.com"],
+    "network.ask": {"purpose": "self-hosted GitLab servers you add"},
+    "secrets": true,
+    "ui.dialog": true,
+    "ui.command": true,
+    "ui.status": true
+  },
+  "contributes": {
+    "commands": [
+      {"id": "open", "label": "GitHub and GitLab", "hint": "Link a repository, pull and push"}
+    ]
+  }
+}

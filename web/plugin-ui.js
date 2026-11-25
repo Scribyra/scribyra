@@ -2,7 +2,7 @@
 // plugin may ask for (docs/plugins.md#flows). These are Scribyra's own dialogs: plugins
 // never draw here. The official registry is loaded only when the person chooses Browse.
 import {restoreDialogFocus} from './input.js';
-import {describePermissions,PluginError} from './plugin-manifest.js';
+import {describePermissions,privateOrigin,PluginError} from './plugin-manifest.js';
 import {developerMode,setDeveloperMode} from './plugin-store.js';
 
 function el(tag,props={},...children){
@@ -58,6 +58,28 @@ function confirmDialog({title,message,label,danger=false}){
     const dialog=el('dialog',{className:'modal plugin-confirm','aria-label':title});restoreDialogFocus(dialog);
     const finish=value=>{dialog.close();dialog.remove();resolve(value);};
     dialog.append(el('h2',{text:title}),el('p',{text:message}),el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button(label,()=>finish(true),{primary:true,danger})));
+    dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
+    document.body.append(dialog);dialog.showModal();dialog.querySelector('.button.secondary').focus();
+  });
+}
+
+/**
+ * A plugin with “network.ask” wants to contact one more origin (docs/plugins.md#network).
+ * Scribyra asks, not the plugin; resolves to true when the person allows it.
+ */
+export function originConsentDialog({plugin,origin,reason='',purpose=''}){
+  return new Promise(resolve=>{
+    const title=`Allow ${plugin.name} to contact ${new URL(origin).host}?`;
+    const dialog=el('dialog',{className:'modal plugin-consent plugin-origin','aria-label':title});restoreDialogFocus(dialog);
+    const finish=value=>{dialog.close();dialog.remove();resolve(value);};
+    dialog.append(...present(el('h2',{text:title}),
+      el('p',{className:'plugin-meta',text:`${plugin.name} plugin${plugin.source==='developer'?' · developer, unverified':''}`}),
+      el('p',{},'It asks to contact ',el('code',{text:origin}),purpose?` (${purpose})`:'','.'),
+      reason?el('p',{className:'plugin-text tone-note',text:`${plugin.name} says: ${reason}`}):null,
+      el('p',{className:'plugin-text',text:'Once allowed, it can send what it reads from the open project to this address, as it can to the addresses you allowed at install. Allow only a server you trust.'}),
+      privateOrigin(origin)?el('p',{className:'plugin-text tone-warning',role:'note',text:'This address is on your own computer or local network.'}):null,
+      el('p',{className:'plugin-text tone-muted',text:'You can remove it anytime in More tools → Plugins.'}),
+      el('div',{className:'modal-actions'},button('Cancel',()=>finish(false)),button('Allow',()=>finish(true),{primary:true}))));
     dialog.addEventListener('cancel',event=>{event.preventDefault();finish(false);});
     document.body.append(dialog);dialog.showModal();dialog.querySelector('.button.secondary').focus();
   });
@@ -132,6 +154,8 @@ export function pluginManager({system,catalog,fetchPackage,policy,notify}){
                   if(!await consentDialog({manifest:record.manifest,source:record.source,sourceUrl:record.sourceUrl,sha256:record.sha256,existing:{version:record.version},added:{[line.key]:record.manifest.permissions[line.key]},regrant:true}))return;
                   await system.grant(record.id,line.key);say(`${name} can again: ${line.text.toLowerCase()}.`);}),{'aria-label':`Grant again: ${line.text}`,'data-focus':`perm:${record.id}:${line.key}`,disabled:busy})));
           })),
+          (record.addedOrigins||[]).length&&record.manifest.permissions['network.ask']?el('ul',{className:'plugin-permissions','aria-label':`Addresses you allowed for ${name}`},record.addedOrigins.map(origin=>el('li',{'data-origin':origin},el('span',{text:`Also contact ${origin} (you allowed it)`}),
+            button('Remove',()=>void work(async()=>{await system.removeOrigin(record.id,origin);say(`${name} can no longer contact ${origin}.`);}),{'aria-label':`Remove ${origin}`,'data-focus':`origin:${record.id}:${origin}`,disabled:busy})))):null,
           el('div',{className:'plugin-card-actions'},
             newer?button(`Update to ${newer.version}`,()=>void work(()=>installOfficial(entry,newer)),{primary:true,'data-focus':`update:${record.id}`,disabled:busy}):null,
             record.previous?button(`Roll back to ${record.previous.version}`,()=>void work(async()=>{const next=await system.rollback(record.id);say(`${name} rolled back to ${next.version}.`);}),{'data-focus':`rollback:${record.id}`,disabled:busy}):null,

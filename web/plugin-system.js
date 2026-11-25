@@ -7,7 +7,7 @@ import {sha256Hex} from './plugin-registry.js';
 import {pluginStore,developerMode} from './plugin-store.js';
 import {startPlugin} from './plugin-host.js';
 
-export function pluginSystem({env,policy,notify,changed}){
+export function pluginSystem({env,policy,notify,changed,askOrigin=async()=>false}){
   let records=new Map(),loading=null,generation=0;
   const instances=new Map();
   const before=[];// work that must finish before plugins start (the Zotero migration)
@@ -29,7 +29,14 @@ export function pluginSystem({env,policy,notify,changed}){
     if(await sha256Hex(bytes)!==record.sha256)throw new PluginError('integrity',`${record.manifest.name}'s stored package changed. Reinstall it.`);
     const pkg=readPackage(bytes,{developer:record.source==='developer'});
     if(session!==generation)return;
-    const instance=startPlugin({record,pkg,env:{...env,changed:update,onCrash:message=>{instances.delete(record.id);notify(`${record.manifest.name} stopped: ${message}`);update();}}});
+    const instance=startPlugin({record,pkg,env:{...env,changed:update,onCrash:message=>{instances.delete(record.id);notify(`${record.manifest.name} stopped: ${message}`);update();},
+      // network.ask: Scribyra's own dialog asks; an allowed origin is kept in the record.
+      askOrigin:async request=>{
+        if(!await askOrigin(request))return false;
+        await load();const current=records.get(record.id);if(!current)return false;
+        const next={...current,addedOrigins:[...new Set([...(current.addedOrigins||[]),request.origin])].sort()};
+        await pluginStore.put(next);records.set(record.id,next);return true;
+      }}});
     instances.set(record.id,instance);
     const project=env.project();
     instance.event('project.opened',{transient:!!project?.transient});
@@ -81,6 +88,14 @@ export function pluginSystem({env,policy,notify,changed}){
       }
       return items;
     },
+    /** Status items above the open project (ui.status), one per plugin. */
+    statusItems(mode){
+      return running().filter(instance=>instance.status&&recordOf(instance.plugin.id)?.granted['ui.status']).map(instance=>{
+        const item=instance.status;
+        return {plugin:instance.plugin.id,pluginName:`${instance.plugin.name} plugin`,label:item.label,text:item.text,title:item.title,tone:item.tone,actions:item.actions.map(action=>{const blocked=!action.modes.includes(mode||'editing');return {plugin:instance.plugin.id,id:action.id,label:action.label,title:blocked?action.blockedTitle||`Not available in ${mode}`:action.title,disabled:blocked};})};
+      });
+    },
+    async runStatusAction(pluginId,action){const instance=instances.get(pluginId);if(!instance||!recordOf(pluginId)?.granted['ui.status'])throw new Error('That plugin is not running.');return instance.request('status.run',{action});},
     /** The bar above the active file, if a plugin set one. */
     bar(fileId,mode){
       for(const instance of running()){
@@ -138,7 +153,7 @@ export function pluginSystem({env,policy,notify,changed}){
       const {pkg,sha256,source,sourceUrl,existing}=prepared,now=Date.now();
       // Permissions the person revoked stay revoked across updates and rollbacks.
       const revoked=existing?.revoked||[];
-      const record={id:pkg.manifest.id,version:pkg.manifest.version,manifest:pkg.manifest,sha256,source,sourceUrl,granted:effective(pkg.manifest.permissions,revoked),revoked,enabled:existing?existing.enabled:true,installedAt:existing?.installedAt||now,updatedAt:now,
+      const record={id:pkg.manifest.id,version:pkg.manifest.version,manifest:pkg.manifest,sha256,source,sourceUrl,granted:effective(pkg.manifest.permissions,revoked),revoked,addedOrigins:existing?.addedOrigins||[],enabled:existing?existing.enabled:true,installedAt:existing?.installedAt||now,updatedAt:now,
         previous:existing&&existing.version!==pkg.manifest.version?{version:existing.version,manifest:existing.manifest,sha256:existing.sha256}:existing?.previous||null};
       await pluginStore.install(record,bytes);
       if(existing?.previous&&record.previous?.version!==existing.previous.version)await pluginStore.deletePackage(record.id,existing.previous.version).catch(()=>{});
@@ -159,6 +174,15 @@ export function pluginSystem({env,policy,notify,changed}){
     async revoke(id,permission){await load();const record=records.get(id);if(!record)return;const revoked=[...new Set([...(record.revoked||[]),permission])];await pluginStore.put({...record,revoked,granted:effective(record.manifest.permissions,revoked)});await restart(id);},
     async grant(id,permission){await load();const record=records.get(id);if(!record||!record.manifest.permissions[permission])return;const revoked=(record.revoked||[]).filter(key=>key!==permission);await pluginStore.put({...record,revoked,granted:effective(record.manifest.permissions,revoked)});await restart(id);},
     async uninstall(id){stop(id);await pluginStore.uninstall(id);await reload();update();},
+    /** Forgets an origin the person allowed through network.ask; the plugin restarts without it. */
+    async removeOrigin(id,origin){
+      await load();const record=records.get(id);if(!record)return;
+      stop(id);
+      await pluginStore.put({...record,addedOrigins:(record.addedOrigins||[]).filter(item=>item!==origin)});
+      // Secrets bound to it go too, so allowing the origin again does not revive a token.
+      await pluginStore.secretsForOrigin(id,origin).then(names=>Promise.all(names.map(name=>pluginStore.secretDelete(id,name))));
+      await restart(id);
+    },
     /** After developer mode changes: sideloaded plugins start or stop. */
     async refresh(){await reload();for(const record of records.values()){if(!runnable(record))stop(record.id);}if(env.project())await startAll();update();},
     newerVersion(record,entry){const versions=(entry?.versions||[]).filter(version=>version.compatible&&compareVersions(version.version,record.version)>0);return versions.sort((a,b)=>compareVersions(b.version,a.version))[0]||null;},

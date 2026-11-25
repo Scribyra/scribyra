@@ -93,7 +93,8 @@ This is the R2 mapping. "Tab" means it needs nothing beyond the browser and the 
 | MCP server for external clients | Companion | Discontinued November 8, 2026. Agents use the tab instead. |
 | Live local-folder linking | Chromium-only in the browser (the companion route is discontinued) | Not selected. Import and export still work. |
 | Git in a local repository | Companion | Discontinued November 8, 2026. An agent can still run Git itself in any real folder. |
-| Git in the browser, HTTP remotes | Tab | Missing: milestone 8. |
+| GitHub and GitLab sync (REST, no history) | Tab, plugin | Built November 22, 2026: the official GitHub and GitLab plugin links a branch and folder, pulls with per-file three-way review, pushes fast-forward-only commits ([git-sync.md](git-sync.md)). |
+| Git in the browser, HTTP remotes | Tab | Missing: milestone 8. Designed: isomorphic-git in the plugin sandbox, a self-hostable CORS proxy ([git-in-browser.md](git-in-browser.md)). |
 | Zotero, watched exports | Companion | Discontinued November 8, 2026. |
 | Zotero, file import and Web API | Tab, where a browser connection works | `.bib` import with a problem report; Web API link and refresh with a per-entry diff ([Zotero](zotero.md)). Tested against a fake API, not yet against api.zotero.org from a browser. |
 | Headless compile (`scribyra check`) | None | Not selected: it would be another install. |

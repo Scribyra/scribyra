@@ -1,0 +1,70 @@
+% CV / résumé, written with plain LaTeX so every part is easy to change.
+% The \cventry command below formats one job or degree; add as many as you need.
+\documentclass[10pt,a4paper]{article}
+
+\usepackage[a4paper,margin=1.8cm]{geometry} % letterpaper for US Letter
+\usepackage[english]{babel}
+\usepackage{microtype}
+\usepackage[dvipsnames]{xcolor}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{tabularx}
+\usepackage[hidelinks]{hyperref}
+
+% ---- Style: change the accent colour or the section look here -------------
+\definecolor{accent}{RGB}{91,77,200}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\titleformat{\section}{\large\bfseries\color{accent}}{}{0pt}{}[\vspace{2pt}{\color{accent!40}\titlerule}]
+\titlespacing*{\section}{0pt}{14pt}{6pt}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt}
+
+% \cventry{dates}{title}{organisation, place}{details}
+\newcommand{\cventry}[4]{%
+  \begin{tabularx}{\linewidth}{@{}p{2.6cm}X@{}}
+    \small\color{black!65}#1 & \textbf{#2}\hfill\textit{#3}\par\small #4
+  \end{tabularx}\par\vspace{5pt}}
+
+\begin{document}
+
+% ---- Header -------------------------------------------------------------------
+{\Huge\bfseries Your Name}\par\vspace{4pt}
+{\large\color{accent} Job title or field}\par\vspace{6pt}
+\small City, Country \quad|\quad
+\href{mailto:you@example.org}{you@example.org} \quad|\quad
++00 123 456 789 \quad|\quad
+\href{https://example.org}{example.org}
+\normalsize
+
+\section{Profile}
+Two or three sentences about what you do, what you are good at and what you
+are looking for. Tailor them to each application.
+
+\section{Experience}
+\cventry{2023 -- now}{Senior Role}{Company, City}{%
+  \begin{itemize}
+    \item An achievement, with a number if you can (``cut costs by 20\,\%'').
+    \item Another responsibility or result.
+  \end{itemize}}
+\cventry{2019 -- 2023}{Earlier Role}{Organisation, City}{%
+  \begin{itemize}
+    \item What you built, led or improved.
+  \end{itemize}}
+
+\section{Education}
+\cventry{2017 -- 2019}{MSc in Your Subject}{University, City}{Thesis: \emph{Its title}. Grade or distinction.}
+\cventry{2014 -- 2017}{BSc in Your Subject}{University, City}{}
+
+\section{Skills}
+\begin{tabularx}{\linewidth}{@{}p{2.6cm}X@{}}
+  \small\color{black!65}Technical & Tools, methods and programming languages \\
+  \small\color{black!65}Languages & English (fluent), another language (B2) \\
+\end{tabularx}
+
+\section{Publications and awards}
+\begin{itemize}
+  \item Author, Y. (2024). Title of the paper. \emph{Journal}, 3(2), 10--20.
+  \item Name of an award or grant, year.
+\end{itemize}
+
+\end{document}
