@@ -3,10 +3,12 @@
 How Scribyra changes reach staging and production. The code is at
 https://github.com/Scribyra/scribyra; CI runs on GitHub Actions (GitHub-hosted
 runners) and every site is served by GitHub Pages. Until November 2026 the project
-lived on GitLab (`gitlab.com/urundead-labs/scribyra`, now archived); its Pages
-deployment still serves the app's address from before the custom domains,
-`https://scribyra-aca39a.gitlab.io/app/`, which the app's "could not load" message
-links to. Releases `web-1` to `web-95` were built there.
+lived on GitLab (`gitlab.com/urundead-labs/scribyra`, now archived); releases
+`web-1` to `web-95` were built there. The app's address from before the custom
+domains, `https://scribyra-aca39a.gitlab.io/app/`, no longer serves the app to
+the public: on November 20, 2026 it redirected to a GitLab sign-in. The app's
+"could not load" message still links to it (`legacyApplication` in
+`ops/pages/domains.json`).
 
 ## Branch model
 
@@ -74,8 +76,8 @@ the change at `https://dev.scribyra.com/`.
 1. Check staging at `https://dev.scribyra.com/` (the Staging badge names the
    release, e.g. `dev-1042-1a2b3c4d`).
 2. Generate the changelog (every pull request merged into `dev` since the latest
-   `web-N` tag, grouped into features, fixes and production fixes merged back; it
-   also reads the older GitLab `!N` entries) and open the release pull request:
+   `web-N` tag, grouped into features, fixes and production fixes merged back)
+   and open the release pull request:
 
    ```sh
    git fetch origin --tags --prune
@@ -253,7 +255,7 @@ deleting `main` (CI pushes with the deploy key, so no pull request rule).
   "Staging · "; every site page starts with a Staging banner.
 - **Build locally:** `nix develop -c npm run build:staging` writes
   `.cache/staging/site` and runs the check.
-  `SCRIBYRA_PAGES_FORGE=github SCRIBYRA_STAGING_REPOSITORY=<ssh url> nix develop -c node scripts/deploy-staging.mjs .cache/staging --dry-run`
+  `SCRIBYRA_STAGING_REPOSITORY=<ssh url> nix develop -c node scripts/deploy-staging.mjs .cache/staging --dry-run`
   commits it in `.cache/staging-repo` without fetching or pushing.
 
 ## Runner disk

@@ -30,8 +30,8 @@ datasources:
           urlDisplayLabel: "Suite trace"
         - name: ScribyraCIArtifacts
           matcherRegex: "\"jobId\":([0-9]+)"
-          url: "https://gitlab.com/urundead-labs/scribyra/-/jobs/$${__value.raw}/artifacts/browse/.telemetry/"
-          urlDisplayLabel: "Safe run artifacts"
+          url: "https://github.com/Scribyra/scribyra/runs/$${__value.raw}"
+          urlDisplayLabel: "CI job"
   - name: Scribyra Traces
     uid: scribyra-tempo
     type: tempo
