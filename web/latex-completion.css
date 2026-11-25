@@ -1,6 +1,8 @@
 /* LaTeX autocomplete: the popup shares the look of the app's menus (menu.css) in both themes. */
 #code-editor .cm-tooltip.latex-completions{box-sizing:border-box;padding:4px;border:1px solid var(--border)!important;border-radius:10px;background:var(--surface)!important;color:var(--text)!important;box-shadow:var(--popup-shadow);font-family:Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:12.5px;line-height:1.35}
-#code-editor .latex-completions>ul{font-family:inherit!important;min-width:min(340px,calc(100vw - 32px));max-width:min(480px,calc(100vw - 32px));max-height:min(312px,45vh)!important;overscroll-behavior:contain;scrollbar-width:thin;scrollbar-color:var(--border) transparent}
+#code-editor .latex-completions>ul{font-family:inherit!important;min-width:min(340px,calc(100vw - 32px));max-width:min(480px,calc(100vw - 32px));max-height:min(372px,55vh)!important;overflow:hidden!important}
+/* A page of options; the dots say more follow (the editor's arrow and page keys move through them). */
+#code-editor .latex-completions>ul.cm-completionListIncompleteTop::before,#code-editor .latex-completions>ul.cm-completionListIncompleteBottom::after{color:var(--muted);line-height:14px}
 #code-editor .latex-completions>ul>li{display:grid;grid-template-columns:max-content minmax(0,1fr) auto;grid-template-areas:"label detail source" "description description description";align-items:baseline;min-height:28px;box-sizing:border-box;padding:5px 8px;border-radius:6px;color:var(--text);white-space:nowrap;cursor:pointer}
 #code-editor .latex-completions>ul>li+li{margin-top:1px}
 #code-editor .latex-completions>ul>li:hover{background:var(--subtle)}

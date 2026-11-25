@@ -8,8 +8,13 @@ import {Text} from '@codemirror/state';
 import {snippet} from '@codemirror/autocomplete';
 import {addEntries} from '../web/model.js';
 import {parseTex,parseBib,shortAuthors,plainBibText,latexIndex,fileKind} from '../web/latex-index.js';
-import {latexContext,matchLabel,rankItems,completionOptions,buildCatalog,shapeOf,environmentTemplate,inComment,openEnvironment,argumentKind} from '../web/latex-completion.js';
+import {latexContext,matchLabel,rankItems,completionOptions,buildCatalog,shapeOf,environmentTemplate,inComment,openEnvironment,openEnvironments,argumentKind,optionContext,optionEntries,splitItems} from '../web/latex-completion.js';
 import * as data from '../web/latex-completion-data.js';
+import * as optionData from '../web/latex-options-data.js';
+import {labelTarget,suggestLabel,slugify,labelStyle,prefixFor,uniqueKey,titleWords} from '../web/latex-labels.js';
+import {environmentPairing,environmentTokenAt,matchingEnvironment,pairedEnvironmentEdit} from '../web/latex-environment-pair.js';
+import {EditorState} from '@codemirror/state';
+import {history,undo,redo} from '@codemirror/commands';
 import packages from '../web/latex-packages.js';
 import {latexPackageList} from '../scripts/latex-packages.mjs';
 
@@ -154,4 +159,158 @@ test('curated data parses as snippets, uses no linked fields by accident, and th
   const source=JSON.parse(gunzipSync(readFileSync(new URL('../web/tex-catalog.json.gz',import.meta.url))));
   assert.deepEqual(latexPackageList(source),packages,'run node scripts/latex-packages.mjs');
   for(const name of ['amsmath','graphicx','hyperref','booktabs','natbib','biblatex','geometry','xcolor','tikz','siunitx','cleveref'])assert.ok(packages.packages.includes(name),name);
+});
+
+test('label keys come from the heading title or the caption, with the usual prefixes',()=>{
+  assert.equal(slugify('Introduction'),'introduction');
+  assert.equal(slugify('Related Work on Graph Neural Networks'),'related-work-graph-neural-networks');
+  assert.equal(slugify(String.raw`The $k$-means \emph{algorithm}\footnote{See [3].}`),'k-means-algorithm');
+  assert.equal(slugify(String.raw`Résumé of Gödel’s \LaTeX{} straße`),'resume-godel-s-latex-strasse');
+  assert.equal(slugify('A very long title that keeps going well past the limit of words'),'very-long-title-that-keeps');
+  assert.equal(slugify('Of the'),'of-the');assert.deepEqual(titleWords('\\textbf{Bold} and $x^2$'),['bold','and','x','2']);
+  const before=text=>labelTarget(text,'');
+  assert.deepEqual(before('\\section{Introduction}\n'),{kind:'section',title:'Introduction',from:'title'});
+  assert.deepEqual(before('\\subsection*[Short]{Long \\emph{title}} '),{kind:'subsection',title:'Long \\emph{title}',from:'title'});
+  assert.equal(before('\\section{Introduction}\nSome text. '),null,'a label after running text names no heading');
+  assert.equal(before('% \\section{Commented}\n'),null);
+  assert.deepEqual(labelTarget('\\begin{figure}\n\\includegraphics{map}\n\\caption{Survey map of the site}\n'),{kind:'figure',title:'Survey map of the site',from:'caption'});
+  assert.deepEqual(labelTarget('\\begin{table}\n','}\n\\caption[short]{Results by year}\n\\end{table}\n\\caption{Other}'),{kind:'table',title:'Results by year',from:'caption'});
+  assert.deepEqual(labelTarget('\\section{Method}\n\\begin{equation}\nE=mc^2\n'),{kind:'equation',title:'Method',from:'section'});
+  assert.deepEqual(labelTarget('\\begin{theorem}[Pythagoras]\n'),{kind:'theorem',title:'Pythagoras',from:'name'});
+  assert.deepEqual(labelTarget('\\begin{figure}\\begin{subfigure}{.5\\linewidth}\\caption{Left}'),{kind:'figure',title:'Left',from:'caption'});
+  assert.equal(labelTarget('\\begin{figure}x\\end{figure}\n\\begin{itemize}\\item '),null);
+});
+
+test('label keys follow the project prefix style and are unique',()=>{
+  const key=(target,keys=[])=>suggestLabel(target,keys).key;
+  assert.equal(key({kind:'section',title:'Introduction',from:'title'}),'sec:introduction');
+  assert.equal(key({kind:'chapter',title:'Background',from:'title'}),'chap:background');
+  assert.equal(key({kind:'figure',title:'Survey map',from:'caption'}),'fig:survey-map');
+  assert.equal(key({kind:'table',title:'Results',from:'caption'}),'tab:results');
+  assert.equal(key({kind:'equation',title:'',from:''}),'eq:1');assert.equal(key({kind:'equation',title:'',from:''},['eq:1','eq:2']),'eq:3');
+  assert.equal(key({kind:'equation',title:'Method',from:'section'}),'eq:method');
+  assert.equal(key({kind:'subsection',title:'Setup',from:'title'}),'sec:setup','subsections share sec: unless the project uses subsec:');
+  assert.equal(key({kind:'subsection',title:'Setup',from:'title'},['subsec:a','sec:b']),'subsec:setup');
+  assert.equal(key({kind:'section',title:'Introduction',from:'title'},['sec:introduction']),'sec:introduction-2');
+  assert.equal(key({kind:'section',title:'Introduction',from:'title'},['sec:introduction','sec:introduction-2']),'sec:introduction-3');
+  // An existing style: `figure-` with underscores between words, `ch:` for chapters.
+  const style=['figure-survey_map','figure-other_plot','ch:one','ch:two','tbl-results'];
+  assert.equal(key({kind:'figure',title:'Field site photo',from:'caption'},style),'figure-field_site_photo');
+  assert.equal(key({kind:'chapter',title:'Discussion',from:'title'},['ch:one','ch:two','chap:x']),'ch:discussion');
+  assert.equal(key({kind:'table',title:'Costs',from:'caption'},style),'tbl-costs');
+  assert.deepEqual(labelStyle(['fig:a-b','sec:c-d']),{prefixes:{fig:1,sec:1},separator:':',word:'-'});
+  assert.equal(prefixFor('subsubsection',labelStyle(['ssec:a'])),'ssec');assert.equal(uniqueKey('a',new Set(['a','a_2']),'_'),'a_3');
+  assert.match(suggestLabel({kind:'section',title:'Introduction',from:'title'},[]).description,/section, from its title “Introduction”/);
+});
+
+test('\\label{ offers the derived key first, ignoring the label being edited, and filters by what is typed',()=>{
+  const index={...empty,labels:[{key:'sec:introduction',path:'main.tex',line:9},{key:'sec:introduction',path:'main.tex',line:2}]};
+  assert.equal(contextOf('\\section{Intro}\\label{|').kind,'newlabel');
+  const target={kind:'section',title:'Introduction',from:'title'};
+  const options=completionOptions({kind:'newlabel',from:7,to:7,query:'',closed:false},catalog,index,{target,currentPath:'main.tex',currentLine:2});
+  assert.deepEqual(options.map(o=>[o.label,o.source]),[['sec:introduction-2','new label']]);
+  assert.equal(completionOptions({kind:'newlabel',from:7,to:7,query:'sec:',closed:false},catalog,empty,{target})[0].label,'sec:introduction');
+  assert.deepEqual(completionOptions({kind:'newlabel',from:7,to:7,query:'fig',closed:false},catalog,empty,{target}),[]);
+  assert.deepEqual(completionOptions({kind:'newlabel',from:7,to:7,query:'',closed:false},catalog,empty,{target:null}),[]);
+});
+
+const full=buildCatalog(data,packages.packages,optionData);
+test('option data: about thirty packages and the common classes, well-formed and without duplicates',()=>{
+  const packageNames=Object.keys(optionData.PACKAGE_OPTIONS);assert.ok(packageNames.length>=30,packageNames.length);
+  for(const name of ['geometry','babel','hyperref','inputenc','fontenc','xcolor','graphicx','biblatex','natbib','amsmath','siunitx','cleveref','caption','subcaption','listings','minted','enumitem','microtype','csquotes','todonotes'])assert.ok(optionData.PACKAGE_OPTIONS[name]?.length,name);
+  for(const name of ['article','report','book','beamer','memoir','scrartcl','scrreprt','scrbook','standalone'])assert.ok(optionData.CLASS_OPTIONS[name]?.length,name);
+  for(const name of ['tikz','graphicx','hyperref','listings'])assert.ok(optionData.KEYS[name]?.length,name);
+  for(const [group,table] of Object.entries({...Object.fromEntries(Object.entries(optionData.PACKAGE_OPTIONS).map(([k,v])=>['package '+k,v])),...Object.fromEntries(Object.entries(optionData.CLASS_OPTIONS).map(([k,v])=>['class '+k,v])),...Object.fromEntries(Object.entries(optionData.KEYS).map(([k,v])=>['keys '+k,v]))})){
+    const names=table.map(e=>e[0]);assert.equal(new Set(names).size,names.length,`${group} has duplicates: ${names.filter((n,i)=>names.indexOf(n)!==i)}`);
+    for(const [name,description,values] of table){
+      assert.match(name,/^[^\s,{}\[\]](?:[^,{}\[\]]*[^\s,{}\[\]])?$/,`${group}: ${name}`);assert.ok(description&&typeof description==='string',`${group}: ${name} has a description`);
+      if(values!==undefined){assert.ok(name.endsWith('='),`${group}: only keys take values (${name})`);assert.ok(Array.isArray(values)&&values.length,`${group}: ${name}`);for(const v of values)assert.ok(typeof v==='string'||Array.isArray(v)&&v.length===2,`${group}: ${name}`);}
+    }
+  }
+  assert.ok(packages.packages.includes('geometry')&&Object.keys(optionData.PACKAGE_OPTIONS).filter(name=>name!=='babel').every(name=>packages.packages.includes(name)),'every package with options is in the TeX Live list (babel ships with the base system)');
+  assert.equal(optionEntries(full.options,{type:'class',names:['article']})[0].source,'article class');
+});
+
+test('option contexts: package and class options, values after key=, setup commands and TikZ',()=>{
+  const ctx=source=>{const {doc,pos}=at(source);return optionContext(doc,pos);};
+  let c=ctx('\\usepackage[a4paper, mar|]{geometry}');assert.deepEqual({...c,set:{...c.set}},{kind:'option',set:{type:'package',names:['geometry']},key:null,from:21,to:24,query:'mar',present:['a4paper'],close:''});
+  c=ctx('\\usepackage[backend=bi|,style=apa]{biblatex}');assert.equal(c.key,'backend');assert.equal(c.query,'bi');assert.deepEqual(c.present,['style']);
+  c=ctx('\\usepackage[|{geometry}');assert.deepEqual([c.set.names,c.close],[['geometry'],']']);
+  c=ctx('\\documentclass[11pt,|]{article}');assert.deepEqual([c.set.type,c.set.names,c.query],['class',['article'],'']);
+  c=ctx('\\usepackage[\n  colorlinks,\n  linkcolor=|\n]{hyperref}');assert.equal(c.key,'linkcolor');assert.deepEqual(c.set.names,['hyperref']);
+  c=ctx('\\usepackage[pdftitle={A, B}, |]{hyperref}');assert.deepEqual(c.present,['pdftitle']);
+  assert.equal(ctx('\\usepackage[|'),null,'no package name yet');
+  assert.deepEqual(ctx('\\hypersetup{colorlinks, url|').set,{type:'keys',names:['hyperref']});
+  assert.deepEqual(ctx('\\includegraphics[width=0.5\\linewidth, sc|]{x}').set.names,['graphicx']);
+  assert.deepEqual(ctx('\\begin{tikzpicture}[thi|]').set.names,['tikz']);
+  assert.deepEqual(ctx('\\draw[->, thi|] (0,0) -- (1,1);').set.names,['tikz']);
+  assert.deepEqual(ctx('\\draw (0,0) -- (1,0) node[ab|] {x};').set.names,['tikz']);
+  assert.deepEqual(ctx('\\node (a) [dra|] {A};').set.names,['tikz']);
+  assert.deepEqual(ctx('\\captionsetup[figure]{labelf|}').set.names,['caption']);
+  assert.equal(ctx('\\section[|]{x}'),null);assert.equal(ctx('see [1|]'),null);assert.equal(ctx('\\[ x |'),null);
+  assert.equal(contextOf('% \\usepackage[|]{geometry}'),null);
+  assert.equal(contextOf('\\usepackage[margin=1in]{geo|}').kind,'package','the package name is still a package argument');
+  assert.equal(contextOf('\\hypersetup{urlcolor=\\bl|').kind,'command','a command inside a value completes as a command');
+  assert.deepEqual(splitItems('a, b={x,y}, c').map(i=>i.text),['a',' b={x,y}',' c']);
+});
+
+test('option suggestions: names not given yet, values where finite, and accepting a key reopens for its values',()=>{
+  const labels=context=>completionOptions(context,full,empty).map(o=>o.label);
+  const base={kind:'option',set:{type:'package',names:['geometry']},key:null,from:0,to:0,query:'',present:[],close:''};
+  assert.ok(labels(base).includes('a4paper'));assert.ok(!labels({...base,present:['a4paper']}).includes('a4paper'));
+  assert.ok(!labels({...base,present:['margin']}).includes('margin='));
+  const margin=completionOptions({...base,query:'marg'},full,empty)[0];assert.deepEqual([margin.label,margin.source],['margin=','geometry']);
+  assert.deepEqual(labels({...base,set:{type:'package',names:['biblatex']},key:'backend'}),['biber','bibtex','bibtex8']);
+  const backend=completionOptions({...base,set:{type:'package',names:['biblatex']},query:'back'},full,empty)[0];assert.equal(backend.label,'backend=');assert.match(backend.detail,/= biber \| bibtex \| bibtex8/);
+  assert.deepEqual(labels({...base,set:{type:'package',names:['biblatex']},key:'style',query:'authory'}).slice(0,2),['authoryear','authoryear-comp']);
+  assert.deepEqual(labels({...base,key:'margin'}),[],'free values offer nothing');
+  assert.deepEqual(labels({...base,set:{type:'package',names:['biblatex']},key:'sorting'}).slice(0,3),['nty','nyt','nyvt'],'values keep the curated order');assert.equal(labels(base)[0],'a4paper');
+  assert.deepEqual(labels({...base,set:{type:'class',names:['beamer']},key:'aspectratio',query:'16'}),['169','1610']);
+  assert.ok(labels({...base,set:{type:'class',names:['report']},query:'open'}).includes('openright'));
+  assert.ok(labels({...base,set:{type:'keys',names:['tikz']},query:'thi'}).includes('thick'));
+  assert.deepEqual(labels({...base,set:{type:'package',names:['nosuchpackage']}}),[]);
+  // Two packages in one \usepackage share the option list.
+  assert.ok(labels({...base,set:{type:'package',names:['amsmath','natbib']},query:'sort'}).includes('sort&compress'));
+});
+
+test('\\end{ ranks the innermost open environment, then the ones around it; citation lists skip keys already given',()=>{
+  assert.deepEqual(openEnvironments('\\begin{document}\\begin{figure}\\begin{center}'),['document','figure','center']);
+  const end=completionOptions({kind:'end',from:0,to:0,query:'',closed:false,environment:'center',environments:['document','figure','center']},catalog,empty).map(o=>o.label);
+  assert.deepEqual(end.slice(0,3),['center','figure','document']);
+  const index={...empty,citations:[{key:'a1',path:'r.bib'},{key:'a2',path:'r.bib'}]};
+  assert.deepEqual(completionOptions({kind:'cite',from:0,to:0,query:'a',closed:false},catalog,index,{present:['a1']}).map(o=>o.label),['a2']);
+});
+
+const pairState=(text,extra=[])=>{const pos=text.indexOf('|');return EditorState.create({doc:text.replace('|',''),selection:{anchor:pos},extensions:[environmentPairing(),history({newGroupDelay:0}),...extra]});};
+const typeAt=(state,insert,{from=state.selection.main.head,to=from,userEvent='input.type'}={})=>state.update({changes:{from,to,insert},selection:{anchor:from+insert.length},...(userEvent?{userEvent}:{})}).state;
+test('renaming \\begin{x} renames its own \\end{x}, nested same-name environments included, and undo reverts both',()=>{
+  let state=pairState('\\begin{itemize|}\n\\item a\n\\begin{itemize}\\item b\\end{itemize}\n\\end{itemize}\n\\begin{itemize}\\end{itemize}');
+  // Select "itemize" and type "enumerate" one letter at a time, as a person would.
+  state=typeAt(state,'e',{from:7,to:14});for(const letter of 'numerate')state=typeAt(state,letter);
+  assert.equal(state.doc.toString(),'\\begin{enumerate}\n\\item a\n\\begin{itemize}\\item b\\end{itemize}\n\\end{enumerate}\n\\begin{itemize}\\end{itemize}');
+  // Deleting works the same way, and the \end side drives the \begin side.
+  const at=state.doc.toString().indexOf('\\end{enumerate}')+5;
+  state=state.update({changes:{from:at,to:at+9,insert:'description'},userEvent:'input.type'}).state;
+  assert.match(state.doc.toString(),/^\\begin\{description\}[\s\S]*\\end\{description\}\n\\begin\{itemize\}/);
+  state=state.update({changes:{from:7,to:8},userEvent:'delete.backward'}).state;assert.match(state.doc.toString(),/^\\begin\{escription\}[\s\S]*\\end\{escription\}/);
+  // One undo step per edit: both halves come back together.
+  const back=s=>{let next=s;undo({state:s,dispatch:tr=>{next=tr.state;}});return next;};
+  state=back(state);assert.match(state.doc.toString(),/^\\begin\{description\}[\s\S]*\\end\{description\}/);
+  let redone=state;redo({state,dispatch:tr=>{redone=tr.state;}});assert.match(redone.doc.toString(),/^\\begin\{escription\}[\s\S]*\\end\{escription\}/);
+});
+
+test('pairing leaves other environments, comments, read-only editors and non-typing changes alone',()=>{
+  const env='\\begin{figure}\n% \\end{figure}\nx\n\\end{figure}';
+  let state=typeAt(pairState(env),'s',{from:13});assert.equal(state.doc.toString(),'\\begin{figures}\n% \\end{figure}\nx\n\\end{figures}');
+  const tr=pairState(env).update({changes:{from:13,insert:'s'},userEvent:'input.type'});assert.equal(tr.annotation(pairedEnvironmentEdit),true);
+  assert.equal(typeAt(pairState('\\begin{a}x\\end{b}'),'a',{from:8}).doc.toString(),'\\begin{aa}x\\end{b}','no partner, no change elsewhere');
+  assert.equal(typeAt(pairState(env),'s',{from:13,userEvent:null}).doc.toString(),'\\begin{figures}\n% \\end{figure}\nx\n\\end{figure}','programmatic and remote changes are not paired');
+  assert.equal(typeAt(pairState(env),' x',{from:13}).doc.toString(),'\\begin{figure x}\n% \\end{figure}\nx\n\\end{figure}','a name that is no longer an environment name is not copied');
+  const readOnly=EditorState.create({doc:env,extensions:[environmentPairing(),EditorState.readOnly.of(true)]});
+  assert.equal(readOnly.update({changes:{from:13,insert:'s'},userEvent:'input.type'}).state.doc.toString(),'\\begin{figures}\n% \\end{figure}\nx\n\\end{figure}');
+  const refused=EditorState.create({doc:env,extensions:[environmentPairing({allowSpan:()=>false})]});
+  assert.equal(refused.update({changes:{from:13,insert:'s'},userEvent:'input.type'}).state.doc.toString(),'\\begin{figures}\n% \\end{figure}\nx\n\\end{figure}');
+  const doc=pairState(env).doc,token=environmentTokenAt(doc,8,13);assert.deepEqual(token,{kind:'begin',name:'figure',from:0,nameFrom:7,nameTo:13});
+  assert.equal(matchingEnvironment(doc,token).from,doc.toString().lastIndexOf('\\end'));
+  assert.equal(environmentTokenAt(doc,3),null);
 });

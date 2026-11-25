@@ -20,7 +20,8 @@ test('a typical Overleaf source download: flat, figures in a folder, a .bib; pdf
  assert.equal(report.warnings[0].line,2);assert.match(report.warnings[0].message,/LuaLaTeX ignores it/);
  assert.deepEqual(report.counts,{files:4,tex:2,bib:1,images:1});
  assert.deepEqual(report.bibliography,{files:['refs.bib'],tool:'bibtex',missing:[]});
- assert.equal(needsSummary(report),true);
+ assert.equal(needsSummary(report),false,'the layout guess alone, with only notes, does not interrupt');
+ assert.equal(needsSummary({...report,warnings:[...report.warnings,{severity:'warning'}]}),true,'but anything to fix does');
  assert.match(compilerSentence(report),/^Written for pdfLaTeX \(from no other setting, so Overleaf’s default\)\. Scribyra compiles with LuaLaTeX; most projects compile unchanged\.$/);
 });
 

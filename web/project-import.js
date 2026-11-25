@@ -129,13 +129,15 @@ export function analyzeImport(entries){
  const severity={error:0,warning:1,info:2};
  warnings.sort((a,b)=>severity[a.severity]-severity[b.severity]);
  const counts={files:files.length,tex:files.filter(entry=>/\.tex$/i.test(entry.path)).length,bib:bib.files.length,images:files.filter(entry=>IMAGE.test(entry.path)).length};
- return {overleaf:signals.length>0,signals,main:main||null,roots,compiler,compilerReason,warnings,counts,bibliography:bib};
+ // The layout guess alone fits most LaTeX projects, so it labels the summary but never opens it.
+ const layoutOnly=signals.length===1&&signals[0].startsWith('the usual layout');
+ return {overleaf:signals.length>0,layoutOnly,signals,main:main||null,roots,compiler,compilerReason,warnings,counts,bibliography:bib};
 }
 
-/** Whether the import summary is worth showing: an Overleaf project, or anything to fix. */
+/** Whether the import summary is worth showing: a clear Overleaf project, anything to fix, or a choice of main file. */
 export function needsSummary(report){
  // Notes alone (severity info: things LuaLaTeX ignores or handles) never interrupt a plain ZIP.
- return report.overleaf||report.warnings.some(entry=>entry.severity!=='info')||report.roots.length>1;
+ return (report.overleaf&&!report.layoutOnly)||report.warnings.some(entry=>entry.severity!=='info')||report.roots.length>1;
 }
 
 /** What the person needs to know about the compiler, in one sentence. */
